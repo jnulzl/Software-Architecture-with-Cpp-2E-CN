@@ -1,0 +1,1126 @@
+在前面的章节中，我们探讨了面向服务的架构（SOA）和微服务，以及这些服务如何通过服务间通信机制进行交互。接下来要考虑的是，如何以一致的方式在异构环境中打包和部署这些服务。
+
+从开发环境过渡到生产环境一直是个痛苦的过程。它涉及大量的文档、交接、安装和配置工作。由于每种编程语言生成的软件行为都略有不同，异构应用的部署始终相当困难。
+
+容器缓解了其中一些问题。有了容器，安装和配置在很大程度上已经标准化，分发也遵循了成熟的实践。因此，对于那些希望加强开发与运维协作的组织来说，容器是一个绝佳的选择。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 重新认识容器
+\item 构建容器镜像
+\item 容器的实用运行时考量
+\item 理解容器编排
+\end{itemize}
+
+\section{技术要求}
+
+本章中的示例需要以下内容：
+
+\begin{itemize}
+\item \textbf{Docker 27.2+}：用于开发、交付和运行容器化应用的软件平台
+\item \textbf{manifest-tool 2.1.9+}：用于查看或推送容器镜像仓库中多平台容器镜像引用的工具
+\item \textbf{Ansible 11.1+}：用于自动化应用部署、机器配置管理和基础设施编排的工具
+\item \textbf{ansible-bender 0.10+}：使用 Ansible playbook 构建容器镜像的工具
+\item \textbf{Buildah 1.38+}：一个无守护进程、无需 root 权限的镜像构建工具，与 Podman 互补
+\item \textbf{Podman 5.3+}：一个无守护进程、无需 root 权限的容器引擎，用于运行、管理和操作容器
+\item \textbf{Skopeo 1.17+}：一个与 Podman 和 Buildah 互补的工具，用于操作、检查、签名和传输容器镜像及镜像仓库
+\item \textbf{runc 1.2+（由 Docker 用 Golang 编写）或 crun 1.19+（由 Red Hat 用 C 编写）}：可互换使用的容器运行时，因为两者都实现了 \textbf{Open Container Initiative }（\textbf{OCI}）运行时规范
+\item \textbf{CMake 3.28+}：一个开源、跨平台的软件开发工具，用于通过独立于编译器的指令来构建、测试和打包软件
+\end{itemize}
+
+本章中的代码已放在 GitHub 上：\href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter16}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter16}。
+
+\section{重新认识容器}
+
+\label{idx:1708}
+\label{idx:1709}
+容器在软件领域引起了极大的关注。有人可能以为容器是一门全新的技术。然而事实并非如此。在 Docker 和 Kubernetes 这两个业界主导者崛起之前，就已经存在诸如 \textbf{Linux Containers }（\textbf{LXC}）这样的解决方案，提供了许多类似的功能。
+
+\label{idx:1710}
+\label{idx:1711}
+\label{idx:1712}
+我们可以把将一个执行环境与另一个执行环境隔离开来的做法，追溯到 1979 年起 Unix 系统中就已提供的 \textbf{chroot}（\textbf{change root} 的缩写）机制。FreeBSD jail 和 Solaris zone 中也使用了类似的概念。
+
+容器的主要任务是将一个执行环境与另一个执行环境隔离开来。这个隔离的环境可以拥有自己的配置、不同的应用，甚至与宿主机环境不同的用户账户。
+
+尽管容器与宿主机相互隔离，但它们通常与宿主机共享同一个操作系统内核。这正是它与虚拟化环境的主要区别。虚拟机拥有专用的虚拟资源，也就是说它们在硬件层面相互隔离；而容器则在进程层面相互隔离，这意味着运行容器的开销更小。
+
+能够打包并运行一个已经针对你的应用做过优化和配置的环境，是容器的一大优势。如果不使用容器，构建和部署过程通常包括以下若干步骤：
+
+\begin{enumerate}
+\item 构建应用
+\item 提供示例配置文件
+\item 准备安装脚本及相关文档
+\item 为目标操作系统（如 Debian、Red Hat、Arch 或 Gentoo）打包应用
+\item 将软件包部署到目标平台
+\item 由安装脚本为应用的运行做准备
+\item 必须调整配置以适配现有系统
+\end{enumerate}
+
+改用容器后，对健壮安装脚本的需求就大大减少了。应用只需面向一个众所周知的单一操作系统，也就是容器中的那个操作系统。配置也是如此：无需准备大量可配置选项，应用会针对目标操作系统预先配置好，并随该操作系统一同分发。部署过程仅包括解包容器镜像并在其中运行应用进程，因为容器镜像交付的是打包好的软件，其中包含预装了依赖项以及编译器、调试器等工具的开发环境。本质上，容器镜像记录的是文件系统变更的快照，而不是运行中进程的内存状态快照。
+
+\label{idx:1713}
+容器迅速变得非常流行，一举解决了若干令人头疼的开发问题，尤其是在使用 C++ 这类对环境很敏感的语言进行开发时。举例来说，如果在多台计算机上（例如家里、单位和笔记本电脑上）进行开发，就必须在所有机器上始终维持相同的设置、库版本和其他环境参数，而这并非总能做到。结果就是，这些计算机上的工作环境和编译出的可执行文件各不相同。但容器提供了隔离且可复现的构建环境，因此同一个容器镜像既能供工作站上的开发者使用，也能供 CI/CD 服务器使用，从而消除了“\emph{在我机器上能跑，但在 CI/CD 上不行！}”这一问题。不过，由于存在从宿主机或服务器挂载或传入运行中容器的外部依赖，容器中并不总能实现可复现构建（在相同源码下生成逐字节完全一致的可执行文件）。
+
+尤其令人恼火的是，开发环境的整套搭建过程会一遍又一遍地重复。有时你的环境甚至会突然坏掉。幸运的是，开发容器（development container）应运而生，它可以充当功能完备的开发环境。
+
+最后要说的是，人们常把容器和微服务当成一回事，但它们并不相同。此外，容器可能指应用容器（application container），也可能指操作系统容器（operating system container），而只有应用容器才与微服务契合得很好。接下来的几节会说明原因。我们将介绍你可能遇到的各种容器类型，展示它们与微服务的关系，并解释何时最适合使用它们（以及何时应当避免使用）。
+
+\subsection{探索容器类型}
+
+\label{idx:1714}
+\label{idx:1715}
+在前面提到的容器类型中，操作系统容器——即共享宿主机操作系统内核的隔离虚拟环境——已经存在了几十年。其中的例子包括 LXC、\textbf{Open Virtuozzo}（\textbf{OpenVZ}）、FreeBSD jail、DragonFly BSD 虚拟内核和 Solaris zone。它们与由 Docker、Podman 和 Kubernetes 引领的应用容器潮流有着本质区别。这些现代平台遵循应用容器的模式：它们不专注于用 syslog 和 cron 之类的服务重建整个操作系统，而是专注于在容器内运行单个进程——也就是只运行应用本身。
+
+\emph{图 16.1}对应用容器、操作系统容器和虚拟机进行了比较：
+
+\myGraphic{0.920}{images/B18456_16_01.png}{图 16.1：容器与虚拟机}
+
+\label{idx:1716}
+应用容器只包含应用及其依赖项，并将它们与宿主操作系统隔离开来。操作系统容器，或称系统容器，共享宿主操作系统内核，但提供用户空间隔离。虚拟机是一台虚拟计算机，它使用一台真实计算机的专用资源（处理器、磁盘和适配器）。虚拟机监控程序（hypervisor）是一种软件，它管理单个服务器平台的物理资源，并将其分配给多台虚拟机。应用容器轻量且快速，而操作系统容器和虚拟机则提供更完整的隔离，但需要更多资源。
+
+回到应用容器是为运行单个进程而构建的这一观点，我们来看看这在实践中为何重要。虽然我们也可以借助包装脚本、Bash 作业控制或 supervisord 之类的进程管理器，在 Docker 容器中运行多个进程，但并不推荐这样做。因为这么做违反了关注点分离原则；会带来技术上的挑战，尤其是在正确的信号处理、健康检查和日志记录方面；还违反了基于容器的应用的设计原则，这类应用本应连同其依赖项（库、二进制文件和配置文件）一起打包成一个个隔离的单元。此外，当容器中不同进程的日志混在一起时，很难分辨日志的来源。而且，单进程容器伸缩起来效率更高、也更独立，因为容器内的多个进程不会相互争抢 CPU 和内存而导致性能下降。这同时还降低了故障的影响，因为故障被限制在某个出问题的单进程容器内，从而保持了系统的稳定性。由此，一个服务的故障不会级联到整个系统，也使故障的排查和处理更加容易。
+
+在应用容器中，专用的解决方案取代了通常的操作系统级服务。这些解决方案提供了统一的方式来管理容器内的应用。例如，不再用 syslog 处理日志，而是把主进程（PID 1）的标准输出当作应用日志。也不再使用 SysVinit、OpenRC、procd、Finit、Dinit 或 systemd 之类的初始化系统，而是由容器运行时来管理应用容器的生命周期。这种设计有其局限：当主进程崩溃时，子进程可能会变成孤儿进程或僵尸进程。
+
+由于 Docker 目前是应用容器领域的主导方案，本书中我们大多以它为例。本章将解释如何使用 Docker 来构建、部署、运行和管理应用容器。
+
+\label{idx:1717}
+为了让全貌更完整，我们还会介绍一些可行的替代方案，因为它们可能更契合你的需求。由于相关项目和规范都是开源的，这些替代方案与 Docker 兼容，可以作为它的替代品使用。
+
+但首先，我们来理解为什么应用容器的成功与微服务的兴起紧密相关。
+
+\begin{myNotic}{注意}
+
+除非另有说明，从今往后我们提到\emph{容器}一词时，指的都是\emph{应用容器}。
+\end{myNotic}
+
+\subsection{微服务与容器的并行兴起}
+
+\label{idx:1718}
+\label{idx:1719}
+许多人将应用容器的成功与 Docker 联系在一起，而这一成功恰好与微服务的兴起同时发生。这并不奇怪，因为微服务与应用容器天然契合，并且两者都与 \textbf{Twelve-Factor App methodology}（由平台即服务公司 Heroku 的开发者起草的最佳实践，旨在让部署到 Web 上的应用具备可移植性和韧性）高度一致：
+
+\begin{itemize}
+\item \textbf{代码库（Code base）}：一个已部署的服务在版本控制（如 Git、Mercurial 或 Subversion）中恰好有一个代码库，并用于多次部署。
+\item \textbf{依赖（Dependencies）}：所有依赖项都被显式声明并隔离，不对系统工具或库产生隐式依赖（例如 Python 中的 \texttt{pip} 和 \texttt{virtualenv}、Ruby 中的 Gemfile 和 \texttt{bundle exec}，或泛指的 Docker 容器）。
+\item \textbf{配置（Config）}：在不同部署环境（预发布、生产、开发及其他环境）之间会变化的配置存放在环境中，这要求配置与代码严格分离。
+\item \textbf{后端服务（Backing services）}：支撑服务（如数据存储、Web 服务、缓存系统、消息/队列系统、监控工具和电子邮件服务）被当作附加资源对待。连接应当是透明的，无需修改代码，并且本地服务与第三方服务之间没有区别。
+\item \textbf{构建、发布、运行（Build, release, and run）}：在 CI/CD 流水线中，构建、发布和运行三个阶段被严格分开。
+\item \textbf{进程（Processes）}：应用以一个或多个无状态、不共享任何资源的进程运行，其中每个进程都能独立伸缩，且没有持久状态，持久数据存储在支撑服务上。
+\item \textbf{端口绑定（Port binding）}：完全自包含的服务通过端口绑定对外暴露，不依赖外部将服务运行时注入到执行环境中。
+\item \textbf{并发（Concurrency）}：并发通过将应用伸缩为一组一个或多个无状态进程来实现，其中每个进程被赋予一种类型以处理不同的工作负载（进程编队）。
+\item \textbf{易处置性（Disposability）}：进程是可随时处置的，这保证了最短的启动时间、优雅关闭以及面对突然死亡时的健壮性（崩溃即设计），这对伸缩和韧性至关重要。
+\item \textbf{开发/生产环境一致性（Dev/prod parity）}：应确保开发、预发布和生产环境的最大相似性，尤其是支撑服务。
+\item \textbf{日志（Logs）}：应用应把日志作为事件流输出，通常无缓冲地写入 \textbf{standard output}（\textbf{stdout}），以便集中收集和监控。
+\label{idx:1720}
+\item \textbf{管理进程（Admin processes）}：一次性管理任务（如数据库迁移或批处理作业）存放在源码管理中，并与应用一起打包，以避免在各环境之间出现同步问题，这些环境必须保持一致。
+\end{itemize}
+
+\label{idx:1721}
+如果没有应用容器，就没有一种简单而统一的方式来打包、部署和维护微服务。尽管各个公司都开发过一些解决方案来应对这些问题，但都没有流行到足以接近行业标准的程度。
+
+反过来，如果没有微服务，应用容器的适用范围也相当有限。系统架构会专注于构建针对给定一组服务显式配置的完整系统。用一个服务替换另一个服务就需要修改架构。
+
+两者结合后，应用容器与微服务成为了一种强大的组合。应用容器为微服务的分发提供了标准方式，而每个微服务都连同自己的配置和环境一起打包，因此自动伸缩和自愈之类的操作不再需要了解底层应用。
+
+就 C++ 而言，它非常适合内存占用小、计算密集型的微服务，在这类场景中性能与内存占用至关重要。这些特性使 C++ 更适合二进制服务（例如电信及其他领域使用的 gRPC 协议），这类服务需要紧凑高效的数据处理能力，而不太适合暴露 RESTful API 的文本类服务。
+
+\label{idx:1722}
+二进制数据在电信和网络领域很有价值，因为它能实现高效、低带宽的通信，产生紧凑的数据表示，并在具备强大互操作性的同时实现更快的处理。一个例子是 1984 年引入的标准格式 \textbf{Abstract Syntax Notation One }（\textbf{ASN.1}），它被用于 UMTS、GPRS、EDGE、LTE、5G 以及很可能是 6G 等电信协议中。
+
+\label{idx:1723}
+\label{idx:1724}
+除电信之外，对 C++ 有需求的其他领域还包括游戏行业、汽车行业与自动驾驶汽车通信、工业 \textbf{Internet of Things}（\textbf{IoT}）应用、航空航天与国防、智慧城市基础设施以及金融与银行业，这些领域都在使用容器化应用。
+
+必须指出，开发者往往更青睐那些能简化编码的编程语言，例如 C\#、Java、Python、JavaScript、Go、Nim 和 Zig。这就是 C++ 采纳微服务架构较为缓慢的原因之一，部分也因为 C++ 程序员历来更偏好把所有组件都放在同一个进程中运行。尽管如此，在性能和资源效率至关重要的场景中，C++ 对微服务而言依然具有价值。
+
+\label{idx:1725}
+最后值得一提的是，不使用应用容器也照样可以使用微服务，而在应用容器中不托管微服务也完全可以。例如，尽管 PostgreSQL 数据库和 Nginx Web 服务器都不是为微服务设计的，但它们通常会运行在应用容器中。
+
+\subsection{选择何时使用容器}
+
+\label{idx:1726}
+容器方案有若干好处。操作系统容器和应用容器也各有一些不同的用例，各自的长处所在。这里我们将聚焦于应用容器。
+
+\subsubsection{容器的好处}
+
+\label{idx:1727}
+与虚拟机相比，容器——另一种流行的环境隔离方式——在运行时需要的开销更少。这是因为与虚拟机不同，容器无须运行某个单独版本的操作系统内核，也无须使用硬件或软件虚拟化技术。此外，应用容器也不运行虚拟机中常见的其他操作系统服务，如 syslog、cron 或 init。应用容器的另一个优势是镜像更小，因为它们通常不必携带整个操作系统的副本。在极端例子中，应用容器可以仅由一个静态链接的二进制文件构成。从操作系统的角度看，容器只是进程，和其他任何直接运行在宿主机上的应用一样。
+
+读到这里你可能会想：如果容器里只有一个二进制文件，那何必还要用容器呢？答案是，容器提供了统一且标准化的方式来构建和运行应用。由于容器必须遵循特定的约定，因此它们比普通二进制文件更容易编排，后者在日志、配置、开放端口等方面可能各有各的预期。
+
+\label{idx:1728}
+容器还提供了内置的隔离手段。每个容器都有自己用于进程、用户账户及其他资源的命名空间。这意味着一个容器中的进程对宿主机或其他容器中的进程一无所知。沙箱化还可以更进一步：你可以用同样标准的用户界面（无论是 Docker、Kubernetes 还是别的什么），通过 \textbf{control groups }（\textbf{cgroups}）高效地管理资源，为容器分配内存和 CPU 配额。
+
+\begin{myNotic}{注意}
+
+由于大多数现代容器技术都构建在 Linux 内核特性之上，了解 Linux 如何实现隔离会很有帮助：
+
+\myGraphic{0.373}{images/B18456_16_02.png}{}
+
+Linux 内核机制的核心是 Linux 命名空间（namespace），它为进程及其所分配的资源创建隔离环境，从而将其容器化。这涵盖挂载的文件系统、网络接口、IP 地址与路由、主机名与域名、进程间通信、用户、组和进程 ID，以及系统时间。它们是运行容器的基础技术。这些独立、自包含的环境确保了安全性，提供了更高效的资源管理，并防止应用之间发生冲突。
+
+Linux 命名空间与 cgroups 配合使用，用于限制和计量进程所使用的资源：处理器时间（CPU）、内存、输入/输出（I/O）和网络带宽。它们把进程组织成分层级的组，并沿该层级分配系统资源。
+
+为进一步增强安全性，Linux 具备以更细粒度方式授予权限的能力（capabilities）。这些能力允许授予特定权限，从而限制某个进程及其子进程被允许执行的特权系统操作。
+
+\label{idx:1729}
+\label{idx:1730}
+\label{idx:1731}
+容器隔离还通过额外的内核安全特性得到加强，例如 \textbf{Security-Enhanced Linux}（\textbf{SELinux}）、\textbf{Application Armor}（\textbf{AppArmor}）和 TOMOYO，它们强制执行强制访问控制策略。此外，\textbf{seccomp}（\textbf{secure computing mode}）和 grsecurity（一组面向 Linux 内核的补丁）之类的工具通过过滤系统调用并施加内核级防护，进一步增强系统的整体安全性。
+\end{myNotic}
+
+\label{idx:1732}
+最后，标准化的运行时还意味着更高的可移植性。容器一旦构建完成，通常就可以不加修改地在不同的操作系统上运行。这也意味着生产环境中运行的内容与开发环境中运行的内容非常接近，甚至完全相同。问题复现更轻松，调试也是如此。
+
+\subsubsection{容器的缺点}
+
+如今把工作负载迁移到容器的压力很大，因此作为架构师，你需要了解这种迁移带来的所有风险。好处到处都被宣扬，但缺点往往不那么显而易见。
+
+\label{idx:1733}
+采用容器的主要障碍在于，并非所有应用都能轻松迁移到容器。对应用容器而言尤其如此，因为它们是围绕微服务设计的。如果你的应用不是基于微服务架构的，把它放进容器可能引入的问题比解决的还多。
+
+\label{idx:1734}
+如果你的应用已经具备良好的可扩展性，使用基于 TCP/IP 的\textbf{进程间通信}（\textbf{IPC}），并且大多是无状态的，那么迁移到容器应该不会有什么挑战。否则，上述每一个方面都会带来挑战，促使你重新审视现有的设计。
+
+与容器相关的另一个问题是持久化存储。理想情况下，容器本身不应有持久化存储。这样才能充分利用快速启动、易于扩展和灵活调度的优势。问题在于，能够提供业务价值的应用离不开持久化存储。
+
+这一缺陷通常通过让大多数容器保持无状态、并依赖一个容器外的外部组件来存储数据和状态来缓解。这类外部组件既可以是传统的自托管数据库，也可以是云服务商提供的托管数据库。无论选择哪种方案，都需要重新审视架构并做相应改造。
+
+\label{idx:1735}
+此外，应用容器遵循特定的约定，因此必须修改应用以符合这些约定。对某些应用来说，这只是一项省力的任务。而对另一些应用，比如使用内存 IPC 的多进程组件，则相当复杂。Linux 容器可以使用宿主的 IPC、\textbf{图形处理器}（\textbf{GPU}）设备或网络，但只有在显式允许时才行，这进一步增加了部署的复杂度。
+
+此外，尽管容器承诺可移植性，但它们并非在所有操作系统中都具有同等的可移植性。Windows 容器确实存在，它需要 Hyper-V（虚拟机监控程序）隔离，但由于性能问题、相较于 Linux 容器在安全和隔离方面的不足，以及 Linux 在服务器环境和云平台上的主导地位，Windows 容器的吸引力不如 Linux 容器。尽管 Windows 容器为 Windows 应用提供了隔离，并且得到了微软的支持，但其使用仍然是小众的，尤其是与广泛使用的 Linux 容器相比。
+
+\label{idx:1736}
+Windows 容器宿主还包含更多内置的服务和实用工具，即便其中大多数服务和实用工具对 Docker 托管而言并非必需，这也扩大了安全攻击面。此外，Windows 容器基础镜像需要遵守容器操作系统镜像\textbf{最终用户许可协议}（\textbf{EULA}）的授权要求。Windows 生态提供的符合 OCI 规范的公共镜像远少于 Linux，使得镜像的查找和复用更加困难。
+
+\label{idx:1737}
+如果你是从零开始构建一个新应用，并能以这项技术为基础进行设计，那么享受应用容器带来的好处会更容易。将现有应用迁移到应用容器，尤其是当应用本身很复杂时，需要付出多得多的努力，甚至可能要对整个架构进行大改。在这种情况下，我们建议你格外仔细地权衡所有的利弊。错误的决策可能会损害产品的交付周期、可用性和预算。
+
+\section{构建容器镜像}
+
+\label{idx:1738}
+本节的重点是应用容器。操作系统容器大多遵循系统编程的原则，而应用容器则带来了新的挑战和模式。不过，应用容器也提供了专门的构建工具来应对这些挑战。
+
+我们将讨论的主要工具是 Docker，因为它是当前构建和运行应用容器的事实标准。
+
+\emph{图 16.2} 展示了 Docker 的架构：
+
+\myGraphic{0.920}{images/B18456_16_03.png}{图 16.2：Docker 架构}
+
+Docker 技术栈（用 Go 编写）由以下部分组成：
+
+\begin{itemize}
+\item \textbf{docker-cli}：管理容器生态各方面事务的 CLI 工具
+\item \textbf{dockerd}：与高层容器运行时交互的守护进程
+\item \textbf{containerd}：与底层容器运行时交互的高层容器运行时：
+
+\begin{itemize}
+\item \textbf{runc}：默认使用的轻量级、可移植容器运行时
+\item \textbf{Wasmtime}：WebAssembly 运行时（用 Rust 编写）
+\item \textbf{GVisor (runsc)}：一个沙箱，兼容大多数 Linux 内核系统调用，并提供与虚拟化类似的安全级别
+\item \textbf{Kata Containers}：在隔离的轻量级虚拟机中运行容器以获得更高的安全性（用 Rust 编写）
+\end{itemize}
+\end{itemize}
+
+\label{idx:1739}
+我们还将介绍一些构建应用容器的替代方案。
+
+\subsection{容器镜像详解}
+
+在介绍如何构建容器镜像之前，理解容器与容器镜像之间的区别至关重要。这两个术语常常被混为一谈，在非正式交谈中尤其如此。
+
+容器与容器镜像的区别，就如同运行中的进程与可执行文件之间的区别：
+
+\begin{itemize}
+\label{idx:1740}
+\item \textbf{容器镜像是静态的}：它们由若干层组成，每一层都是某个文件系统在某一时刻变化及其关联元数据的快照。这些元数据描述的内容包括：运行时设置了哪些环境变量，或者从该镜像创建容器时运行哪个程序。
+\label{idx:1741}
+\item \textbf{容器是动态的}：它们是从容器镜像创建的运行实例。我们可以从容器镜像创建容器，也可以通过为运行中的容器创建快照来生成容器镜像。事实上，容器镜像的构建过程就是创建若干容器、在其中执行命令，并在命令执行完成后为它们创建快照。
+\end{itemize}
+
+为了区分由容器镜像引入的数据和运行时生成的数据，Docker 使用联合挂载文件系统来创建不同的文件系统层。这些层同样存在于容器镜像中。通常，容器镜像的每一个构建步骤都对应最终容器镜像中的一个新层。
+
+\myGraphic{0.797}{images/B18456_16_04.png}{图 16.3：Docker 联合文件系统（UFS）}
+
+\label{idx:1742}
+\label{idx:1743}
+Docker 使用\textbf{联合文件系统}（\textbf{UFS}）来管理层。该文件系统通过将多个文件系统层层叠加，创建一个单一且一致的文件系统；其中每个文件系统都有自己的属性，权限可以隐藏和覆盖下层文件系统的文件，但不能修改它们。\textbf{引导文件系统}（\textbf{bootfs}）和容器镜像的下层只开放读取（只读），因为只有最上层的容器层开放读写（读写）。反过来，容器中文件的变更也可以被提交，从而构成另一个容器镜像的基础。
+
+\label{idx:1744}
+\label{idx:1745}
+此外，在容器层之上，Docker 还可以挂载文件、目录和持久卷。持久卷的设计目的是把数据存储在容器之外，以便对其进行备份或共享。但容器化应用默认是隔离的，因此它们必须通过暴露容器内部的开放端口并将其映射到宿主端口，使用网络协议与外界通信。
+
+\subsection{使用 Dockerfile 构建容器镜像}
+
+\label{idx:1746}
+使用 Docker 构建应用容器镜像最常见的方式是编写 Dockerfile。Dockerfile 是一个文本文件，它使用一种命令式语言来描述生成最终镜像所需的操作。其中有些操作会创建新的文件系统层，另一些则作用于元数据。
+
+\label{idx:1747}
+我们不会深入 Dockerfile 的每一个细节，而是聚焦于将 C++ 应用容器化的不同方式：一种是使用已安装构建工具的标准基础镜像，另一种是从零构建。为此，我们需要介绍一些与 Dockerfile 相关的语法和概念。
+
+\begin{myNotic}{注意}
+
+\label{idx:1748}
+Ubuntu 的\textbf{长期支持}（\textbf{LTS}）版本会在很长时间内获得安全更新和缺陷修复支持，因此非常适合服务器、企业以及长期看重稳定性和可靠性的用户。LTS 版本经过严格测试，相比仅提供九个月支持的过渡版本，能提供更稳定、更可预测的环境。不过，由于软件版本陈旧，使用 LTS 版本并不总是可行或理想的选择。本章的示例基于 Ubuntu 25.10（Questing Quokka），因为它所提供的 C++ 编译器默认版本能让示例更简单、更不复杂。
+\end{myNotic}
+
+下面是一个非常简单的 Dockerfile 示例：
+
+\begin{codebox}[docker]
+FROM ubuntu:questing
+RUN apt update && apt install –y build-essential gcc
+CMD ["/usr/bin/gcc"]
+\end{codebox}
+
+我们采取的步骤如下：
+
+\begin{enumerate}
+\item 导入基础 Ubuntu 镜像。
+\item 在容器内运行一条命令。该命令的结果会在目标镜像内创建一个新的文件系统层。这意味着用 \texttt{apt} 安装的软件包将在此镜像派生的所有容器中可用。
+\item 设置运行时元数据。当基于此镜像创建容器时，我们希望将 \texttt{GCC} 作为默认进程来运行。
+\end{enumerate}
+
+因此，通常我们可以把 Dockerfile 划分为三个部分：
+
+\begin{itemize}
+\item 导入基础镜像（\texttt{FROM} 指令）
+\item 在容器内执行会生成容器镜像的操作（\texttt{RUN} 指令）
+\item 运行时使用的元数据（\texttt{CMD} 命令）
+\end{itemize}
+
+\label{idx:1749}
+\label{idx:1750}
+后两个部分完全可以交错出现，且每一部分都可能包含一条或多条指令。也可以省略后面任意部分，因为只有基础镜像是必需的。这并不意味着你不能从空文件系统开始。有一个专门为此目的设计的特殊基础镜像，名为 \texttt{scratch}。向除此之外空无一物的文件系统中添加一个静态链接的二进制文件，可能如下所示：
+
+\begin{codebox}[docker]
+FROM scratch
+COPY customer /bin/customer
+CMD ["/bin/customer"]
+\end{codebox}
+
+用 scratch 方式构建的容器镜像体积最小。不过，这种方式也有其取舍。你无法进入容器 shell，因为显然根本不存在 shell。事实上，其中只有一个静态二进制文件，别无他物。因此，你无法挂接到容器上进行调试。尽管如此，这是最安全的选择，因为它能阻止任何人将终端挂接到正在运行的容器上。相比之下，许多基础镜像，例如 Ubuntu、Debian、Manjaro（\texttt{manjarolinux/\allowbreak{}base}）和 Fedora，默认都提供 shell，这使它们更便于交互式操作，但也增大了镜像体积。
+
+\label{idx:1751}
+此外，由于从零构建的容器往往依赖静态链接的二进制文件，值得注意的是，编译静态二进制文件可能导致标准 \textbf{GNU C 库}（\textbf{glibc}）的某些函数无法工作，但除非用到那些函数，这并不构成问题。使用静态二进制文件的好处在于，它能简化容器镜像的组装，因为无需把共享库复制到构建出的镜像中。
+
+要从 Dockerfile 构建镜像，可以使用 \texttt{docker build} 命令。它接受一个必需参数——包含构建上下文的目录，也就是 Dockerfile 本身以及你想复制到容器内的其他文件。要从当前目录构建 Dockerfile，请使用 \texttt{docker build}。记得包含一个 \texttt{.\allowbreak{}dockerignore} 文件，将不必要的文件和目录排除在构建上下文之外，以缩短构建时间。
+
+这样构建出的是一个匿名镜像，用途不大。大多数情况下，你会希望使用具名镜像，以便能方便地引用。命名容器镜像有一套需要遵循的约定，我们将在下一节介绍。
+
+\subsection{镜像的命名与分发}
+
+Docker 中的每个容器镜像都有一个独特的名称，由三个元素组成：仓库（registry）的名称、镜像的名称和一个标签。容器仓库是存放容器镜像的对象仓库。Docker 的默认容器仓库是 \texttt{docker.io}。从该仓库拉取镜像时，可以省略仓库名称。
+
+\label{idx:1752}
+我们前面提到的 \texttt{ubuntu:questing} 示例，其完整名称为 \texttt{docker.\allowbreak{}io/\allowbreak{}ubuntu:questing}。在这个例子中，\texttt{ubuntu} 是镜像的名称，而 \texttt{questing} 是表示镜像某个特定版本的标签。
+
+\label{idx:1753}
+要在构建镜像时指定名称，需要向 \texttt{docker build} 命令传入 \texttt{-t} 参数。例如，要构建一个名为 \texttt{tradefair/\allowbreak{}merchant:v2.\allowbreak{}0.\allowbreak{}3} 的镜像，可以使用 \texttt{docker build -t tradefair/\allowbreak{}merchant:v2.\allowbreak{}0.\allowbreak{}3.\allowbreak{}}。
+
+\label{idx:1754}
+\label{idx:1755}
+\label{idx:1756}
+构建完成后，你会有兴趣通过容器仓库来存储和共享镜像。你可以自行托管私有仓库并把镜像存放在那里，也可以使用托管方案。常见的托管容器仓库包括：Amazon \textbf{Elastic Container Registry}（\textbf{ECR}）、\textbf{Azure Container Registry}（\textbf{ACR}）、Docker Hub 容器仓库、GitHub Packages 仓库、GitLab Container Registry、\textbf{Google Artifact Registry}（\textbf{GAR}）、Harbor 容器仓库、JFrog Container Registry、Red Hat Quay 以及 Sonatype Nexus Repository OSS。
+
+Docker Hub 仍然是最受欢迎的一个，尽管一些公共镜像正在迁移到 quay.io。两者都是通用的，都允许存储公共和私有镜像。如果你已经在使用 GitHub、GitLab 或云服务商的生态，它们对你主要的吸引力就在于此。使用与你的 CI/CD 流水线或部署目标相同的平台，可以减少你需要的独立服务数量。
+
+如果这些方案都不合你意，自行托管本地仓库也非常简单，只需运行一个容器即可。
+
+\subsection{编译型应用与容器}
+
+\label{idx:1757}
+构建容器镜像时，最显而易见的做法是先安装所有依赖项，复制源文件，然后作为容器构建步骤之一来编译应用。这样做的主要好处是，我们可以精确控制工具链的内容和配置，从而获得一种可移植的应用构建方式。然而，其缺点大到不容忽视：最终生成的容器镜像包含大量不必要的文件。毕竟，运行时我们既不需要源代码，也不需要工具链。由于分层文件系统的工作方式，一旦文件在之前的层中引入，就无法再删除，因为文件变更会被记录下来。出于这个原因，通常会把多个操作放在单条 Dockerfile 指令中执行，以减少层的数量和提交的文件变更。更重要的是，如果攻击者设法侵入容器，容器中的源代码可能会构成安全风险。遵循这种做法的 Dockerfile 可能如下所示：
+
+\begin{codebox}[docker]
+FROM ubuntu:questing
+RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -y build-essential gcc cmake git python3-pip python3-venv && \
+    python3 -mvenv /opt/venv && . /opt/venv/bin/activate && pip3 install conan && conan profile detect
+ADD . /root/src
+WORKDIR /root/src
+RUN mkdir -p build && cd build && . /opt/venv/bin/activate &&
+    conan install .. --build=missing -s:a build_type=Release -s:a compiler.cppstd=gnu20 -of . && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && cmake --build . && cmake --install .
+CMD ["/usr/local/bin/customer"]
+\end{codebox}
+
+\begin{myTip}{提示}
+借助\textbf{AI Code Explainer}和\textbf{Quick Copy}功能提升你的编码体验。在下一代 Packt Reader 中打开本书。点击\textbf{Copy}按钮
+
+（\textbf{1}）即可快速将代码复制到你的编码环境中，或点击\textbf{Explain}按钮
+
+（\textbf{2}）让 AI 助手为你解释一段代码。
+
+\myGraphic{0.92}{images/image__2_.png}{}
+
+购买本书即可免费获得\textbf{下一代 Packt Reader}。扫描二维码，或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按名称查找本书。请仔细核对所显示的版本，确保你拿到的是正确的那一版。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/Latest_QR.png}\end{center}
+\end{myTip}
+
+\label{idx:1758}
+另一种显而易见的做法是在宿主机器上构建应用，只把生成的二进制文件复制到容器镜像内。当现有的构建流程已经建立时，这种做法对它的改动较少。主要缺点是你必须在构建机器上匹配与容器中相同的库、操作系统和处理器架构。例如，如果你的宿主操作系统运行的是 Ubuntu 25.10，那么你的容器也必须基于 Ubuntu 25.10，或者编译成静态链接的可执行文件。否则，你就要冒着不兼容的风险。采用这种做法时，还必须独立于容器来配置工具链。相应的 Dockerfile 可能如下所示：
+
+\begin{codebox}[docker]
+FROM ubuntu:questing
+COPY customer /bin/customer
+CMD ["/bin/customer"]
+\end{codebox}
+
+\label{idx:1759}
+这个最小镜像只包含二进制文件，没有工具链，也没有源代码。如果二进制文件是动态链接的，别忘了复制或安装共享库；否则，可执行文件将无法运行。无发行版（distroless）容器镜像是创建安全且轻量镜像的一种方式，这类镜像只包含应用及其运行时依赖。
+
+稍微更进阶的做法是采用多阶段构建。在多阶段构建中，一个阶段可以专门用于搭建工具链并编译项目，而另一个阶段则把生成的二进制文件复制到目标容器镜像中。
+
+单阶段构建只运行一个应用了相关命令的临时容器，与之不同，多阶段构建会使用多个临时容器。当下一个阶段开始时，当前运行的容器中只存在来自基础镜像的文件。这就是为什么各阶段会从先前的阶段复制任何额外文件或重新安装依赖项，而且一个阶段可以从多个先前的阶段或外部镜像复制文件。
+
+相较于前面的方案，这种做法有若干好处。首先，现在 Dockerfile 同时掌控工具链和运行时环境，因此构建的每一步都有完整记录。其次，可以使用带有工具链的镜像来确保开发与 CI/CD 流水线之间的兼容性。这也让分发工具链本身的升级和修复变得更加容易。主要的缺点是，容器化的工具链用起来可能不如原生工具链那么顺手。此外，构建工具并不特别适合应用容器，因为应用容器要求每个容器只运行一个进程。当某些进程崩溃或被强制停止时，这可能导致意外的行为。
+
+前面示例的多阶段版本可能如下所示：
+
+\begin{codebox}[docker]
+FROM ubuntu:questing AS builder
+RUN apt update && DEBIAN_FRONTEND=noninteractive apt install –y build-essential gcc cmake ninja-build git python3-pip python3-venv
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip3 install conan==2.* && conan profile detect
+ADD . /root/src
+WORKDIR /root/src
+RUN mkdir -p build && cd build && \
+    conan install .. --build=missing -s:a build_type=Release -s:a compiler.cppstd=gnu20 -of . && \
+    cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build . && cmake --install .
+FROM ubuntu:questing
+COPY --from=builder /root/src/build/bin/customer /bin/customer
+CMD ["/bin/customer"]
+\end{codebox}
+
+第一个阶段从第一条 \texttt{FROM} 命令开始，负责搭建构建环境、添加源代码并构建二进制文件。接着，第二个阶段从第二条 \texttt{FROM} 命令开始，从前一阶段复制生成的二进制文件，而不复制工具链或源代码。
+
+\label{idx:1760}
+这显著减小了最终 Docker 镜像的体积。例如，在组装容器镜像时，带编译器和开发库的单阶段构建版本由于存在未删除的辅助文件，生成的镜像大小约为 3.57 GB。作为对比，多阶段构建版本生成的镜像仅有 137 MB，因为所有辅助文件都被直接丢弃了。这两个版本都包含 77 MB 的基础 Ubuntu 镜像，因为基础层会保留在 Docker 镜像历史中。尽管 scratch 版本的大小可以小到约 17 MB，但这种方式对复杂应用往往不切实际。在这种情况下，你必须亲自把它们的全部依赖项准备并复制到正在构建的镜像中。
+
+显然，容器镜像体积越大，它在 Docker 仓库中占用的磁盘空间就越多，从服务器下载镜像所需的时间也越长。此外，Docker 镜像在仓库中以打包形式存储，并在下载时解包。因此，这类镜像可能白白占用磁盘空间却毫无用处，但删除所有辅助文件并不总是可行、可取或必要的。举例来说，Python 的 Docker 镜像非常庞大（超过 3 GB），但这仅仅是因为这些镜像像一把功能繁多的瑞士军刀，为各种需求都提供了模块。
+
+此外，每一层都被分配一个唯一的标识符，称为哈希或摘要，它根据层的内容（包括元数据、配置和文件）计算得出。这是一种加密指纹，既保证层的完整性，又实现去重，防止同一层从仓库中被重复下载。因此，哪怕只改动一个小文件，也会创建一个新层。所以，要定期清理未使用的 Docker 对象以及未打标签、未被任何容器使用的悬空镜像。
+
+在构建过程中，Docker 会把 Dockerfile 指令应用到运行中的容器上，然后提交文件变更。在多阶段构建中，这一过程会在多个容器（每个阶段一个）上重复进行，文件从一个容器复制到另一个容器。这种做法还简化了 Dockerfile 指令，因为完全不需要显式删除辅助文件。
+
+\texttt{dive}工具（\texttt{wagoodman/\allowbreak{}dive}）能帮助你深入探索 Docker 镜像中的每一层及其内容，并发现缩小 Docker/OCI 镜像体积的方法。
+
+\subsection{面向多种架构}
+
+使用 Docker 的应用容器通常在 x86\_64（也称为 AMD64）机器上使用。如果你只面向这个平台，那没有什么可担心的。不过，如果你在开发 IoT、嵌入式或边缘应用，可能会对多架构镜像感兴趣。
+
+\label{idx:1761}
+由于 Docker 可在许多不同的 CPU 架构上使用，因此有多种方式来处理多平台上的镜像管理。
+
+处理针对不同目标构建的镜像的一种方法是，用镜像标签来描述特定的平台。我们可以用 \texttt{merchant:v2.\allowbreak{}0.\allowbreak{}3-aarch64} 来代替 \texttt{merchant:v2.\allowbreak{}0.\allowbreak{}3}。尽管这种做法看起来最容易实现，但实际上有点麻烦。
+
+你不仅需要修改构建流程，把架构纳入打标签的过程，而且在拉取镜像运行时，还必须在各处小心地手动追加预期的后缀。如果你在使用编排器，就无法以直接的方式在不同平台之间共享清单，因为这些标签将是平台特定的。
+
+\label{idx:1762}
+有一种更好的方式，无需修改部署步骤，那就是使用 \texttt{manifest-tool}（\href{https://github.com/estesp/manifest-tool}{https://github.com/estesp/manifest-tool}）。构建过程起初看起来与前面建议的方式类似。镜像在所有受支持的架构上分别构建，并以带平台后缀的标签推送到仓库。在所有镜像都推送完成后，\texttt{manifest-tool} 会合并这些镜像，提供单一的多架构镜像。这样，每个受支持的平台都能使用完全相同的标签。
+
+这里提供了一个 \texttt{manifest-tool} 的示例配置：
+
+\begin{codebox}[yaml]
+image: tradefair/merchant:v2.0.3
+manifests:
+  - image: tradefair/merchant:v2.0.3-amd64
+    platform:
+      architecture: amd64
+      os: linux
+  - image: tradefair/merchant:v2.0.3-arm64
+    platform:
+      architecture: arm64
+      os: linux
+  - image: tradefair/merchant:v2.0.3-riscv64
+    platform:
+      architecture: riscv64
+      os: linux
+\end{codebox}
+
+这里我们有三个受支持的平台，每个平台都有各自的后缀（\texttt{tradefair/\allowbreak{}merchant:v2.\allowbreak{}0.\allowbreak{}3-amd64}、\texttt{tradefair/\allowbreak{}merchant:v2.\allowbreak{}0.\allowbreak{}3-arm64} 和 \texttt{tradefair/\allowbreak{}merchant:v2.\allowbreak{}0.\allowbreak{}3-riscv64}）。\texttt{manifest-tool} 会把针对各平台构建的镜像组合起来，生成一个到处都能使用的 \texttt{tradefair/\allowbreak{}merchant:v2.\allowbreak{}0.\allowbreak{}3} 镜像。
+
+\label{idx:1763}
+\label{idx:1764}
+\label{idx:1765}
+另一种做法是使用 Docker manifest，或使用 Docker 内置的 buildx 功能。Docker buildx 使用 BuildKit——一个被开发出来的高级容器镜像构建引擎。buildx 在 Windows 和 macOS 的 Docker Desktop 中默认包含，而在 Linux 上通常需要手动启用。借助 buildx，你可以挂载多个 builder 实例，每个实例针对所需的一种架构。有意思的是，运行构建并不需要本机就是对应该架构的机器；例如，你还可以使用 \textbf{Quick EMUlator}（\textbf{QEMU}）、Bochs、FEX 或 Box64 模拟，在 ARM 上运行 x86 Docker 镜像，或者在多阶段构建中使用交叉编译。虽然 buildx 比前一种方法强大得多，但它也更复杂。
+
+用于准备构建环境并构建多平台镜像的示例代码可能如下所示：
+
+\begin{codebox}[text]
+# create two build contexts running on different machines
+docker context create \
+    --docker host=ssh://docker-user@host1.domifair.org \
+    --description="Remote engine amd64" \
+    node-amd64
+docker context create \
+    --docker host=ssh://docker-user@host2.domifair.org \
+    --description="Remote engine arm64" \
+    node-arm64
+# use the contexts
+docker buildx create --use --name mybuild node-amd64
+docker buildx create --append --name mybuild node-arm64
+# build an image
+docker buildx build --platform linux/amd64,linux/arm64 .
+\end{codebox}
+
+如你所见，如果你习惯了常规的 \texttt{docker build} 命令，这可能会有点让人困惑。
+
+\subsection{构建应用容器的替代工具}
+
+\label{idx:1766}
+使用 Docker 构建容器镜像需要 Docker 守护进程处于运行状态。Docker 守护进程需要 root 权限，这在某些环境下可能带来安全问题。尽管执行构建的 Docker 客户端可以由非特权用户运行，但在构建环境中安装 Docker 守护进程并不总是可行的。
+
+为应对这些挑战，人们开发出了可以构建容器镜像的替代工具。
+
+\subsubsection{Buildah}
+
+\label{idx:1767}
+\label{idx:1768}
+Buildah 是一个用于构建容器镜像的替代工具，可以配置为无需 root 访问权限即可运行。它由 Podman 以及可选的 Skopeo 作为补充。
+
+Podman 负责运行、管理容器并与之交互。它的设计目标是无需守护进程且无需 root 权限。这个容器管理工具默认与 OCI 运行时 \texttt{runc}（用 Go 编写）交互，并可选地与 \texttt{crun}（用 C 编写）交互。这些工具可以替代传统的 Docker 工作流。
+
+Skopeo 用于操作、检查、签名和传输容器镜像与镜像仓库。
+
+\label{idx:1769}
+\label{idx:1770}
+这些工具最终都依赖 Linux 内核机制来提供进程隔离与安全性。Linux 容器运行在一个轻量级虚拟环境中，该环境由 Linux 命名空间、cgroups 以及 SELinux、seccomp 等内核安全特性与宿主系统隔离开来。
+
+\myGraphic{0.920}{images/B18456_16_05.png}{图 16.4：Buildah、Podman 和 Skopeo}
+
+\label{idx:1771}
+Buildah 可以处理我们前面讨论过的标准 Dockerfile，但它也提供了自己的 CLI，你可以在 shell 脚本或你觉得更直观的其他自动化工作流中使用。把前面某个 Dockerfile 用 Buildah 接口改写成 shell 脚本后，会像下面这样：
+
+\begin{codebox}[text]
+#!/bin/sh
+ctr=$(buildah from ubuntu:questing)
+buildah run $ctr -- /bin/sh -c 'apt update && apt install -y build-essential gcc'
+buildah config --cmd '/usr/bin/gcc' "$ctr"
+buildah commit "$ctr" tradefair-gcc
+buildah rm "$ctr"
+\end{codebox}
+
+\label{idx:1772}
+Buildah 一个有趣的功能是，它允许你把容器镜像的文件系统挂载到宿主机文件系统中。这样，你就可以用宿主机的命令与镜像的内容交互。如果有些软件你不希望（或因为许可限制无法）放进容器，那么在使用 Buildah 时仍然可以在容器外部调用它。
+
+\label{idx:1773}
+\label{idx:1774}
+不过，这个工具缺少用于存储容器镜像的内置镜像仓库，不支持 Docker Compose 格式，也没有像 Docker 那样与其他工具和服务达到同等程度的集成——例如 Docker 能与 Kubernetes 集成。
+
+\subsubsection{ansible-bender}
+
+\label{idx:1775}
+\label{idx:1776}
+\texttt{ansible-bender} 使用 Ansible playbook 和 Buildah 来构建容器镜像。所有配置，包括基础镜像和元数据，都作为变量在 playbook 中传入。
+
+下面是把前面的示例转换成 Ansible 语法后的样子：
+
+\begin{codebox}[yaml]
+---
+- name: Container image with ansible-bender
+  hosts: all
+  vars:
+    ansible_bender:
+      base_image: python:3
+      target_image:
+        name: tradefair-gcc
+        cmd: /usr/bin/gcc
+  tasks:
+  - name: Install Apt packages
+    apt:
+      pkg:
+        - build-essential
+        - gcc
+\end{codebox}
+
+如你所见，\texttt{ansible\_\allowbreak{}bender} 变量负责所有与容器相关的配置，而列出的任务会在由指定的 \texttt{base\_\allowbreak{}image} 构建出的容器内执行。
+
+有一点需要注意：Ansible 要求基础镜像中存在 Python 解释器。由于官方 Ubuntu 镜像默认不包含 Python，我们不得不把前面示例中使用的 \texttt{ubuntu:questing} 改为 \texttt{python:3}。
+
+这个工具借助 Buildah 把容器镜像构建的细节抽象掉了。当然，不使用 \texttt{ansible-bender} 也能构建容器镜像，因为 Ansible 本身已经提供了一组模块，用于运行 Docker 容器、构建镜像、搭建网络等众多用途。
+
+\begin{myNotic}{注意}
+
+还有其他构建容器镜像的工具。例如，你可以用 Nix 创建一个文件系统镜像，然后用 Dockerfile 的 \texttt{COPY} 指令把它放进镜像里。实际上，你可以用任何其他方式准备一个文件系统镜像，然后用 \texttt{docker import} 把它作为基础容器镜像导入。
+\end{myNotic}
+
+\label{idx:1777}
+\label{idx:1778}
+\label{idx:1779}
+选择最适合你需求的方案即可。请记住，用 Dockerfile 配合 \texttt{docker build} 进行构建是最流行的做法，因此它的文档最完善、支持也最好。Buildah 提供了更多灵活性，让你能更自然地把容器镜像创建融入构建流程。最后，如果你已经在 Ansible 上投入了大量精力，并且想复用已有的模块，那么 \texttt{ansible-bender} 可能是个不错的方案。
+
+\subsection{将容器与 CMake 集成}
+
+\label{idx:1780}
+\label{idx:1781}
+在本节中，我们会演示如何把创建 Docker 镜像作为基于 CMake 的构建流程的一部分。虽然 CMake 并非天生就为与 Docker 配合而设计，但可以通过扩展让它把生成和构建容器镜像纳入工作流。
+
+\subsubsection{用 CMake 配置 Dockerfile}
+
+\label{idx:1782}
+\label{idx:1783}
+首先，我们需要一个 Dockerfile。我们会用下面的命令从 CMake 输入文件生成它：
+
+\begin{codebox}[text]
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/Dockerfile.in
+                ${PROJECT_BINARY_DIR}/Dockerfile @ONLY)
+\end{codebox}
+
+请注意，我们使用 \texttt{PROJECT\_\allowbreak{}BINARY\_\allowbreak{}DIR} 来确保：如果我们的项目是更大项目的一部分，不会覆盖源码树中其他项目创建的 Dockerfile。
+
+我们的 \texttt{Dockerfile.\allowbreak{}in} 文件会像下面这样：
+
+\begin{codebox}[docker]
+FROM ubuntu:questing
+ADD Customer-@PROJECT_VERSION@-Linux.deb .
+RUN apt update && \
+    apt -y --no-install-recommends install ./Customer-@PROJECT_VERSION@-Linux.deb && \
+    apt autoremove -y && apt clean && \
+    rm -r /var/lib/apt/lists/* Customer-@PROJECT_VERSION@-Linux.deb
+ENTRYPOINT ["/usr/bin/customer"]
+EXPOSE 8080
+\end{codebox}
+
+\label{idx:1784}
+\label{idx:1785}
+首先，我们指定取用最新的 Ubuntu 镜像，在其上安装我们的 DEB 包及其依赖，然后进行清理。重要的是，要把更新包管理器缓存与安装包放在同一步骤中完成，以避免因 Docker 分层机制导致的缓存过期问题。清理也同样在同一条 \texttt{RUN} 命令（同一层）中执行，以便让层更小。安装完包之后，我们让镜像在启动时运行 \texttt{customer} 微服务。最后，我们告诉 Docker 暴露它将监听的端口。
+
+现在，让我们回到 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件。
+
+\subsubsection{用 CMake 构建容器镜像}
+
+\label{idx:1786}
+\label{idx:1787}
+对于基于 CMake 的项目，可以加入一个负责构建容器的构建步骤。为此，我们需要让 CMake 找到 Docker 可执行文件，并在找不到时发出警告。可以这样做：
+
+\begin{codebox}[cmake]
+find_program(Docker_EXECUTABLE docker)
+ if(NOT Docker_EXECUTABLE)
+   message(WARNING "Docker not found")
+ endif()
+\end{codebox}
+
+为了说明 Docker 如何集成进 CMake 构建，我们回顾一下 \emph{第 7 章}《构建与打包》中的一个示例。在那里，我们为 customer 应用构建了一个二进制文件和一个 Conan 包。现在，我们想把这个应用打包成 Debian 归档，并构建一个包含该包的 Debian 容器镜像。
+
+要创建 DEB 包，我们需要一个辅助 target。我们为此使用 CMake 的 \texttt{add\_\allowbreak{}custom\_\allowbreak{}target} 功能：
+
+\begin{codebox}[text]
+add_custom_target(
+   customer-deb
+   COMMENT "Creating Customer DEB package"
+   COMMAND ${CMAKE_CPACK_COMMAND} -G DEB
+   WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+   VERBATIM)
+ add_dependencies(customer-deb libcustomer)
+\end{codebox}
+
+我们的 target 会调用 CPack，只创建我们关心的那一个包，而略过其余部分。为了方便，我们希望这个包在与 Dockerfile 相同的目录中创建。推荐使用 \texttt{VERBATIM} 关键字，因为它能确保 CMake 对有问题字符进行转义。如果不指定它，你的脚本行为在不同平台上可能会不一致。
+
+\texttt{add\_\allowbreak{}dependencies} 调用会确保在 CMake 构建 \texttt{customer-deb} target 之前，\texttt{libcustomer} 已经构建完成。既然现在我们有了辅助 target，创建容器镜像时就使用它：
+
+\begin{codebox}[text]
+add_custom_target(
+   docker
+   COMMENT "Preparing Docker image"
+   COMMAND ${Docker_EXECUTABLE} build ${PROJECT_BINARY_DIR}
+           -t tradefair/customer:${PROJECT_VERSION} 
+           -t tradefair/customer:latest
+   VERBATIM)
+add_dependencies(docker customer-deb)
+\end{codebox}
+
+\label{idx:1788}
+\label{idx:1789}
+如你所见，我们在包含 Dockerfile 和 DEB 包的目录中调用前面找到的 Docker 可执行文件来创建镜像。我们还告诉 Docker 把镜像同时打上 latest 标签和我们项目的版本标签。最后，我们确保在调用 Docker target 时会构建 DEB 包。
+
+如果你选择的生成器是 \texttt{make}，那么构建镜像只需运行 \texttt{make docker} 即可。如果你更倾向于完整的 CMake 命令（例如为了编写与生成器无关的脚本），调用方式是 \texttt{cmake --build .\allowbreak{} --target docker}。生成的 Docker 镜像大小为 252 MB。在 \texttt{compose.\allowbreak{}yaml} 中定义该服务，然后用 \texttt{docker compose up} 运行它：
+
+\begin{codebox}[yaml]
+services:
+  customer:
+    image: tradefair/customer:latest
+    ports:
+      - "8080:8080"
+\end{codebox}
+
+在浏览器中访问 \href{http://localhost:8080/customer/v1?name=your_name}{http://localhost:8080/customer/v1?name=your\_name} 即可查看应用运行情况。
+
+到目前为止，我们关注的都是构建容器镜像以及把应用打包进镜像。在实践中，架构师还必须考虑这些容器在运行时如何表现。我们将在下一节中来看其中一些考量。
+
+\section{容器的实用运行时考量}
+
+\label{idx:1790}
+容器在运行时的实用优势之一是它们在测试和部署环境中的灵活性。容器与 CI/CD 流水线非常契合。由于它们大多除了容器运行时本身之外不需要其他依赖，因此很容易测试。工作节点不必为实现测试需求而专门配置，所以增加更多节点要容易得多。更重要的是，它们全都是通用的，因此既可以充当构建器，也可以充当测试运行器，正如 \emph{第 11 章}《持续集成与持续部署》中运行在 Ubuntu Docker 镜像上的 GitLab 和 GitHub CI/CD 流水线那样，甚至还能在无需任何预先配置的情况下充当部署执行器。
+
+传统上，集成测试是一个复杂的过程，因为它需要部署和配置数据库、消息代理、Web 服务器等必要的服务。然而，借助容器，你可以把单元测试的简单性与使用真实依赖的集成测试的可靠性结合起来。采用这种做法的流行库之一是 Testcontainers。这个测试库允许通过一次性的（disposable）Docker 容器，编写使用真实依赖而非 mock 服务的测试。它支持 C++、C\#、Go、Java、JavaScript、PHP、Python、Ruby、Rust 和 Swift 等多种编程语言。不过，在本书写作时，对原生 C++ 的支持还处于早期开发阶段。
+
+\label{idx:1791}
+在 CI/CD 中使用容器的另一个巨大好处是它们彼此隔离。这意味着同一台机器上运行的多个副本不应互相干扰。除非测试需要宿主操作系统的某些资源，例如端口转发或卷挂载，否则这一点是成立的。因此，最好把测试设计成不需要这类资源（或者至少通过例如随机化端口号来避免冲突）。
+
+除了 CI/CD 流水线中的测试之外，还有其他运行时方面的考量——例如容器内系统库的选择、替代容器运行时的可用性——它们会显著影响应用的构建和部署方式。
+
+\subsection{容器内的运行时库}
+
+\label{idx:1792}
+容器的选择可能会影响工具链的选择，从而影响应用可用的 C++ 语言特性。由于容器通常基于 Linux，可用的系统编译器通常是 GNU GCC，其标准库是得到广泛支持的 glibc，即 GNU/Linux 操作系统的标准库。然而，有一些在容器领域流行的 Linux 发行版，例如 Alpine 和 BusyBox，基于不同的标准 C 库：musl 和 uClibc。
+
+\begin{myNotic}{注意}
+
+musl 是一个轻量、紧凑的库，专注于严格的 POSIX 兼容、静态链接以及通过简洁性保障安全，但它可能与某些软件或在编译过程中引发兼容性问题。uClibc 是面向嵌入式 Linux 系统和手机的小型标准 C 库，广泛用于低成本的嵌入式系统和 IoT 设备。
+\end{myNotic}
+
+如果你的目标平台是这类发行版，请确保你要使用的代码——无论是内部开发的还是来自第三方供应商的——都与 musl 或 uClibc 兼容。其主要优势是容器镜像更小。
+
+例如，为 Debian Bookworm 构建的 Python 镜像约为 365 MB，精简版 Debian 约为 43 MB，而 Alpine 版只有约 12 MB。BusyBox 镜像还要更小：740 KB（uClibc）和 840 KB（musl）。更小的镜像意味着更少的带宽浪费（用于上传和下载）以及更快的更新。
+
+然而，如果你决定在 Python 中搭配使用 musl 或 uClibc，情况恰恰相反：由于针对这些库的已编译包通常不会发布，这反而会增加构建时间和 Docker 镜像的大小。
+
+Alpine 还可能带来一些不想要的特性，例如更长的构建时间、难以捉摸的 bug 或性能下降。如果你想用它来减小体积，请运行适当的测试，确保应用行为没有问题。
+
+要进一步减小镜像体积，你可以考虑彻底抛弃底层操作系统。这里所说的操作系统，指的是容器中通常存在的所有用户态工具，例如 shell、包管理器和共享库。毕竟，如果只有你的应用要运行，那么其他一切都是不必要的。
+
+Go 或 Rust 应用通常会为此提供静态构建。虽然这在 C++ 中可能没那么直接，但它值得考虑，而且实现起来很容易。例如，你需要像下面这样把 \texttt{CMAKE\_\allowbreak{}EXE\_\allowbreak{}LINKER\_\allowbreak{}FLAGS}、\texttt{BUILD\_\allowbreak{}SHARED\_\allowbreak{}LIBS} 和 \texttt{CMAKE\_\allowbreak{}FIND\_\allowbreak{}LIBRARY\_\allowbreak{}SUFFIXES} 选项传给 CMake：
+
+\begin{codebox}[text]
+rm -rf ./build/ && mkdir build && cd build
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS="-static" -DBUILD_SHARED_LIBS=OFF -DCMAKE_FIND_LIBRARY_SUFFIXES=".a"
+cmake --build .
+\end{codebox}
+
+\label{idx:1793}
+减小镜像体积也存在一些缺点。首先，如果你决定使用 Alpine、BusyBox 或 Void Linux，请记住它并不像 Ubuntu、Debian、Arch 或 Fedora 那样流行。虽然它常常是容器开发者的首选平台，但用于其他目的的情况非常少见。
+
+这意味着可能会出现新的兼容性问题，主要源于它并非基于事实标准 glibc 实现。如果你依赖第三方组件，供应商可能不提供对该平台的支持。
+
+\label{idx:1794}
+如果你决定走「容器镜像里只放一个静态链接的二进制文件」这条路，也有一些挑战需要考虑。首先，不建议静态链接 glibc，因为它在内部会使用动态加载（\texttt{dlopen}）来提供 \textbf{名称服务切换}（\textbf{Name Service Switch}，\textbf{NSS}）和 iconv 等服务。如果你的软件依赖 DNS 解析或字符集转换，无论如何你都得提供一份 glibc 和相关库的副本。
+
+另一点需要考虑的是，shell 和包管理器常常被用来调试行为异常的容器。当某个容器表现异常时，你可以在容器内启动另一个进程，并借助 \texttt{ps}、\texttt{ls} 或 \texttt{cat} 等标准 Unix 工具来弄清容器内发生了什么。要在容器内运行这样的应用，它必须首先存在于容器镜像中。
+
+\begin{myNotic}{注意}
+
+\label{idx:1795}
+\label{idx:1796}
+\textbf{GNU Debugger}（\textbf{GDB}）和 \textbf{LLVM Project}（\textbf{LLDB}）能够远程调试应用，包括在 Linux 容器中调试，但它们要求目标端分别装有 \texttt{gdb-server} 和 \texttt{lldb-server}。此外，CLion IDE、Qt Creator、Visual Studio 和 Visual Studio Code 等 IDE 都支持配备这些调试工具的远程调试。
+\end{myNotic}
+
+\subsection{替代容器运行时}
+
+\label{idx:1797}
+Docker 是构建和运行容器最流行的方式，但由于容器运行时遵循开放标准，你也可以使用其他替代运行时。提供类似用户体验的 Docker 主要替代品是 Podman。它与上一节介绍的 Buildah 一起，可以完全取代 Docker。
+
+额外的好处是，它们\emph{不像 Docker 那样需要在宿主机上运行额外守护进程}。两者都支持无 root 操作，这使它们更适合对安全性要求较高的操作。Podman 接受你期望 Docker CLI 接受的所有命令，因此你可以直接以这种方式把它当作别名来用；它还支持 FreeBSD、NetBSD 和 OpenBSD。从 14.2 版本起，FreeBSD 也包含兼容 OCI 的镜像，Podman 可以在 AMD64 和 ARM64 系统上运行它们。
+
+\label{idx:1798}
+另一种旨在提供更好安全性的容器方案是 \textbf{Kata Containers} 计划。Kata Containers 使用轻量级虚拟机，利用硬件虚拟化在容器与宿主操作系统之间提供额外一层隔离。
+
+\label{idx:1799}
+CRI-O 和 containerd 也是在 Kubernetes 集群中使用的流行运行时。
+
+到目前为止，我们看的都是孤立运行的容器。然而，现代架构通常涉及多个容器协同运行。这正是容器编排发挥作用的地方。
+
+\section{理解容器编排}
+
+\label{idx:1800}
+容器的某些好处，只有在你使用容器编排器来管理它们时才会显现出来。编排器会跟踪所有将要运行你的工作负载的节点，并监控分布在这些计算节点（即工作机器，虚拟或物理皆可）上的容器的健康状况和状态。
+
+更高级的功能，例如高可用，需要对编排器进行恰当的配置，这通常意味着至少要用三台机器专门承担控制平面，再用三台机器作为工作节点。除了容器的自动扩缩之外，节点的自动扩缩还要求编排器具备一个能够控制底层基础设施的驱动（例如使用云提供商的 API）。
+
+在这里，我们会概述一些你可以选择的最流行的编排器。
+
+尽管这里介绍的编排器在特性和运行原理上各不相同，但它们操作的对象是相似的（服务、容器和批处理任务）。它们的共同点是：你通常编写一个声明式描述所需资源的配置文件，然后使用专用的 CLI 工具应用这份配置。为了说明这些工具之间的差异，我们提供一个示例配置，其中指定了前面介绍过的 Web 应用（merchant 服务）以及一个流行的 Web 服务器 Nginx 来充当代理。
+
+\subsection{自托管方案}
+
+\label{idx:1801}
+\label{idx:1802}
+无论你是在本地部署、私有云还是公共云中运行应用，你可能都希望对所选的编排器拥有牢牢的控制权。下面是一组自托管容器编排方案。请记住，它们中的大多数也以托管服务的形式提供。不过，选择自托管方案有助于你避免供应商锁定，这对你的组织来说可能是件好事。
+
+\subsubsection{Kubernetes}
+
+\label{idx:1803}
+Kubernetes 可能是我们这里提到的所有编排器中最著名的一个。它非常普及，这意味着如果你决定采用它，会有大量的文档和社区支持。
+
+\label{idx:1804}
+Kubernetes 使用与 Docker 相同的应用容器格式，但相似之处基本上仅止于此。你无法使用标准的 Docker 工具直接与 Kubernetes 集群和资源交互。相反，使用 Kubernetes 时你需要学习一套新的工具和概念。
+
+\label{idx:1805}
+\label{idx:1806}
+在 Docker 中，容器是你操作的主要对象，而在 Kubernetes 中，运行时最小的单元被称为 Pod。一个 Pod 可以由一个或多个容器组成，它们共享存储卷、网络资源和单个集群私有 IP 地址。Pod 内的容器可以通过 \texttt{localhost} 相互通信，而集群中的所有 Pod 都可以不经 \textbf{网络地址转换}（\textbf{NAT}）直接通信。Pod 本身很少受到关注，因为 Kubernetes 还有更高级的概念，例如 ReplicationController、DeploymentController 和 DaemonSet。它们的职责是跟踪 Pod，并确保节点上运行着期望数量的副本。
+
+Kubernetes 中的网络模型也与 Docker 大不相同。在 Docker 中，你可以从容器转发端口，使其可以从不同机器访问。而在 Kubernetes 中，如果你想访问某个 Pod，通常会创建一个 Service 资源，它可以充当负载均衡器，处理发往构成该服务后端的各个 Pod 的流量。Service 可用于 Pod 与 Pod 之间的通信，也可以对外暴露到互联网。在内部，Kubernetes 资源通过 DNS 名称执行服务发现。
+
+Kubernetes 是声明式且最终一致的。这意味着，你无需直接创建和分配资源，只需提供期望最终状态的描述，Kubernetes 就会完成将集群带到期望状态所需的工作。资源通常使用 YAML 描述。
+
+Kubernetes 建立在标签（label）和选择器（selector）的概念之上。标签是附加到每个 Kubernetes 对象上的键值对属性。这些标签用于标识、组织和关联资源，而选择器则根据这些标签来选取相应的资源。
+
+\label{idx:1807}
+由于 Kubernetes 具有高度可扩展性，在 \textbf{Cloud Native Computing Foundation}（\textbf{CNCF}）旗下开发了大量相关项目，它们把 Kubernetes 变成了一个与提供商无关的云开发平台。
+
+下面是 Kubernetes \texttt{merchant.\allowbreak{}yaml} 清单中使用 YAML 的资源定义的样子，不过也支持 JSON。Kubernetes 清单中的模板定义 Pod。Kubernetes 的 service 提供对 Kubernetes deployment 的访问，并把流量路由到 Pod。下面这两个块定义前端服务器：
+
+\begin{codebox}[yaml]
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: tradefair-front
+  name: tradefair-front
+spec:
+  selector:
+    matchLabels:
+      app: tradefair-front
+  template:
+    metadata:
+      labels:
+        app: tradefair-front
+    spec:
+      containers:
+        - name: webserver
+          imagePullPolicy: Always
+          image: nginx
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: tradefair-front
+  name: tradefair-front
+spec:
+  ports:
+    - port: 80
+      protocol: TCP
+      targetPort: 80
+  selector:
+    app: tradefair-front
+  type: ClusterIP
+\end{codebox}
+
+\label{idx:1808}
+下面这两个块定义后端服务器：
+
+\begin{codebox}[yaml]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: tradefair-merchant
+  name: merchant
+spec:
+  selector:
+    matchLabels:
+      app: tradefair-merchant
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: tradefair-merchant
+    spec:
+      containers:
+        - name: merchant
+          imagePullPolicy: Always
+          image: tradefair/merchant:v2.0.3
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: tradefair-merchant
+  name: merchant
+spec:
+  ports:
+    - port: 80
+      protocol: TCP
+      targetPort: 8000
+  selector:
+    app: tradefair-merchant
+    type: ClusterIP
+\end{codebox}
+
+\label{idx:1809}
+\label{idx:1810}
+要应用这份配置并编排容器，请使用以下命令：
+
+\begin{codebox}[text]
+kubectl apply -f merchant.yaml.
+\end{codebox}
+
+下一章会更详细地介绍 Kubernetes。
+
+\subsubsection{Docker Swarm}
+
+\label{idx:1811}
+\label{idx:1812}
+用于构建和运行 Docker 容器的 Docker Engine 自带一个预安装的编排器。这个编排器就是 Docker Swarm，它的主要特性是通过使用 Docker API 与现有的 Docker 工具高度兼容。
+
+Docker Swarm 使用服务（Service）这一概念来管理健康检查和自动扩缩容。它原生支持服务的滚动升级。服务可以发布自己的端口，随后由 Swarm 的负载均衡器对外提供服务。它支持将配置作为对象存储以实现运行时定制，并内置了基本的密钥管理。
+
+Docker Swarm 比 Kubernetes 简单得多，可扩展性也更弱。如果你不想学习 Kubernetes 的所有细节，这可能是一个优势。然而，它的主要劣势是普及度不高，这意味着很难找到关于 Docker Swarm 的相关资料。
+
+\label{idx:1813}
+\label{idx:1814}
+使用 Docker Swarm 的好处之一是你不必学习新的命令。如果你已经熟悉 Docker 和 Docker Compose，那么 Swarm 使用相同的资源。它还允许使用一些特定选项来扩展 Docker，以处理部署。
+
+用 Swarm 编排的两个服务看起来如下（\texttt{compose.\allowbreak{}yaml}）：
+
+\begin{codebox}[yaml]
+services:
+  web:
+    image: nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - merchant
+  merchant:
+    image: tradefair/merchant:v2.0.3
+    deploy:
+      replicas: 3
+    ports:
+      - "8000"
+\end{codebox}
+
+要应用该配置，请运行以下命令：
+
+\begin{codebox}[text]
+docker stack deploy --compose-file compose.yml tradefair.
+\end{codebox}
+
+\subsubsection{Nomad}
+
+\label{idx:1815}
+\label{idx:1816}
+Nomad 与前面两种方案不同，因为它并不只专注于容器。它是一个通用编排器，支持 Docker、Podman、QEMU 虚拟机、隔离的 fork/exec 以及若干其他任务驱动（task driver）。如果你想在不把应用迁移到容器的前提下获得编排带来的部分好处，Nomad 是值得了解的方案。
+
+Nomad 由 HashiCorp 开发，相对容易搭建，并且能与其他 HashiCorp 产品很好地集成，例如用于服务发现的 Consul 和用于密钥管理的 Vault。与 Docker 和 Kubernetes 一样，Nomad 客户端可以在本地运行，并连接到负责管理集群的服务器。
+
+Nomad 中有三种可用的作业（job）类型：
+
+\begin{itemize}
+\item \textbf{Service}：一种长生命周期任务，除非人工干预，否则不应退出（例如 Web 服务器或数据库）。
+\item \textbf{Batch}：一种短生命周期任务，最短可在几分钟内完成。如果批处理作业返回表示错误的退出码，则会根据配置重新启动或重新调度。
+\item \textbf{System}：一种必须在集群中每个节点上运行的任务（例如日志代理）。
+\end{itemize}
+
+\label{idx:1817}
+\label{idx:1818}
+\label{idx:1819}
+与其他编排器相比，Nomad 相对容易安装和维护。在任务驱动或设备插件（用于访问 GPU 或\textbf{现场可编程门阵列}（\textbf{FPGA}）等专用硬件）方面，它也是可扩展的。与 Kubernetes 相比，它的劣势是社区支持较弱、第三方集成较少。不过，Nomad 不要求你重新设计应用架构就能获得它所提供的好处，而在 Kubernetes 上这往往是必需的。
+
+\label{idx:1820}
+要用 Nomad 配置这两个服务，我们需要两个配置文件，因为一个作业文件只包含一个作业声明，使用\textbf{HashiCorp 配置语言}（\textbf{HCL}）编写。
+
+第一个是 \texttt{nginx.\allowbreak{}nomad}，它定义了调度到数据中心的前端服务，并把一起管理、作为一个单元的任务分组：
+
+\begin{codebox}[text]
+job "web" {
+  datacenters = ["dc1"]
+  type = "service"
+  group "nginx" {
+    task "nginx" {
+      driver = "docker"
+      config {
+        image = "nginx"
+        port_map {
+          http = 80
+        }
+      }
+      resources {
+        network {
+          port "http" {
+              static = 80
+          }
+        }
+      }
+      service {
+        name = "nginx"
+        tags = [ "tradefair-front", "web", "nginx" ]
+        port = "http"
+        check {
+          type = "tcp"
+          interval = "10s"
+          timeout = "2s"
+        }
+      }
+    }
+  }
+}
+\end{codebox}
+
+\label{idx:1821}
+第二个定义商家服务，因此命名为 \texttt{merchant.\allowbreak{}nomad}：
+
+\begin{codebox}[text]
+job "merchant" {
+  datacenters = ["dc1"]
+  type = "service"
+  group "merchant" {
+    count = 3
+    task "merchant" {
+      driver = "docker"
+      config {
+        image = "tradefair/merchant:v2.0.3"
+        port_map {
+          http = 8000
+        }
+      }
+      resources {
+        network {
+          port "http" {
+              static = 8000
+          }
+        }
+      }
+      service {
+        name = "merchant"
+        tags = [ "tradefair-front", "merchant" ]
+        port = "http"
+\end{codebox}
+
+\label{idx:1822}
+Nomad 支持不同的健康检查探测——\texttt{grpc}、\texttt{http}、\texttt{script} 和 \texttt{tcp}：
+
+\begin{codebox}[text]
+        check {
+          type = "tcp"
+          interval = "10s"
+          timeout = "2s"
+        }
+      }
+    }
+  }
+}
+\end{codebox}
+
+要应用该配置，请运行以下命令：
+
+\begin{codebox}[text]
+nomad job run merchant.nomad && nomad job run nginx.nomad.
+\end{codebox}
+
+\subsubsection{OpenShift}
+
+\label{idx:1823}
+\label{idx:1824}
+\label{idx:1825}
+OpenShift 是红帽基于 Kubernetes 构建的商业容器平台。它包含许多在 Kubernetes 集群日常运维中有用的附加组件。你能获得容器镜像仓库；基于 Tekton 框架的 CI/CD 流水线；用于日志、监控和追踪的 OpenTelemetry；基于 Istio、Envoy 和 Kiali（Istio 的控制台）的服务网格；Windows 容器编排；基于 Kata 容器（一种用于构建轻量级虚拟机、并能无缝接入容器生态的容器运行时）的沙箱容器；以及基于 Knative 的无服务器应用。它还支持\textbf{基于内核的虚拟机}（\textbf{KVM}）、Xen 和 Microsoft Hyper-V 等虚拟化技术，以及通过 Argo CD 实现的 GitOps。不过，它与 Kubernetes 并不完全兼容，因此不应把它当作可直接替换的方案。
+
+\label{idx:1826}
+\label{idx:1827}
+OpenShift 运行在 \textbf{Red Hat Enterprise Linux CoreOS}（\textbf{RHCOS}）之上，提供许多预建的应用模板，并支持多种编程语言（如 C++、C\#、Go、Java 和 Python）以及 GPU、\textbf{张量处理单元}（\textbf{TPU}）和 FPGA 等加速硬件。你可以在本地部署、在红帽云中、在受支持的公有云提供商之一（包括 AWS、Google Cloud、IBM Cloud、Microsoft Azure、Oracle Cloud 或阿里云）上，或以混合云的方式使用它。
+
+\label{idx:1828}
+还有一个由社区支持的开源项目，名为 \textbf{Origin Community Distribution of Kubernetes}（\textbf{OKD}），它构成了红帽 OpenShift 的基础。如果你不需要商业支持以及 OpenShift 的其他好处，仍然可以使用 OKD 来支撑你的 Kubernetes 工作流。
+
+\subsection{托管服务}
+
+\label{idx:1829}
+\label{idx:1830}
+如前所述，前面提到的一些编排器也以托管服务的形式提供。例如，Kubernetes 在多个公有云提供商中都以托管方案的形式提供。本节将向你展示一些不同的容器编排方法，它们不基于前面提到的任何方案。
+
+\subsubsection{AWS ECS}
+
+\label{idx:1831}
+\label{idx:1832}
+在 Kubernetes 发布 1.0 版本之前，AWS 就提出了自己的容器编排技术，名为 \textbf{弹性容器服务}（\textbf{ECS}）。ECS 提供一个编排器，负责监控、扩缩容并在需要时重启你的服务。
+
+\label{idx:1833}
+\label{idx:1834}
+要在 ECS 中运行容器，你需要提供承载工作负载的 Amazon \textbf{弹性计算云}（\textbf{EC2}）实例。编排器本身的使用不收费，但你会为你通常使用的所有 AWS 服务付费（例如底层的 EC2 实例，或 Amazon \textbf{关系数据库服务}（\textbf{RDS}）数据库）。
+
+ECS 的一个显著优势是它与 AWS 生态系统的其余部分集成得非常好。如果你已经熟悉 AWS 服务并已投入该平台，那么在理解和管理 ECS 时遇到的困难会更少。
+
+\label{idx:1835}
+\label{idx:1836}
+如果你不需要 Kubernetes 的许多高级特性及其扩展，ECS 可能是更好的选择，因为它更直接、更易于学习，但该服务是专有的。因此，由于供应商锁定，迁移到其他服务提供商比使用 Kubernetes 时需要更多时间和精力。
+
+\subsubsection{AWS Fargate}
+
+\label{idx:1837}
+\label{idx:1838}
+\label{idx:1839}
+AWS 提供的另一个托管编排器是 Fargate。与 ECS 不同，它不要求你配置并支付底层 EC2 实例的费用。你只需关注容器、附加到容器的网络接口，以及 AWS \textbf{身份与访问管理}（\textbf{IAM}）权限。
+
+与其他方案相比，Fargate 所需的维护量最少，也最容易学习。得益于 AWS 在这个领域已有的产品，自动扩缩容和负载均衡开箱即用。
+
+这里的主要缺点是与 ECS 相比，为托管服务支付的溢价更高。无法直接进行成本比较，因为 ECS 需要为 EC2 实例付费，而 Fargate 需要分别为内存和 CPU 用量付费。一旦你的服务开始自动扩缩容，这种对集群缺乏直接控制的情况很容易导致高昂的成本。
+
+\subsubsection{Azure Service Fabric}
+
+\label{idx:1840}
+\label{idx:1841}
+前面所有方案的问题在于，它们大多针对 Docker 容器，而 Docker 容器首先是面向 Linux 的。另一方面，Azure Service Fabric 是微软支持的一款 Windows 优先的产品。它使得无需修改即可运行遗留的 Windows 应用，如果你的应用依赖这类服务，这可能有助于你完成迁移。
+
+与 Kubernetes 一样，Azure Service Fabric 不仅是一个容器编排器，还是一个可以用于构建应用的平台。容器恰好是其中的一个构建块，因此它也能很好地充当编排器。
+
+随着 Azure Kubernetes Service（Azure 云中的托管 Kubernetes 平台）的推出，使用 Service Fabric 的必要性降低了。
+
+\section{小结}
+
+当你是一名现代软件的架构师时，必须考虑现代技术。考虑它们并不意味着盲目追随潮流；而是意味着能够客观地评估某个提议在你的场景中是否合理。
+
+前几章介绍的微服务以及本章介绍的容器，都值得考虑和理解。它们是否也值得落地实现呢？这在很大程度上取决于你正在设计的是何种产品。如果你已经读到这里，说明你已经准备好自己做决定了。
+
+在本章中，我们将操作系统容器和应用容器与虚拟机进行了比较，并考察了应用容器与微服务以及十二要素应用（Twelve-Factor App）方法论的关系。接着我们讨论了容器的优缺点、用于进程容器化的 Linux 机制，以及 C++ 仍然特别重要的行业。最后，我们探讨了容器设计、构建容器镜像、在不同处理器架构和容器运行时上运行它们，以及自托管与托管容器编排方案之间的选择。
+
+下一章将专门讨论可观测性——在分布式系统中使用多个容器和微服务时，这是定位问题根因的一项关键能力。
+
+\section{问题}
+
+\begin{enumerate}
+\item 应用容器与操作系统容器有何不同？
+\item Unix 系统中早期有哪些沙箱环境的例子？
+\item 为什么容器很适合微服务？
+\item 容器与虚拟机之间的主要区别是什么？
+\item 什么时候应用容器是不好的选择？
+\item 有哪些工具可以构建多平台容器镜像？
+\item 除了 Docker，还有哪些其他容器运行时？
+\item 有哪些流行的编排器？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Richard Bullington-McGuire、Andrew K. Dennis 和 Michael Schwartz，\emph{Docker for Developers: Develop and Run Your Application with Docker Containers Using DevOps Tools for Continuous Delivery}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/docker-for-developers-9781789536058}{https://www.packtpub.com/product/docker-for-developers/9781789536058}
+\item Emmanouil Gkatziouras，\emph{A Developer’s Essential Guide to Docker Compose: Simplify the Development and Orchestration of Multi-Container Applications}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/a-developers-essential-guide-to-docker-compose-9781801813815}{https://www.packtpub.com/en-us/product/a-developers-essential-guide-to-docker-compose-9781801813815}
+\item Gabriel N. Schenker，\emph{The Ultimate Docker Container Book: Build, Test, Ship, and Run Containers with Docker and Kubernetes}，Third Edition，Packt Publishing：\href{https://www.packtpub.com/en-us/product/the-ultimate-docker-container-book-9781804613184}{https://www.packtpub.com/en-us/product/the-ultimate-docker-container-book-9781804613184}
+\item Alessandro Arrichiello 和 Gianni Salinetti，\emph{Podman for DevOps: Containerization Reimagined with Podman and Its Companion Tools}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/podman-for-devops-9781803248967}{https://www.packtpub.com/en-us/product/podman-for-devops-9781803248967}
+\item Docker Docs，\emph{Run Multiple Processes in a Container}：\href{https://docs.docker.com/engine/containers/multi-service_container/}{https://docs.docker.com/engine/containers/multi-service\_container/}
+\item Docker Docs，\emph{Docker Compose Quickstart}：\href{https://docs.docker.com/compose/gettingstarted/}{https://docs.docker.com/compose/gettingstarted/}
+\item Docker Docs，\emph{How Compose Works}：\href{https://docs.docker.com/compose/intro/compose-application-model/}{https://docs.docker.com/compose/intro/compose-application-model/}
+\item Docker Docs，\emph{Compose Build Specification}：\href{https://docs.docker.com/reference/compose-file/build/}{https://docs.docker.com/reference/compose-file/build/}
+\item Jeremie Drouet，\emph{Multi-Arch Build and Images, the Simple Way}（博客），Docker：\href{https://www.docker.com/blog/multi-arch-build-and-images-the-simple-way/}{https://www.docker.com/blog/multi-arch-build-and-images-the-simple-way/}
+\item Docker Docs，\emph{Multi-Platform Builds}：\href{https://docs.docker.com/build/building/multi-platform/}{https://docs.docker.com/build/building/multi-platform/}
+\item Docker Docs，\emph{Multi-Stage Builds}：\href{https://docs.docker.com/build/building/multi-stage/}{https://docs.docker.com/build/building/multi-stage/}
+\item GoogleContainerTools，\emph{Distroless}，GitHub：\href{https://github.com/GoogleContainerTools/distroless}{https://github.com/GoogleContainerTools/distroless}
+\item Microsoft，\emph{Development Containers}，containers.dev：\href{https://containers.dev/overview}{https://containers.dev/overview}
+\item Adam Wiggins，\emph{The Twelve-Factor App}，12factor.net：\href{https://12factor.net/}{https://12factor.net/}
+\item Marcio Morales，\emph{Running Windows Containers on AWS: A Complete Guide to Successfully Running Windows Containers on Amazon ECS, EKS, and AWS Fargate}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/running-windows-containers-on-aws-9781804617199}{https://www.packtpub.com/en-us/product/running-windows-containers-on-aws-9781804617199}
+\item Testcontainers Native，\emph{Testcontainers for C/C++/Swift and Other Native Projects}，GitHub：\href{https://testcontainers.github.io/testcontainers-native/}{https://testcontainers.github.io/testcontainers-native/}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描此二维码或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前，请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

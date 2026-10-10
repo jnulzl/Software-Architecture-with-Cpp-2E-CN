@@ -1,0 +1,1802 @@
+在上一章中，我们看到了如何使用现代、安全且高效的 C++ 特性来实现系统的核心组件。本章将在此基础上进一步介绍一些惯用法和设计模式，让这些组件更易维护、更易复用、更易扩展。
+
+需要特别注意的是，C++ 不仅仅是一门面向对象的语言，它也不只提供动态多态，因此在 C++ 中做设计并不只是套用“四人组”（Gang of Four）的设计模式。在本章中，你将了解常用的 C++ 惯用法和设计模式，以及该在何处使用它们。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 编写地道的 C++ 代码
+\item 应用奇异递归模板模式
+\item 实现 \texttt{deducing this}
+\item 创建对象
+\item 在 C++ 中跟踪状态与访问对象
+\item 高效地处理内存
+\end{itemize}
+
+这份清单可真够长的！我们别浪费时间，直接开始吧。
+
+\section{技术要求}
+
+本章的代码需要以下工具来构建和运行：
+
+\begin{itemize}
+\item 支持 C++23 的编译器
+\item CMake 3.28+
+\end{itemize}
+
+本章的源代码片段可以在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter06}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter06} 找到。
+
+\section{编写地道的 C++ 代码}
+
+\label{idx:511}
+\label{idx:512}
+如果你熟悉面向对象编程语言，就一定听说过“四人组”设计模式，它们往往是对 \textbf{通用职责分配软件模式}（\textbf{GRASP}）设计原则的具体实现。虽然这些模式可以用 C++ 实现（而且常常如此），但这门多范式语言往往采用不同的方式来达成相同的目标。
+
+例如，如果你想在性能上胜过 Go、C\# 或 Java 这类托管编程语言，有时为虚函数分派付出的代价就太大了。在很多情况下，你事先就知道自己会处理哪些类型。果真如此的话，你往往可以利用语言和标准库中提供的工具写出性能更高的代码。在众多工具中，有一类正是本章要开篇介绍的——语言惯用法。下面就先来看其中几个。
+
+\label{idx:513}
+按定义来说，惯用法（idiom）是在某种语言中反复出现的一种构造，是特定于该语言的表达方式。C++ 的“母语者”应当能凭直觉掌握它的惯用法。我们在上一章已经提到过智能指针，它就是最常见的惯用法之一。
+
+\subsection{使用 RAII 守卫自动化作用域退出时的动作}
+
+\label{idx:514}
+\label{idx:515}
+C++ 中最强大的表达方式之一，就是闭合作用域的那个花括号。这里正是析构函数被调用、RAII 魔法发生的地方。要利用这一构造，你并不需要使用智能指针。你需要的只是一个 RAII 守卫——一个对象，它在构造时记住自己在被销毁时该做什么。这样一来，无论作用域是正常退出还是因异常退出，这些工作都会自动完成。
+
+最棒的是——你甚至不需要从头编写 RAII 守卫。各种库中已经有经过充分测试的实现。如果你使用上一章提到的 GSL，就可以用 \texttt{gsl::\allowbreak{}finally(\allowbreak{})\allowbreak{}} 在离开作用域之前执行一个收尾动作。来看下面这个例子：
+
+\begin{codebox}[cpp]
+using namespace std::chrono;
+void self_measuring_function() {
+    auto timestamp_begin = high_resolution_clock::now();
+    auto cleanup = gsl::finally([timestamp_begin] {
+        auto timestamp_end = high_resolution_clock::now();
+        std::cout << "Execution took: " << duration_cast<microseconds>(timestamp_end - timestamp_begin).count() << " us";
+  });
+    //模拟一些可能
+    //throw std::runtime_error{"Unexpected fault"};
+}
+\end{codebox}
+
+\label{idx:516}
+\label{idx:517}
+这里，我们在函数开头取一个时间戳，在末尾再取一个。试着运行这个例子，看看取消注释 \texttt{throw} 语句会如何影响执行。在这两种情况下，我们的 RAII 守卫都会正确地打印执行时间（前提是异常在某处被捕获）。
+
+下面再讨论几个更常见的 C++ 惯用法。
+
+\subsection{管理可复制性与可移动性}
+
+\label{idx:518}
+\label{idx:519}
+在 C++ 中设计一个新类型时，决定如何管理复制和移动至关重要。更重要的，是为类正确地实现这些语义。
+
+默认情况下，C++ 提供的拷贝构造函数和拷贝赋值运算符执行的是逐成员的拷贝。在这种拷贝中，对象连同它的全部数据元素（包括指针）被原样复制。如果类管理着动态内存，这就会导致浅拷贝。此时，两个对象最终会引用同一批动态内存地址。当对象被销毁时，由于两个对象都试图释放同一块动态内存，就会引发运行时错误。解决办法是定义自定义的拷贝构造函数和赋值运算符，以执行深拷贝。深拷贝会复制对象及其所有被递归拷贝的数据成员。因此，深拷贝不会与原对象引用相同的动态内存地址。
+
+\label{idx:520}
+\label{idx:521}
+另一方面，移动语义使得可以把资源的所有权从一个对象转移给另一个对象，而不是复制它，这通常比执行一次复制操作代价更低。拷贝函数接受一个 \texttt{const} 左值引用作为参数，而移动函数接受一个非 \texttt{const} 的右值引用作为参数。在某些情况下，可以选择删除拷贝和移动的构造函数与赋值运算符，使它们永远不会被执行。
+
+下面就来讨论这些决策。
+
+\subsubsection{实现不可拷贝的类型}
+
+\label{idx:522}
+有些情况下，你不希望自己的类被复制。一个常见的场景是复制成本非常高的类。在 STL 中，这类类包括 \texttt{std::\allowbreak{}unique\_\allowbreak{}ptr}，它不可复制但可移动，用于转移资源所有权。另一个例子是 \texttt{std::\allowbreak{}mutex}，从概念上讲它既不可复制也不可移动，因为如果某个 mutex 在被某个线程持有期间被销毁，程序的行为将是未定义的。
+
+另一种场景涉及容易因对象切片而出错的类，对象切片发生在把子类类型的对象复制给超类类型的对象时。
+
+下面是一种通过删除复制操作来让类不可复制的方法：
+
+\begin{codebox}[cpp]
+struct NonCopyable {
+    NonCopyable() = default;
+    NonCopyable(const NonCopyable&) = delete;
+    NonCopyable& operator=(const NonCopyable&) = delete;
+    //注意：同时也不可移动
+    //没有定义移动构造函数和赋值运算符
+    //NonCopyable(NonCopyable &&) = default;
+    //NonCopyable &operator=(NonCopyable &&) = default;
+};
+class MyType : NonCopyable {};
+\end{codebox}
+
+但请注意，这样的类同样不可移动，尽管在阅读类定义时很容易忽略这一点。更好的做法是直接把移动构造函数和移动赋值运算符显式声明为删除（deleted）。
+
+\label{idx:523}
+在 C++11 之前，一种防止此类对象被复制的常见做法是限制复制语义：把复制操作声明为私有但不予定义：
+
+\begin{codebox}[cpp]
+struct NonCopyable {
+    NonCopyable() {}
+private:
+    NonCopyable(const NonCopyable &);
+    NonCopyable &operator=(const NonCopyable &);
+};
+\end{codebox}
+
+有一条经验法则：在声明这类特殊成员函数时，应始终把它们全部声明出来。这意味着从 C++11 起，推荐的做法是编写如下代码：
+
+\begin{codebox}[cpp]
+struct MyTypeV2 {
+    MyTypeV2() = default;
+    MyTypeV2(const MyTypeV2 &) = delete;
+    MyTypeV2 & operator=(const MyTypeV2 &) = delete;
+    MyTypeV2(MyTypeV2 &&) = delete;
+    MyTypeV2 & operator=(MyTypeV2 &&) = delete;
+    virtual ~MyTypeV2() = default;
+};
+\end{codebox}
+
+这一次，这些成员直接定义在目标类型中，而没有使用继承来的辅助类型 \texttt{Non\allowbreak{}Copyable}。
+
+\subsubsection{遵循三法则和五法则}
+
+\label{idx:524}
+讨论特殊成员函数时还有一点要提：如果你没有删除它们，而是自己提供实现，那么很可能需要把它们全部定义出来，包括析构函数在内。这在 C++98 中被称为三法则——因为需要定义三个函数：复制构造函数、复制赋值运算符和析构函数。C++11 引入移动操作之后，它被五法则取代，后者增加了移动构造函数和移动赋值运算符。应用这些法则有助于避免资源管理问题。
+
+\subsubsection{遵循零法则}
+
+\label{idx:525}
+反过来说，如果所有特殊成员函数只用默认实现就足够了，那索性一个都不要声明。这清楚地表明你想要默认行为，也最不容易让人困惑。来看看下面这个类型：
+
+\begin{codebox}[cpp]
+class PotentiallyMisleading final {
+public:
+    PotentiallyMisleading() = default;
+    PotentiallyMisleading(const PotentiallyMisleading &) = default;
+    PotentiallyMisleading &operator=(const PotentiallyMisleading &) = default;
+    PotentiallyMisleading(PotentiallyMisleading &&) = default;
+    PotentiallyMisleading &operator=(PotentiallyMisleading &&) = default;
+    ~PotentiallyMisleading() = default;
+private:
+    std::unique_ptr<int> value;
+};
+\end{codebox}
+
+尽管我们把所有成员都设为默认，这个类仍然不可复制。这是因为它拥有一个本身不可复制的 \texttt{unique\_\allowbreak{}ptr} 成员。幸运的是，C++ 编译器可以就这一点给出警告，但编译器警告取决于编译器设置和已启用的警告标志。更好的做法是应用零法则，改为编写如下代码：
+
+\begin{codebox}[cpp]
+class RuleOfZero final {
+    //会被隐式地判定为不可移动
+    //~RuleOfZero() = default;
+    std::unique_ptr<int> value;
+};
+\end{codebox}
+
+\label{idx:526}
+现在我们有了更少的样板代码，而且只要看一眼成员，就更容易发现它不支持复制。
+
+关于复制还有一个重要的惯用法需要了解，稍后你就会认识它。在那之前，我们先谈谈另一个惯用法，它能够（也应该）用来实现前者。
+
+\subsection{使用隐藏友元}
+
+\label{idx:527}
+\label{idx:528}
+\label{idx:529}
+本质上，隐藏友元是定义在将其声明为友元的类型体内的非成员函数。这使得这些函数除了通过 \textbf{实参依赖查找（ADL）}之外，无法以其他方式调用，从而有效地把它们隐藏起来。（ADL 又称 \textbf{Koenig 查找}，是在函数调用表达式中查找非限定函数名的一套规则。）
+
+通过减少编译器需要考虑的重载数量，隐藏友元可以加快编译。附带的好处是，与替代方案相比，它们给出的错误信息更简短。另一个有趣的性质是，如果调用前需要先发生隐式转换，它们就无法被调用。这有助于避免这类意外转换。
+
+尽管在 C++ 中通常不推荐使用友元，但隐藏友元的情况有所不同。如果上一段提到的优点还不足以说服你，那么你还应知道，它们应是实现定制点的首选方式，因为正确实现的隐藏友元能增强封装。
+
+现在你可能会想，这些定制点究竟是什么。简单来说，它们是库代码所使用的可调用对象，用户可以针对自己的类型对其进行特化。标准库为此保留了不少名字，例如 \texttt{begin}、\texttt{end} 及其反向和 \texttt{const} 变体、\texttt{swap}、\texttt{(s)size}、\texttt{(c)data}，以及众多运算符等等。如果你决定为其中任何一个定制点提供自己的实现，它最好表现得符合标准库的预期。
+
+\label{idx:530}
+好了，理论先讲到这里。下面来看看在实践中如何使用隐藏友元提供定制点特化。例如，让我们创建一个极度简化的类来管理某种类型的数组：
+
+\begin{codebox}[cpp]
+template <typename T> class Array final {
+public:
+    Array(T *array, std::size_t size) : array_{array}, size_{size} {}
+    ~Array() { delete[] array_; }
+    T &operator[](std::size_t index) { return array_[index]; }
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    friend void swap(Array &left, Array &right) noexcept {
+        using std::swap;
+        swap(left.array_, right.array_);
+        swap(left.size_, right.size_);
+    }
+private:
+    T *array_;
+    std::size_t size_;
+};
+\end{codebox}
+
+如你所见，我们定义了析构函数，这意味着也应提供其他特殊成员函数。我们会在下一节使用隐藏友元 \texttt{swap} 来实现它们。请注意，尽管这个 \texttt{swap} 函数声明在我们的 \texttt{Array} 类体内，它仍然是一个非成员函数。它接受两个 \texttt{Array} 实例，并且无法访问 \texttt{this}（指向类当前实例的指针）。
+
+这一行 \texttt{using std::\allowbreak{}swap;\allowbreak{}} 让编译器首先在被交换成员所属的命名空间中查找 \texttt{swap} 函数。如果没有找到，它会回退到 \texttt{std::swap}。这被称为 \textbf{两步 ADL 与回退惯用法}，简称 \textbf{两步法}，因为我们先让 \texttt{std::swap} 可见，然后再调用 \texttt{swap}。
+
+\texttt{noexcept} 关键字告诉编译器我们的 \texttt{swap} 函数不会抛出异常，这使编译器在某些情况下能生成更快的代码。除了 \texttt{swap}，出于同样的理由，你也应始终用这个关键字标记默认构造函数和移动构造函数。\texttt{noexcept} 作用于 \texttt{swap}、移动构造函数和赋值运算符的首要好处，是能让标准库容器进行优化。例如，如果移动操作是 \texttt{noexcept} 的，\texttt{std::\allowbreak{}vector} 在重新分配时就可以移动元素；否则，它可能会改为复制。
+
+\label{idx:531}
+请注意，\texttt{Array} 类拥有一个裸指针，并总是在析构函数中删除它。这意味着你传入的指针必须来自 \texttt{new[].} 如果你传入的是栈上数组的地址，或者不是用 \texttt{new[]} 分配的内存，程序就会触发未定义行为。这里的裸指针是刻意为之，用以演示隐藏友元的用法。在实际代码中，你通常会把它包装进智能指针（\texttt{std::\allowbreak{}unique\_\allowbreak{}ptr<Array>}），或者使用 STL 容器。
+
+正如上一章所讨论的，裸指针是低层的基础构件，而智能指针提供了更安全、更清晰的内存管理。
+
+如前所述，我们的 \texttt{Array} 类有意设计得很底层。它包装了一个裸指针，就像 STL 容器那样。因此，它的实例应放在栈上，或用智能指针包装起来，以便自动且安全地管理内存，避免内存泄漏。它的构造函数不会造成内存泄漏，因为对象不会被部分构造，而且析构函数绝不会在未构造的对象上被调用。
+
+\label{idx:532}
+然而，因为这个类拥有一个裸指针，编译器生成的复制操作会导致浅复制和重复删除。我们将使用 \textbf{复制并交换惯用法}来定义安全的复制和移动操作，从而修复这个问题。
+
+\subsection{使用复制并交换惯用法提供异常安全}
+
+\label{idx:533}
+\label{idx:534}
+正如上一节提到的，由于我们的 \texttt{Array} 类定义了析构函数，按照五法则，它也应定义其他特殊成员函数。本节中，你将学习一种惯用法，它让我们无需样板代码就能做到这一点，还额外带来强异常安全这一好处。
+
+如果你对异常安全级别不太熟悉，下面简要回顾一下你的函数和类型可以提供的级别：
+
+\begin{itemize}
+\item \textbf{不做保证}：这是最基本的级别。当对象在被使用过程中抛出异常后，对其状态不做任何保证。
+\item \textbf{基本异常安全}：可能产生副作用，但你的对象不会泄漏任何资源，将处于有效状态，并包含有效数据（不一定与操作前相同）。你的类型至少应始终提供这一级别。
+\item \textbf{强异常安全}：不会发生任何副作用。对象的状态将与操作前相同。
+\item \textbf{不抛异常保证}：操作总会成功。如果在操作过程中抛出异常，它会在内部被捕获并处理，因此该操作不会向外部抛出异常。这类操作可以标记为 \texttt{noexcept}。
+\end{itemize}
+
+那么，我们如何才能同时实现这两个目标：编写无样板代码的特殊成员，又提供强异常安全？其实相当简单。既然我们有了 \texttt{swap} 函数，就用它来实现赋值运算符：
+
+\begin{codebox}[cpp]
+Array &operator=(Array other) noexcept {
+    swap(*this, other);
+    return *this;
+}
+\end{codebox}
+
+在我们的例子中，一个运算符就足以同时应对复制赋值和移动赋值。尽管如此，对于复制成本高昂的类型，单独实现一个移动运算符仍然有价值，因为它通过避免临时对象的创建/销毁带来性能上的好处。
+
+请注意，C++ 通常支持接受以 \texttt{const} 引用传递对象的复制构造函数语法，这可以防止修改操作，但这种做法并不提供异常安全。
+
+\label{idx:535}
+\label{idx:536}
+在我们的例子中，我们按值接收参数，这意味着传递实参时会发生一次复制或移动。这份副本充当临时对象，保护原始对象不被修改。然后，我们只需把成员与这份临时副本交换即可。这样，临时对象会自动销毁，而且这种做法不需要在构造函数中分配内存。我们不仅实现了强异常安全，还做到了赋值运算符的函数体不抛出异常。不过，在函数被调用之前、创建副本的那一刻，仍然可能抛出异常。对于移动赋值而言，因为参数是通过把实参移动进函数来初始化的，所以不会发生复制。
+
+现在，让我们定义复制构造函数：
+
+\begin{codebox}[cpp]
+Array(const Array &other) : array_{new T[other.size_]}, size_{other.size_}
+{
+    std::copy_n(other.array_, size_, array_);
+}
+\end{codebox}
+
+这个构造函数可能会抛出异常，这既取决于 \texttt{T}，也因为它会分配内存，但这个类的实例不会被部分构造，因为指针字段只有一个。因此，如果分配本身抛出异常，这里不会发生内存泄漏，因为构造函数体从未进入，析构函数也不会被调用。对于像 \texttt{int} 这样的平凡类型，内存泄漏或异常的风险不成问题，但对于一般类型，这个实现并不具备异常安全。
+
+现在，让我们也来定义移动构造函数：
+
+\begin{codebox}[cpp]
+Array(Array &&other) noexcept
+    : array_{std::exchange(other.array_, nullptr)}, size_{std::exchange(other.size_, 0)} {}
+\end{codebox}
+
+\label{idx:537}
+\label{idx:538}
+这里我们使用 \texttt{std::\allowbreak{}exchange}，让我们的成员得到初始化、\texttt{other} 的成员得到清理，而这一切都在初始化列表内完成。出于性能考虑，这个构造函数被声明为 \texttt{noexcept}。例如，只有当元素是 \texttt{noexcept} 可移动构造的时候，\texttt{std::\allowbreak{}vector} 在增长时才能移动元素，否则就会进行复制。
+
+就是这样。我们创建好了 \texttt{Array} 类，以很小的代价、且没有任何代码重复地提供了强异常安全。
+
+\subsection{编写 niebloid}
+
+\label{idx:539}
+这个 C++ 惯用法在标准库的几处地方都能见到。niebloid 以 Eric Niebler 的名字命名，是一种函数对象（也叫函子），标准从 C++17 起用它来实现定制点。随着 \emph{第 5 章} \emph{利用 C++} \emph{语言特性}中所介绍的标准 ranges 的出现，它们开始流行起来，但 Niebler 早在 2014 年就首次提出了它们。\emph{其目的是在不需要 ADL 的地方禁用它，这样来自其他命名空间的重载就不会被编译器考虑，因为非函数符号会抑制 ADL。}还记得前面几节中的两步惯用法吗？因为它既不方便又容易被忘记，于是引入了\emph{定制点对象}的概念。本质上，这些函数对象为你完成了\emph{两步法}。
+
+如果你的库需要提供定制点，用 niebloid 来实现它们很可能是个好主意。C++17 及以后引入的标准库中的全部定制点都以这种方式实现，是有其道理的。即使你只是需要创建一个函数对象，也仍然可以考虑使用 niebloid。它们提供了 ADL 的所有优点，同时减少了其缺点。它们允许特化，并且与概念结合，为你提供了定制可调用对象重载集的方法。它们还允许对算法进行更好的定制，代价仅仅是代码写得比平时稍微冗长一些。
+
+\label{idx:540}
+本节中，我们将创建一个简单的 range 算法，并把它实现为一个 niebloid。我们把这个 niebloid 叫做 \texttt{contains\_\allowbreak{}fn}，因为它只是返回一个布尔值，表示给定元素是否在 range 中被找到。首先，让我们创建这个函数对象本身，从声明它基于迭代器的调用运算符开始：
+
+\begin{codebox}[cpp]
+namespace detail {
+struct contains_fn final {
+    template <std::input_iterator It, std::sentinel_for<It> Sent, typename T, typename Proj = std::identity>
+    requires std::indirect_binary_predicate<std::ranges::equal_to, std::projected<It, Proj>, const T *>
+    constexpr bool operator()(It first, Sent last, const T &value, Proj projection = {}) const {
+\end{codebox}
+
+这看起来有些冗长，但所有这些代码都有其目的。我们把 struct 设为 \texttt{final}，以帮助编译器生成更高效的代码。如果看一下模板参数，你会看到一个迭代器和一个哨兵（sentinel）——它们是每个标准 range 的基本构件。哨兵通常是一个迭代器，但也可以是任何可与迭代器比较的半正则类型（半正则类型可复制且可默认初始化）。接下来，\texttt{T} 是要查找的元素类型，而 \texttt{Proj} 表示一个投影（projection）——在比较之前对每个 range 元素施加的操作（默认的 \texttt{std::\allowbreak{}identity} 只是把输入原样作为输出传递）。
+
+在模板参数之后，是对这些参数的要求；该运算符要求我们能够把投影后的值与要查找的值进行相等比较。在这些约束之后，我们只需指定函数参数。
+
+现在我们来看看它是如何实现的：
+
+\begin{codebox}[cpp]
+while (first != last && std::invoke(projection, *first) != value) {
+    ++first;
+}
+return first != last;  }
+\end{codebox}
+
+这里，我们只是遍历各个元素，对每个元素施加投影，并将其与要查找的值进行比较。如果找到就返回 \texttt{true}，否则返回 \texttt{false}（当 \texttt{first =\allowbreak{}=\allowbreak{} last} 时）。
+
+\label{idx:541}
+前面这个函数即使不使用标准 ranges 也能正常工作，但我们还需要一个直接接受 range 的重载。该重载的声明可以如下：
+
+\begin{codebox}[cpp]
+template <std::ranges::input_range Range, typename T, typename Proj = std::identity>
+requires std::indirect_binary_predicate<std::ranges::equal_to, std::projected<std::ranges::iterator_t<Range>, Proj>, const T *>
+constexpr bool operator()(Range &&range, const T &value, Proj projection = {}) const {
+\end{codebox}
+
+这一次，我们把满足 \texttt{input\_\allowbreak{}range} 概念的类型、元素值以及投影的类型作为模板参数。我们要求调用投影后 range 的迭代器能够与 \texttt{T} 类型的对象进行相等比较，这一点与之前类似。最后，我们把 range、值以及投影作为该重载的参数。
+
+这个运算符的函数体也同样直截了当：
+
+\begin{codebox}[cpp]
+    return (*this)(std::ranges::begin(range), std::ranges::end(range), value, std::move(projection));
+    }
+};
+}  //namespace detail
+\end{codebox}
+
+\label{idx:542}
+我们只是用给定 range 的迭代器和哨兵调用前面那个重载，同时原样传递值和投影。现在，到了最后一部分，我们需要提供一个 \texttt{contains} niebloid，而不只是 \texttt{contains\_\allowbreak{}fn} 这个可调用对象：
+
+\begin{codebox}[text]
+inline constexpr detail::contains_fn contains{};
+\end{codebox}
+
+通过声明一个名为 \texttt{contains}、类型为 \texttt{contains\_\allowbreak{}fn} 的内联变量，我们让任何人都能用这个变量名调用我们的 niebloid。现在，让我们自己来调用它，看看是否正常工作：
+
+\begin{codebox}[cpp]
+int main() {
+    auto ints = std::ranges::views::iota(0) | std::ranges::views::take(5);
+    return contains(ints, 42);
+}
+\end{codebox}
+
+就是这样。我们这个抑制 ADL 的函子按预期工作。
+
+\begin{myNotic}{注意}
+
+如果你觉得这一切有点过于冗长，那么你可能会对 \texttt{tag\_\allowbreak{}invoke} 感兴趣，它有可能在未来某个时候成为标准的一部分。关于这个话题的一篇论文，以及一个清晰讲解 ADL、niebloid、隐藏友元和 \texttt{tag\_\allowbreak{}invoke} 的 YouTube 视频，请参阅\emph{延伸阅读 }一节。
+\end{myNotic}
+
+现在让我们继续了解又一个有用的 C++ 惯用法。
+
+\subsection{使用基于策略的设计惯用法}
+
+\label{idx:543}
+基于策略的设计最早由 Andrei Alexandrescu 在他那本出色的著作 \emph{Modern C++ Design} 中提出。尽管该书出版于 2001 年，其中展示的许多思想至今仍在使用。\textbf{策略惯用法}基本上是四人组（Gang of Four）策略模式在编译期的等价物。如果你需要编写一个行为可定制的类，可以把它做成模板，把合适的策略作为模板参数。现实中的一个例子是标准分配器，它们作为策略、以最后一个模板参数的形式传递给许多 C++ 容器。
+
+让我们回到 \texttt{Array} 类，为调试打印添加一个策略：
+
+\begin{codebox}[cpp]
+template <typename T, typename DebugPrintingPolicy = NullPrintingPolicy>
+class Array {
+\end{codebox}
+
+如你所见，我们可以使用一个什么都不打印的默认策略（\texttt{Null\allowbreak{}Printing\allowbreak{}Policy}）。\texttt{Null\allowbreak{}Printing\allowbreak{}Policy} 可以实现如下：
+
+\begin{codebox}[cpp]
+struct NullPrintingPolicy {
+    template <typename... Args> void operator()(Args...) {}
+};
+\end{codebox}
+
+如你所见，无论传入什么参数，它都不会做任何事。编译器会把它完全优化掉，因此当不使用调试打印功能时，不会付出任何额外开销。
+
+如果我们希望类打印文本，可以使用另一个策略：
+
+\begin{codebox}[cpp]
+struct CoutPrintingPolicy {
+    void operator()(std::string_view text) { std::cout << text << std::endl; }
+};
+\end{codebox}
+
+这一次，我们只需把传给策略的文本打印到 \texttt{cout}。我们还需要修改类，让它真正使用我们的策略：
+
+\begin{codebox}[cpp]
+    Array(T *array, int size) : array_{array}, size_{size} {
+        DebugPrintingPolicy{}("constructor");
+    }
+    Array(const Array &other) : array_{new T[other.size_]}, size_{other.size_} {
+        DebugPrintingPolicy{}("copy constructor");
+        std::copy_n(other.array_, size_, array_);
+    }
+    //……其他成员……
+\end{codebox}
+
+我们只是调用策略的 \texttt{operator(\allowbreak{})\allowbreak{}}，并传入要打印的文本。由于我们的策略是无状态的，我们可以在每次需要使用时实例化它们，而不产生额外开销。另一种做法是直接调用策略中的一个静态函数。
+
+现在，我们需要做的就是用所需的策略实例化 \texttt{Array} 类并使用它：
+
+\begin{codebox}[text]
+Array<T, CoutPrintingPolicy>(new T[size], size);
+\end{codebox}
+
+\label{idx:544}
+使用编译期策略的一个缺点是，采用不同策略的模板实例化属于不同的类型。这意味着要做更多的工作，比如说，要从一个普通的 \texttt{Array} 类赋值给使用 \texttt{Cout\allowbreak{}Printing\allowbreak{}Policy} 的那个。为此，你需要把赋值运算符实现为以策略作为模板参数的模板函数。
+
+\begin{myNotic}{注意}
+
+有时，基于策略设计的替代方案是使用 traits。策略为泛型函数和类型定义自定义行为，而 traits 提供模板参数的附加属性。举个例子，\texttt{std::\allowbreak{}iterator\_\allowbreak{}traits} 可用于在编写使用迭代器的算法时获取关于迭代器的各种信息。一个例子是 \texttt{std::\allowbreak{}iterator\_\allowbreak{}traits<T>::\allowbreak{}value\_\allowbreak{}type}，它既能用于定义了 \texttt{value\_\allowbreak{}type} 成员的自定义迭代器，也能用于像指针这样的简单迭代器（在这种情况下，\texttt{value\_\allowbreak{}type} 将指代所指向的类型）。
+\end{myNotic}
+
+\label{idx:545}
+关于基于策略的设计就讲到这里。接下来要介绍的是一种强大的惯用法，它可用于多种场景。
+
+\section{应用奇异递归模板模式}
+
+\label{idx:546}
+尽管名字里带有 \emph{模式}二字，\textbf{奇异递归模板模式}（\textbf{CRTP}）其实是 C++ 中的一种惯用法。它可以用来实现其他惯用法和设计模式、应用静态多态，等等。我们先从最后一项开始，其余的稍后再讲。
+
+\subsection{了解何时使用动态多态与静态多态}
+
+\label{idx:547}
+\label{idx:548}
+提到多态时，许多程序员会想到动态多态（运行期多态），即执行函数调用所需的信息在运行期才收集。与之相对，静态多态关心的是在编译期确定调用。前者的一个优点是你可以在运行期修改类型列表，从而通过插件和库扩展类层次结构。后者的重大优点是，如果你事先知道类型，就能获得更好的性能。当然，在前一种情况下，你有时可以指望编译器对你的调用进行去虚化（devirtualize），但并不能总是指望它这么做。而在后一种情况下，你则可能面临更长的编译时间。
+
+\label{idx:549}
+看起来你无法在所有情况下都稳赢。不过，为你的类型选择正确的多态类型仍能带来很大帮助。如果性能攸关，我们强烈建议你考虑静态多态。CRTP 就是一种可用于应用它的惯用法。如果你在编写以性能为导向的代码（既然你选择了 C++，很可能就是如此），你就应知道，使用动态多态在性能上可能是个坏主意，尤其是在热路径上，因为当程序在运行期决定调用哪个方法时，动态方法分派与静态方法调用相比存在性能开销。为了让你对差异有具体的感受，可以参考 Eli Bendersky 在他那篇详细文章中报告的基准测试，该文章比较了 C++ 中动态虚调用与静态 CRTP 分派的开销。链接见\emph{延伸阅读}一节。
+
+\label{idx:550}
+许多设计模式都可以用这样或那样的方式实现。由于动态多态的代价并不总是值得，四人组的设计模式在 C++ 中往往不是最佳方案。如果你的类型层次结构需要在运行期扩展，或者编译时间对你而言比性能重要得多（而且你不打算在短期内使用模块），那么四人组模式的经典实现可能很合适。否则，你可以尝试用静态多态来实现它们，或者采用更简单的、面向 C++ 的方案，本章就会介绍其中一些。说到底，就是为工作选择最合适的工具。
+
+\subsection{实现静态多态}
+
+\label{idx:551}
+现在让我们来实现这个静态多态的类层次结构。我们需要一个基类模板：
+
+\begin{codebox}[cpp]
+template <typename ConcreteItem> class GlamorousItem {
+public:
+    void appear_in_full_glory() {
+        static_cast<ConcreteItem *>(this)->appear_in_full_glory();
+    }
+};
+\end{codebox}
+
+基类的模板参数就是派生类本身。乍看之下这有些奇怪，但它让我们能在编译期使用 \texttt{static\_\allowbreak{}cast} 进行静态类型转换，把 \texttt{this} 转换成正确的派生类型。在名为 \texttt{appear\_\allowbreak{}in\_\allowbreak{}full\_\allowbreak{}glory} 的接口函数中，我们随后会调用该函数在派生类中的实现。派生类可以实现如下：
+
+\begin{codebox}[cpp]
+class PinkHeels : public GlamorousItem<PinkHeels> {
+public:
+    void appear_in_full_glory() {
+        std::cout << "Pink high heels suddenly appeared in all their beauty\n";
+    }
+};
+class GoldenWatch : public GlamorousItem<GoldenWatch> {
+public:
+    void appear_in_full_glory() {
+        std::cout << "Everyone wanted to watch this watch\n";
+    }
+};
+\end{codebox}
+
+\label{idx:552}
+这些类都从 \texttt{Glamorous\allowbreak{}Item} 基类派生，并把自身作为模板实参。每个类也都实现了所需的函数。
+
+请注意，与动态多态不同，CRTP 中的基类是一个模板，因此每个派生类都会得到不同的基类型。这意味着你无法轻松地创建存放 \texttt{Glamorous\allowbreak{}Item} 基类的容器。不过，有几种做法是可行的：
+
+\begin{itemize}
+\item 把对象存放在 tuple 中。
+\item 为你的派生类创建一个 \texttt{std::\allowbreak{}variant}。
+\item 添加一个公共类来包装基类的所有实例化。这个包装类同样可以使用 variant。
+\end{itemize}
+
+第一种情况下，我们可以这样使用该类。首先，创建由 \texttt{base} 实例构成的 tuple：
+
+\begin{codebox}[cpp]
+template <typename... Args>
+using PreciousItems = std::tuple<GlamorousItem<Args>...>;
+auto glamorous_items = PreciousItems<PinkHeels, GoldenWatch>{};
+\end{codebox}
+
+我们通过类型别名定义的 tuple 将能存放任何华丽条目。现在，我们要做的只是调用 \texttt{appear\_\allowbreak{}in\_\allowbreak{}full\_\allowbreak{}glory(\allowbreak{})\allowbreak{}} 函数：
+
+\begin{codebox}[cpp]
+std::apply(
+    []<typename... T>(GlamorousItem<T>&... items) {
+        (items.appear_in_full_glory(), ...);
+    },
+    glamorous_items);
+\end{codebox}
+
+\label{idx:553}
+由于我们要遍历一个 tuple，最简单的做法是调用 \texttt{std::\allowbreak{}apply}，它会对给定 tuple 的所有元素调用所提供的可调用对象。在本例中，这个可调用对象是一个只接受 \texttt{Glamorous\allowbreak{}Item} 基类的 lambda。我们使用 C++17 引入的折叠表达式，确保该函数会被所有元素调用。
+
+如果改用 variant 而不是 tuple，我们就需要使用 \texttt{std::\allowbreak{}visit}，如下所示：
+
+\begin{codebox}[cpp]
+using GlamorousVariant = std::variant<PinkHeels, GoldenWatch>;
+auto glamorous_items = std::array{GlamorousVariant{PinkHeels{}}, GlamorousVariant{GoldenWatch{}}};
+    for (auto& elem : glamorous_items) {
+        std::visit([]<typename T>(GlamorousItem<T> item){ item.appear_in_full_glory();
+    }, elem);
+}
+\end{codebox}
+
+\texttt{std::\allowbreak{}visit} 函数基本上就是接收 variant，并对其中存储的对象调用传入的 lambda。这里我们创建了一个由华丽 variant 组成的数组，于是可以像遍历其他任何容器一样遍历它，用合适的 lambda 访问每个 variant。
+
+如果你觉得从接口使用者的角度看这样写不够直观，可以考虑下面这种做法：它把 variant 再包装进另一个类，在本例中名为 \texttt{Common\allowbreak{}Glamorous\allowbreak{}Item}：
+
+\begin{codebox}[cpp]
+class CommonGlamorousItem {
+public:
+    template <typename T> requires std::is_base_of_v<GlamorousItem<T>, T>
+    explicit CommonGlamorousItem(T &&item)
+        : item_{std::forward<T>(item)} {}
+private:
+    GlamorousVariant item_;
+};
+\end{codebox}
+
+\label{idx:554}
+为了构造这个包装器，我们使用转发构造函数（其参数为 \texttt{templated T\&\&}）。随后我们用转发而非移动来创建被包装的 \texttt{item\_} variant，因为这样只会移动右值输入。我们还对模板参数加以约束：一方面，我们只包装 \texttt{Glamorous\allowbreak{}Item} 基类；另一方面，确保我们的模板不会被当作移动构造函数或拷贝构造函数使用。
+
+我们还需要包装我们的成员函数：
+
+\begin{codebox}[cpp]
+void appear_in_full_glory() {
+    std::visit(
+        []<typename T>(GlamorousItem<T> item) {
+            item.appear_in_full_glory(); },
+        item_);
+}
+\end{codebox}
+
+这一次，\texttt{std::\allowbreak{}visit} 调用成了一个实现细节。用户可以按如下方式使用这个包装类：
+
+\begin{codebox}[cpp]
+auto glamorous_items = std::array{CommonGlamorousItem{PinkHeels{}}, CommonGlamorousItem{GoldenWatch{}}};
+    for (auto& elem : glamorous_items) {
+        elem.appear_in_full_glory();
+    }
+\end{codebox}
+
+这种做法让类的使用者能写出易于理解的代码，同时仍保留静态多态的性能。
+
+\label{idx:555}
+如果你想提供类似的用户体验，也可以使用一种称为类型擦除（type erasure）的技术——不过由于动态多态以及 C++ 编译器用于优化生成代码而隐藏的类型信息，它的性能会差一些。我们接下来就讨论这种技术。
+
+\subsection{插曲：使用类型擦除}
+
+\label{idx:556}
+尽管类型擦除与 CRTP 无关，但它与我们当前的示例契合得很好，所以我们在这里介绍它。
+
+\textbf{类型擦除惯用法}的核心是把具体类型隐藏在一个多态接口之下。Sean Parent 在 GoingNative 2013 大会上的演讲 \emph{Inheritance Is The Base Class of Evil} 中给出了这种做法的绝佳示例。我们强烈建议你在闲暇时观看，链接可以在 \emph{延伸阅读} 一节找到。在标准库中，你可以在 \texttt{std::\allowbreak{}function}、\texttt{std::\allowbreak{}shared\_\allowbreak{}ptr} 的删除器（deleter）或 \texttt{std::any} 等处看到它。
+
+然而，使用的便利与灵活是有代价的——这种惯用法需要使用指针和虚函数派发，这使得上述标准库工具在性能敏感的场景中不宜使用。请当心。
+
+\label{idx:557}
+要在我们的示例中引入类型擦除，就不再需要 CRTP 了。这一次，我们的 \texttt{Glamorous\allowbreak{}Item} 类会把动态多态对象包装在一个智能指针里：
+
+\begin{codebox}[cpp]
+class GlamorousItem {
+public:
+    template <class T>
+    explicit GlamorousItem(T &&t)
+        : item_{std::make_unique<TypeErasedItem<T>>(std::forward<T>(t))} {}
+    void appear_in_full_glory() {
+        item_->appear_in_full_glory_impl();
+    }
+private:
+    std::unique_ptr<TypeErasedItemBase> item_;
+};
+\end{codebox}
+
+这一次，我们存储一个指向基类的指针（\texttt{Type\allowbreak{}Erased\allowbreak{}Item\allowbreak{}Base}），它将指向各个条目的派生包装器（\texttt{Type\allowbreak{}Erased\allowbreak{}Item<T>s}）。基类可以定义如下：
+
+\begin{codebox}[cpp]
+struct TypeErasedItemBase {
+    virtual ~TypeErasedItemBase() = default;
+    virtual void appear_in_full_glory_impl() = 0;
+};
+\end{codebox}
+
+每个派生包装器也都需要实现这个接口：
+
+\begin{codebox}[cpp]
+template <class T> class TypeErasedItem final : public TypeErasedItemBase {
+    public:
+        explicit TypeErasedItem(T &&t) : t_{std::forward<T>(t)} {}
+        void appear_in_full_glory_impl() override { t_.appear_in_full_glory(); }
+    private:
+        T t_;
+    };
+\end{codebox}
+
+\label{idx:558}
+基类的接口是通过调用被包装对象中的函数来实现的。注意，这种惯用法之所以称为 \emph{类型擦除}，是因为 \texttt{Glamorous\allowbreak{}Item} 类并不知道自己实际包装的是哪个 \texttt{T}。\texttt{information} 类型在条目被构造时就被擦除了，但一切仍能正常工作，因为 \texttt{T} 实现了所需的方法。
+
+具体条目可以用更简单的方式实现，如下所示：
+
+\begin{codebox}[cpp]
+class PinkHeels {
+public:
+    void appear_in_full_glory() {
+        std::cout << "Pink high heels suddenly appeared in all their beauty\n";
+    }
+};
+class GoldenWatch {
+public:
+    void appear_in_full_glory() {
+        std::cout << "Everyone wanted to watch this watch\n";
+    }
+};
+\end{codebox}
+
+这一次，它们不需要从任何基类继承。我们需要的只是鸭子类型——如果它叫起来像鸭子，那它多半就是鸭子。而如果它能华丽登场，那它多半就是华丽的。
+
+我们的类型擦除 API 可以按如下方式使用：
+
+\begin{codebox}[cpp]
+auto glamorous_items = std::array{GlamorousItem{PinkHeels{}}, GlamorousItem{GoldenWatch{}}};
+    for (auto &item : glamorous_items) {
+        item.appear_in_full_glory();
+    }
+\end{codebox}
+
+\label{idx:559}
+我们只需创建一个包装器数组并遍历它，全程都使用简单的基于值的语义。我们觉得这样用起来最舒服，因为多态作为实现细节对调用者隐藏了起来。
+
+然而，正如前面提到的，这种做法的缺点在于性能。类型擦除是有代价的，因此应谨慎使用，绝不要用在热点路径上。一般而言，在使用类型擦除的地方，你需要逐个场景地测试性能。
+
+为了便于对比，我们将把 C++23 的特性 \texttt{deducing this} 应用到 CRTP 主题的示例上，这样你就能并排比较这些改动。
+
+\section{实现 deducing this}
+
+\label{idx:560}
+C++23 引入了显式对象参数，也称为 \texttt{deducing this}。该参数不会改变类型推导，但允许你显式声明原本隐式的 \texttt{this} 参数。这为我们打开了新的天地，例如代码去重、递归 lambda 以及替代 CRTP。
+
+结合类型推导，显式对象参数让我们可以只定义一个泛型方法，而不必定义四个带 \texttt{cv-} 或 \texttt{ref-} 限定符（\texttt{\&}、\texttt{const\&}、\texttt{\&\&}、\texttt{const\&\&}）的版本，从而减少样板代码。
+
+不过，使用显式对象参数声明的函数不能声明为 static 或 virtual，也不能带有 \texttt{cv-} 或 \texttt{ref-} 限定符。它支持继承，因为显式对象会推导出派生对象的类型。此外，在这类函数内部与类对象交互的唯一途径就是通过显式对象参数，因为该函数的行为类似于静态成员函数，所以指向类当前实例的指针 \texttt{this} 不可用。
+
+为了展示 \texttt{deducing this} 的威力，我们来重构上一节中的 \texttt{Glamorous\allowbreak{}Item} 示例。
+
+\label{idx:561}
+先从重构基类开始。下面两种实现可以互换使用。
+
+第一种如下：
+
+\begin{codebox}[cpp]
+class GlamorousItem {
+public:
+    void appear_in_full_glory(this auto&& self) { self.appear_in_full_glory_impl();
+    }
+};
+\end{codebox}
+
+这里，\texttt{self} 的类型通过 \texttt{auto} 自动推导。
+
+或者，你也可以把类型显式声明为模板参数：
+
+\begin{codebox}[cpp]
+class GlamorousItem {
+public:
+    template <typename Self>
+    void appear_in_full_glory(this Self&& self) {
+        self.appear_in_full_glory_impl();
+    }
+};
+\end{codebox}
+
+这种情况下，模板参数并非必需。
+
+派生类可以实现如下：
+
+\begin{codebox}[cpp]
+class PinkHeels : public GlamorousItem {
+public:
+    void appear_in_full_glory_impl() {
+        std::cout << "Pink high heels suddenly appeared in all their beauty\n";
+    }
+};
+class GoldenWatch : public GlamorousItem {
+public:
+    void appear_in_full_glory_impl() {
+        std::cout << "Everyone wanted to watch this watch\n";
+    }
+};
+\end{codebox}
+
+\label{idx:562}
+注意，你仍然无法直接创建存放 \texttt{Glamorous\allowbreak{}Item} 基类的容器。不过，你可以采用几种替代方案。
+
+你可以使用受概念约束的 tuple：
+
+\begin{codebox}[cpp]
+/*template <typename... Args> requires(std::derived_from<Args, GlamorousItem> && ...)*/
+template <std::derived_from<GlamorousItem>... Args>
+using PreciousItems = std::tuple<Args...>;
+int main() {
+    auto glamorous_items = PreciousItems<PinkHeels, GoldenWatch>{};
+    std::apply([]<std::derived_from<GlamorousItem>... T>(T&... items) { (items.appear_in_full_glory(), ...);
+    },
+    glamorous_items);
+}
+\end{codebox}
+
+你可以为你的派生类创建一个 \texttt{std::\allowbreak{}variant} 类模板：
+
+\begin{codebox}[cpp]
+using GlamorousVariant = std::variant<PinkHeels, GoldenWatch>;
+int main() {
+    auto glamorous_items = std::array{GlamorousVariant{PinkHeels{}}, GlamorousVariant{GoldenWatch{}}
+    };
+    for (auto& elem : glamorous_items) {
+        std::visit([]<std::derived_from<GlamorousItem> T>(T& item) { item.appear_in_full_glory();
+        },
+        elem);
+    }
+}
+\end{codebox}
+
+\label{idx:563}
+你可以添加一个公共类来包装基类的所有实例化：
+
+\begin{codebox}[cpp]
+class CommonGlamorousItem {
+public:
+    template <typename T>
+        requires std::is_base_of_v<GlamorousItem, T>
+    explicit CommonGlamorousItem(T&& item) : item_{std::forward<T>(item)} {}
+    void appear_in_full_glory() {
+        std::visit([]<typename T>(T& item) { item.appear_in_full_glory(); }, item_);
+    }
+private:
+    GlamorousVariant item_;
+};
+int main() {
+    auto glamorous_items = std::array{CommonGlamorousItem{PinkHeels{}}, CommonGlamorousItem{GoldenWatch{}}};
+    for (auto& elem : glamorous_items) {
+        elem.appear_in_full_glory();
+    }
+}
+\end{codebox}
+
+\label{idx:564}
+最后，把 \texttt{deducing this} 应用上去，可以简化上一章中 RAII 风格的 \texttt{Array} 类，因为该特性能把下标运算符的多个重载去重为单个函数：
+
+\begin{codebox}[cpp]
+//使用显式对象参数（self）和 auto&&
+//以区分 const 与非 const
+auto &&operator[](this auto &&self, std::size_t idx) {
+    return self.data_[idx];
+}
+\end{codebox}
+
+了解了 \texttt{deducing this} 这一特性之后，接下来我们转向另一个重要方面——对象创建。
+
+\section{创建对象}
+
+\label{idx:565}
+在本节中，我们将讨论与对象创建相关问题的常见解决方案。不过在描述这些解决方案时，我们会采用与 Gang of Four（GoF）模式略有不同的方式。GoF 提出了复杂的、动态多态的类层次结构作为其模式的恰当实现。而在 C++ 世界中，许多模式无需引入那么多类、也无需承担动态派发的开销，就能应用于现实问题。因此在本书中，我们的实现会有所不同，并且在很多情况下更简单或性能更好（尽管更专门化，在 GoF 的意义上不那么“通用”）。我们直接开始吧。
+
+\subsection{使用工厂}
+
+\label{idx:566}
+这里我们要讨论的第一类创建型模式是工厂。当对象的构造可以在单一步骤内完成、但构造函数本身又不够好用时，工厂就很有用。工厂有三种：工厂方法、工厂函数和工厂类。我们逐一介绍。
+
+\subsubsection{使用工厂方法}
+
+\label{idx:567}
+\label{idx:568}
+工厂方法又称 \textbf{具名构造函数惯用法}，本质上就是替你调用私有构造函数的成员函数。什么时候使用它们呢？以下是几种场景：
+
+\begin{itemize}
+\item \textbf{当构造对象的方式有很多种、因而容易出错时：}例如，设想构造一个类来存储给定像素的各个颜色通道，每个通道用一个字节的值表示。如果只用构造函数，就很容易把通道顺序传错，或者传入的颜色值本属于完全不同的调色板。而且，一旦要改变像素内部表示颜色的方式，很快就会变得很棘手。你可能会主张应当用不同的类型来表示不同格式的颜色，但很多时候，使用工厂方法也是一种可行的做法。
+\item \textbf{当你想要强制对象在堆上或某个特定内存区域中创建时}：如果你的对象在栈上占用大量空间，你担心栈内存会被耗尽，那么使用工厂方法就是一种解决办法。类似地，如果你要求所有实例都创建在设备的某个内存区域中，也是如此。
+\label{idx:569}
+\item \textbf{当对象的构造可能失败、但你又不能抛出异常时}：相比其他错误处理方式，你本应优先使用异常。只要用得恰当，异常能带来更清晰、性能更好的代码。然而，有些项目或环境要求禁用异常。在这种情况下，使用工厂方法就能让你报告构造过程中发生的错误。
+\end{itemize}
+
+\begin{myNotic}{注意}
+
+\label{idx:570}
+工厂方法通过提供受控的创建机制，帮助管理对象构造期间发生的错误。同样，在对象析构期间安全地处理错误也很重要，因为逃逸出析构函数的异常会导致程序终止。虽然在管理构造期间的错误时首选抛出异常，但对析构函数而言恰恰相反：不要让异常逃逸出析构函数。C++ 定义了一条严苛的规则：在处理另一个异常而进行栈展开的过程中，如果析构函数抛出的异常未被捕获，程序就会终止。更具体地说，\textbf{运行时库}（\textbf{RTL}）会沿调用栈向上查找类型与所抛出对象类型匹配的处理程序。
+
+随后，RTL 会销毁直至异常处理程序为止各栈帧中的所有局部对象，然后才执行已找到的处理程序。但如果某个析构函数也抛出了异常，而该异常又没有在析构函数内部被捕获，那么程序会通过调用 \texttt{std::\allowbreak{}terminate} 终止。不带 \texttt{noexcept} 说明符的释放函数会被\textbf{隐式}视作以 \texttt{noexcept(\allowbreak{}true)\allowbreak{}} 声明。用 \texttt{noexcept(\allowbreak{}false)\allowbreak{}} 把析构函数声明为抛出异常的情况很少见，而且由于可能引发意外行为，这么做有潜在危险。
+\end{myNotic}
+
+\label{idx:571}
+针对我们描述的第一种情况，工厂方法大致如下：
+
+\begin{codebox}[cpp]
+class Pixel final {
+public:
+    static Pixel fromRgba(std::byte r, std::byte b, std::byte g, std::byte a) {
+      return Pixel{r, g, b, a};
+    }
+    static Pixel fromBgra(std::byte b, std::byte g, std::byte r, std::byte a) {
+        return Pixel{r, g, b, a};
+    }
+    //其他成员
+private:
+    Pixel(std::byte r, std::byte g, std::byte b, std::byte a)
+        : r_(r), g_(g), b_(b), a_(a) {}
+    std::byte r_, g_, b_, a_;
+}
+\end{codebox}
+
+这里的 \texttt{Pixel} 类定义了两个工厂方法（实际上，C++ 标准并不认可 \emph{方法} 这一术语，而称之为 \emph{成员函数}）：\texttt{fromRgba} 和 \texttt{fromBgra}。现在更难犯错，也更难把通道顺序初始化错。
+
+\label{idx:572}
+注意，\texttt{Pixel} 的构造函数是私有的，而私有构造函数实际上会阻止任何类从你的类型继承，因为无法访问其构造函数就无法创建实例。不过，如果这正是你的目的，那么你更应该直接把类标记为 \texttt{final}。
+
+\subsubsection{使用工厂函数}
+
+\label{idx:573}
+与使用工厂成员函数相对，我们也可以用非成员函数来实现它们。这样能提供更好的封装，正如 Scott Meyers 在其文章中所论述的，文章链接见 \emph{延伸阅读} 一节。
+
+对于 \texttt{Pixel}，我们也可以创建一个自由函数来制造其实例。这样，我们的类型可以拥有更简单的代码：
+
+\begin{codebox}[cpp]
+struct Pixel {
+    std::byte r, g, b, a;
+};
+Pixel makePixelFromRgba(std::byte r, std::byte b, std::byte g, std::byte a) {
+    return Pixel{r, g, b, a};
+}
+Pixel makePixelFromBgra(std::byte b, std::byte g, std::byte r, std::byte a) {
+    return Pixel{r, g, b, a};
+}
+\end{codebox}
+
+采用这种做法能让我们的设计符合 \emph{第 1 章} \emph{软件架构的重要性与优秀设计的原则} 中描述的开闭原则。要为其他调色板添加更多工厂函数很容易，无需修改 \texttt{Pixel} 结构体本身。
+
+\label{idx:574}
+\texttt{Pixel} 的这种实现允许用户手动初始化它，而不是使用我们提供的某个函数。如果需要，我们可以通过修改类声明来阻止这种行为。修复后大致如下：
+
+\begin{codebox}[cpp]
+struct Pixel {
+    std::byte r, g, b, a;
+private:
+    Pixel(std::byte r, std::byte g, std::byte b, std::byte a)
+        : r(r), g(g), b(b), a(a) {}
+    friend Pixel makePixelFromRgba(std::byte r, std::byte g, std::byte b, std::byte a);
+    friend Pixel makePixelFromBgra(std::byte b, std::byte g, std::byte r, std::byte a);
+};
+\end{codebox}
+
+这一次，我们的工厂函数是该类的友元。然而，该类型不再是聚合类型，所以我们不能再使用聚合初始化（\texttt{Pixel\{\}}），包括指定初始化器。此外，我们还放弃了开闭原则。这两种做法各有取舍，请明智选择。
+
+\subsubsection{选择工厂的返回类型}
+
+\label{idx:575}
+在实现对象工厂时，你还需要选择它实际应当返回的类型。下面来讨论各种做法。
+
+对于 \texttt{Pixel} 这种值类型而非多态类型，最简单的做法就是最好的——直接按值返回。如果你产出的是多态类型，就用智能指针返回（\emph{绝不要}为此使用裸指针，否则迟早会内存泄漏），除非你遵循的是特定框架的内存所有权规则（如 Qt、Unreal Engine）。如果调用方应当拥有所创建的对象，通常以指向基类的 \texttt{unique\_\allowbreak{}ptr} 返回是最好的做法。在那些不太常见、工厂与调用方必须共同拥有对象的情况下，使用 \texttt{shared\_\allowbreak{}ptr} 或其他基于引用计数的替代方案。有时工厂只需跟踪该对象而不需存储它即可。这种情况下，在工厂内部存储 \texttt{weak\_ptr}，在外部锁定 \texttt{shared\_\allowbreak{}ptr}。
+
+有些 C++ 程序员会主张用输出参数来返回具体类型，但在大多数情况下这并不是最好的做法。就性能而言，按值返回通常是最佳选择，因为编译器不会对你的对象做多余的拷贝。如果问题在于类型不可拷贝，那么从 C++17 起，标准已规定了强制进行拷贝消除的情形，因此按值返回这类类型通常不成问题。如果你的函数要返回多个对象，请使用 pair、tuple、struct 或容器。
+
+如果构造期间出了问题，你有几种选择：
+
+\begin{itemize}
+\item 如果无需向调用方提供错误消息，就返回你类型的 \texttt{std::\allowbreak{}optional}
+\item 如果构造期间的错误很少见且应当向外传播，就抛出异常
+\label{idx:576}
+\item 如果构造期间的错误很常见，就返回你类型的 \texttt{std::\allowbreak{}expected}（自 C++23 起）或 \texttt{absl::\allowbreak{}Status\allowbreak{}Or}（该模板的 Abseil 文档见 \emph{延伸阅读} 一节）
+\end{itemize}
+
+既然你已经知道该返回什么，下面来讨论最后一种工厂。
+
+\subsubsection{使用工厂类}
+
+\label{idx:577}
+工厂类是一种能为我们制造对象的类型。它们有助于将多态对象类型与其调用方解耦。它们可以使用对象池（把可复用的对象保留下来，这样你就不必反复地分配和释放它们）或其他分配方案。这些只是工厂类如何有用的几个例子。我们再仔细看一个例子。设想你需要根据输入参数创建不同的多态类型。在某些情况下，像下面这样一个多态工厂函数还不够用：
+
+\begin{codebox}[cpp]
+std::unique_ptr<IDocument> open(const std::string &path) {
+    const auto extension = std::filesystem::path(path).extension();
+    if (extension == ".pdf") return std::make_unique<PdfDocument>(path);
+    if (extension == ".html") return std::make_unique<HtmlDocument>(path);
+    return nullptr;
+}
+\end{codebox}
+
+\label{idx:578}
+如果我们还想打开其他类型的文档，比如 OpenDocument 文本文件，该怎么办呢？颇具讽刺意味的是，前面那个 open 工厂对扩展并不开放。如果我们自己拥有这个代码库，这可能不是什么大问题，但如果库的使用者需要注册自己的类型，这就成问题了。为了解决这个问题，我们使用一个工厂类，它允许注册用于打开不同类型文档的函数，如下所示：
+
+\begin{codebox}[cpp]
+class DocumentOpener final {
+public:
+    using DocumentType = std::unique_ptr<IDocument>;
+    using ConcreteOpener = DocumentType (*)(const std::string&);
+    //using ConcreteOpener = std::function<DocumentType(const std::string&)>;
+private:
+    std::unordered_map<std::string, ConcreteOpener> openerByExtension;
+};
+\end{codebox}
+
+这个类目前还做不了太多事，但它有一个从扩展名到函数的映射，这些函数应当被调用来打开给定类型的文件。现在我们添加两个公有成员函数。第一个将注册新的文件类型：
+
+\begin{codebox}[cpp]
+    void register_plugin(const std::string &extension, const ConcreteOpener &opener) {
+        openerByExtension.emplace(extension, opener);
+    }
+\end{codebox}
+
+现在我们有了填充这个映射的方法。第二个新增的公有函数将使用合适的打开器来打开文档：
+
+\begin{codebox}[cpp]
+    DocumentType open(const std::string &path) {
+        if (const auto p = std::filesystem::path(path); p.has_extension()) {
+            return openerByExtension.at(p.extension().string())(path);
+        }
+        throw std::invalid_argument{"Trying to open a file with no extension"};
+    }
+\end{codebox}
+
+\label{idx:579}
+基本上，我们从文件路径中提取扩展名，如果为空就抛出异常；如果不为空，就在映射中查找打开器。如果找到了，我们用它来打开给定的文件；如果没找到，映射会替我们抛出另一个异常。
+
+现在我们可以实例化这个工厂，并注册像 OpenDocument 文本格式这样的自定义文件类型：
+
+\begin{codebox}[cpp]
+auto document_opener = DocumentOpener{};
+document_opener.register_plugin(
+    ".odt", [](const auto &path) -> DocumentOpener::DocumentType {
+        return std::make_unique<OdtDocument>(path);
+    });
+\end{codebox}
+
+\label{idx:580}
+注意，我们注册的是一个 lambda，因为它可以转换成我们的 \texttt{Concrete\allowbreak{}Opener} 类型，而后者是一个函数指针。不过，如果我们的 lambda 带有状态，情况就不是这样了。这种情况下，我们需要一个能保存状态的包装器。其中之一可以是 \texttt{std::\allowbreak{}function}，但它的缺点是，每次想要运行该函数时都得付出类型擦除的代价。就打开文件而言，这大概没什么问题。不过，如果你需要更好的性能，可以考虑使用 \texttt{std::\allowbreak{}function\_\allowbreak{}ref} 这样的类型（预计将在 C++26 中引入，并会在未来得到主流编译器的支持）。
+
+好了，既然我们已经在工厂中注册了打开器，下面就用它来打开一个文件并从中提取一些文本：
+
+\begin{codebox}[cpp]
+auto document = document_opener.open("file.odt");
+std::cout << document->extract_text().front();
+\end{codebox}
+
+就这么简单！如果你想为库的使用者提供一种注册自己类型的方式，他们必须在运行时能访问到你的映射。你可以为他们提供一个能访问到它的 API，或者把工厂设为静态，让他们能在代码中的任何地方进行注册。
+
+关于工厂以及单步构建对象就讲到这里。接下来我们讨论另一种流行的模式，当工厂不太合适时可以使用它。
+
+\subsection{使用构建器}
+
+\label{idx:581}
+构建器与工厂类似，是源自 Gang of Four（GoF）的一种创建型模式。与工厂不同，它们能帮助你构建更复杂的对象：那些无法在单一步骤内构建完成的对象，比如由许多独立部件组装而成的类型。它们还为你提供了一种定制对象构造过程的方式。在本书中，我们会跳过设计复杂的构建器层次结构。相反，我们会展示构建器能带来什么帮助。至于实现层次结构，就留给你作为练习。
+
+当对象无法在单一步骤内生成时，就需要构建器。即便单步创建可行，拥有流畅接口也能让构建器用起来更舒适。下面演示如何用 CRTP 创建流畅的构建器层次结构。
+
+在本书中，我们会创建一个 CRTP 类 \texttt{Generic\allowbreak{}Item\allowbreak{}Builder}，用作基类构建器，以及 \texttt{Fetching\allowbreak{}Item\allowbreak{}Builder}，后者是更专门化的构建器，如果该功能受支持，它就能使用远程地址获取数据。这类特化甚至可以位于不同的库中，例如，它们消费不同的 API，而这些 API 在构建时可能可用也可能不可用。
+
+为了演示起见，我们将构建 \emph{第 5 章}，\emph{利用 C++ 语言特性} 中的 \texttt{Item} 结构体的实例：
+
+\begin{codebox}[cpp]
+struct Item {
+    std::string name;
+    std::optional<std::string> photo_url;
+    std::string description;
+    std::optional<float> price;
+    time_point<system_clock> date_added{};
+    bool featured{};
+};
+\end{codebox}
+
+如果需要，你可以通过把默认构造函数设为私有并把各构建器设为友元，来强制要求 \texttt{Item} 实例必须使用构建器来构建：
+
+\begin{codebox}[cpp]
+template <typename ConcreteBuilder> friend class GenericItemBuilder;
+\end{codebox}
+
+\label{idx:582}
+构建器的实现可以这样开头：
+
+\begin{codebox}[cpp]
+template <typename ConcreteBuilder> class GenericItemBuilder {
+public:
+    explicit GenericItemBuilder(std::string name)
+        : item_{.name = std::move(name)} {}
+protected:
+    Item item_;
+\end{codebox}
+
+虽然通常不建议创建受保护成员，但我们希望派生的构建器能够访问到我们的 item。另一种做法是，在派生构建器中只使用基类构建器的公有方法。
+
+\label{idx:583}
+我们在构建器的构造函数中把 item 的名称作为参数，因为它是来自用户的、在创建 item 时必须设置的单一输入。这样我们就能确保它一定会被设置。另一种做法是在构建的最后阶段、即对象被交付给用户时再检查它是否合法。在本例中，构建步骤可以实现如下：
+
+\begin{codebox}[cpp]
+Item build() && {
+    item_.date_added = system_clock::now();
+    return std::move(item_);
+}
+\end{codebox}
+
+我们强制要求调用该方法时构建器被“消耗”掉，即它必须是右值。这意味着我们既可以在一行内使用构建器，也可以把它移动到最后一个步骤，以标志其工作的结束。随后我们为 item 设置创建时间，并把它移出构建器。
+
+构建器的 API 可以提供诸如以下的函数：
+
+\begin{codebox}[cpp]
+ConcreteBuilder &&with_description(std::string description) {
+    item_.description = std::move(description);
+    return static_cast<ConcreteBuilder &&>(*this);
+}
+ConcreteBuilder &&marked_as_featured() {
+    item_.featured = true;
+    return static_cast<ConcreteBuilder &&>(*this);
+}
+\end{codebox}
+
+它们各自以右值引用的形式返回具体的（派生的）构建器对象。也许有违直觉，这一次，这种返回类型应当优先于按值返回。这是为了避免在构建时对 \texttt{item\_} 进行不必要的拷贝。另一方面，按左值引用返回可能导致悬垂引用，并且会让调用 \texttt{build()} 变得更困难，因为返回的左值引用无法匹配所需的右值引用。
+
+\label{idx:584}
+最终的构建器类型可以如下所示：
+
+\begin{codebox}[python]
+class ItemBuilder final : public GenericItemBuilder<ItemBuilder> {
+    using GenericItemBuilder<ItemBuilder>::GenericItemBuilder;
+};
+\end{codebox}
+
+它只是一个类，复用了通用构建器中的构造函数。其用法如下：
+
+\begin{codebox}[text]
+auto directly_loaded_item = ItemBuilder{"Pot"}.with_description("A decent one").with_price(100).build();
+\end{codebox}
+
+如你所见，最终接口可以通过函数链式调用来使用，方法名让整个调用读起来流畅自然，因此得名\emph{流式接口}。
+
+如果我们不直接加载每个条目，而是使用一个更专门的构建器从远程端点加载部分数据，会怎么样呢？我们可以这样定义它：
+
+\begin{codebox}[cpp]
+class FetchingItemBuilder final
+    : public GenericItemBuilder<FetchingItemBuilder> {
+public:
+    explicit FetchingItemBuilder(std::string name)
+        : GenericItemBuilder(std::move(name)) {}
+    FetchingItemBuilder&& using_data_from(std::string_view url) && {
+        item_ = fetch_item(url);
+        return std::move(*this);
+    }
+};
+\end{codebox}
+
+我们也使用 CRTP 从通用构建器继承，并确保提供了名称。不过这一次，我们在基础构建器上扩展了自己的函数，用于获取内容并将其放入正在构建的条目中。得益于 CRTP，当我们调用基础构建器中的函数时，会返回派生的那个对象，这让接口更易于使用。它可以按以下方式调用：
+
+\begin{codebox}[text]
+auto fetched_item = FetchingItemBuilder{"Linen blouse"}.using_data_from("https://example.com/items/linen_blouse").marked_as_featured().build();
+\end{codebox}
+
+一切都很完美！
+
+如果你需要始终创建不可变对象，构建器也能派上用场。由于构建器可以访问类的私有成员，即使类没有为这些成员提供任何 setter，它也能修改它们。
+
+\label{idx:585}
+构建器的另一个优势在于，它们弥补了 C++ 中缺少具名参数的不足。由于 C++ 只支持位置参数，可以用构建器来构造代理对象以传递函数参数，这种技术称为\textbf{具名参数惯用法}。你也可以使用指定初始化器（designated initializer）达到同样的目的，为参数命名。
+
+\label{idx:586}
+当然，这些并不是使用构建器能获益的唯一场景。它们是灵活的模式，在各种场景中都很有用。
+
+\begin{myNotic}{注意}
+
+需要用到构建器的一个场景是创建组合对象（composite）。组合是一种设计模式，其中一组对象被当作一个整体来处理，它们都共享同一个接口（或同一个基类型）。例如，一个图（graph）可以由子图组合而成，一个文档可以嵌套其他文档。当你对这样的对象调用 \texttt{print()} 时，它的所有子对象都会调用各自的 \texttt{print()} 函数，从而打印出整个组合对象。构建器模式可用于创建各个子对象并将它们组合在一起。
+\end{myNotic}
+
+\subsection{使用原型}
+
+\label{idx:587}
+原型（prototype）是另一种可用于对象构造的模式。如果你的类型重新创建的代价很高，或者你只是想有一个可供构建的基础对象，那么你可能会想使用这种模式。它归根结底是提供一种克隆对象的方法，之后你既可以单独使用这个克隆对象，也可以修改它，使其变成应有的样子。对于多态继承体系，只需像这样添加 \texttt{clone()}：
+
+\begin{codebox}[cpp]
+class Map {
+public:
+    virtual std::unique_ptr<Map> clone() const;
+    //……其他成员……
+};
+class MapWithPointsOfInterests {
+public:
+    std::unique_ptr<Map> clone() override const;
+    //……其他成员……
+private:
+    std::vector<PointOfInterest> pois_;
+};
+\end{codebox}
+
+我们的 \texttt{Map\allowbreak{}With\allowbreak{}Points\allowbreak{}Of\allowbreak{}Interests} 对象也可以克隆这些兴趣点，这样我们就不必手动重新添加每一个。这样，当最终用户创建自己的地图时，我们可以提供一些默认内容。另请注意，在某些情况下，不使用原型，一个简单的拷贝构造函数就足够了。
+
+至此我们已经介绍了对象创建。一路上我们涉及了 variant，那么何不再来「访问」（visit）一下它们（此处有双关之意），看看它们还能如何帮助我们呢？
+
+\section{在 C++ 中跟踪状态与访问对象}
+
+\label{idx:588}
+状态（state）是一种设计模式，用于在对象的内部状态发生变化时帮助改变其行为。不同状态的行为应当彼此独立，这样添加新状态就不会影响现有状态。把所有行为都实现在有状态对象中的简单做法难以扩展，也不开放扩展。使用状态模式，可以通过引入新的状态类并定义它们之间的转换来添加新行为。
+
+本节中，我们将展示一种利用 \texttt{std::\allowbreak{}variant} 和静态多态的双重分派来实现状态和状态机的方式。换句话说，我们将以 C++ 的方式把状态模式和访问者模式结合起来，构建一个有限状态机。
+
+\myGraphic{0.594}{images/B18456_06_01.png}{图 6.1：商店商品的状态机}
+
+\label{idx:589}
+首先，我们来定义状态。在示例中，我们对商店中某件商品的状态进行建模。它们可以如下所示：
+
+\begin{codebox}[cpp]
+namespace state {
+struct Depleted {};
+struct Available {
+    int count;
+};
+struct Discontinued {};
+} //namespace state
+\end{codebox}
+
+\label{idx:590}
+我们的状态可以有自己的属性，例如剩余商品数量。此外，与动态多态的状态不同，它们不需要从共同的基类继承。相反，它们全部存储在一个 variant 中，如下所示：
+
+\begin{codebox}[cpp]
+using State = std::variant<state::Depleted, state::Available, state::Discontinued>;
+\end{codebox}
+
+\label{idx:591}
+除了状态之外，我们还需要用于状态转换的事件。看看下面的代码：
+
+\begin{codebox}[cpp]
+namespace event {
+struct DeliveryArrived {
+    int count;
+};
+struct Purchased {
+    int count;
+};
+struct Discontinued {};
+} //namespace event
+\end{codebox}
+
+如你所见，我们的事件也可以有属性，且不从共同的基类继承。现在，我们需要实现状态之间的转换。这可以按如下方式实现：
+
+\begin{codebox}[text]
+State on_event(state::Available available, event::DeliveryArrived delivered) {
+    available.count += delivered.count;
+    return available;
+}
+State on_event(state::Available available, event::Purchased purchased) {
+    available.count -= purchased.count;
+    if (available.count > 0)
+        return available;
+    return state::Depleted{};
+}
+\end{codebox}
+
+如果发生了购买，状态可以改变（\texttt{Depleted}），但也可以保持不变（\texttt{Available}）。我们还可以使用模板来处理多个状态转换到同一个下一状态的情况：
+
+\begin{codebox}[cpp]
+template <typename S> State on_event(S, event::Discontinued) {
+    return state::Discontinued{};
+}
+\end{codebox}
+
+\label{idx:592}
+如果某件商品被停产（discontinued），它之前处于什么状态就无关紧要了，因为这个状态是终态。
+
+好，现在我们来实现最后一个受支持的转换：
+
+\begin{codebox}[text]
+State on_event(state::Depleted depleted, event::DeliveryArrived delivered) {
+    return state::Available{delivered.count};
+}
+\end{codebox}
+
+\label{idx:593}
+我们需要的下一块拼图，是一种能够在一个对象中通用地定义多个调用运算符的方法，以便调用最匹配的重载。稍后我们将用它来调用刚才定义的转换。我们基于 \texttt{std::\allowbreak{}variant} 实现 overload 模式的辅助工具，在 C++17 中可以如下所示：
+
+\begin{codebox}[cpp]
+template<class... Ts>
+struct overload : Ts... {
+    using Ts::operator()...;
+};
+template<class... Ts>
+overload(Ts...) -> overload<Ts...>;
+\end{codebox}
+
+\label{idx:594}
+我们创建一个 \texttt{overload} 结构体，它使用可变参数模板、折叠表达式和类模板实参推导指引，提供在构造期间传给它的所有调用运算符。
+
+\label{idx:595}
+由于对聚合体扩展了\textbf{类模板实参推导}（\textbf{CTAD}），C++20 中的实现更简短，并且不需要自定义推导指引：
+
+\begin{codebox}[cpp]
+template <class... Ts>
+struct overload : Ts... {
+    using Ts::operator()...;
+};
+\end{codebox}
+
+在 C++23 中，实现甚至更安全，因为它会在编译期捕获未实现的重载。这里提到这一特性仅供你参考，但我们的状态机并不需要它。关于这一点的更深入解释，以及实现访问（visitation）的替代方式，请参阅 \emph{延伸阅读} 一节中 Bartłomiej Filipek 和 Andreas Fertig 的博客文章：
+
+\begin{codebox}[cpp]
+template <class... Ts>
+struct overload : Ts... {
+    using Ts::operator()...;
+    consteval void operator()(auto) const {
+        static_assert(false, "Unsupported type");
+    }
+};
+\end{codebox}
+
+\label{idx:596}
+现在我们可以开始实现状态机本身了：
+
+\begin{codebox}[cpp]
+class ItemStateMachine {
+public:
+    template <typename Event> void process_event(Event &&event) {
+        state_ = std::visit(overload{[&](const auto &state) requires std::is_same_v<decltype(on_event(state, std::forward<Event>(event))), State>{
+            return on_event(state, std::forward<Event>(event));
+        },
+        [](const auto &unsupported_state) -> State {
+            throw std::logic_error{"Unsupported state transition"};
+        }
+    },
+    state_);
+}
+private:
+    State state_;
+};
+\end{codebox}
+
+我们的 \texttt{process\_\allowbreak{}event} 函数将接受任意一个已定义的事件。它会利用当前状态和传入的事件调用合适的 \texttt{on\_event} 函数，并切换到新状态。如果针对给定状态和事件找到了 \texttt{on\_event} 重载，就会调用第一个 lambda。否则，约束将不满足，进而调用第二个更通用的重载。这意味着如果出现不受支持的状态转换，我们就直接抛出异常。
+
+现在，我们提供一种报告当前状态的方法：
+
+\begin{codebox}[cpp]
+std::string report_current_state() {
+    return std::visit(overload{[](const state::Available &state) -> std::string {
+        return std::to_string(state.count) +" items available";
+        },
+        [](const state::Depleted) -> std::string {
+           return "Item is temporarily out of stock";
+        },
+        [](const state::Discontinued) -> std::string {
+            return "Item has been discontinued";
+        }
+    },
+    state_);
+}
+\end{codebox}
+
+\label{idx:597}
+这里，我们使用 overload 传入三个 lambda，每个都返回一个通过访问状态对象生成的报告字符串。
+
+现在我们可以调用我们的解决方案了：
+
+\begin{codebox}[cpp]
+auto fsm = ItemStateMachine{};
+std::cout << fsm.report_current_state() << '\n';
+fsm.process_event(event::DeliveryArrived{3});
+std::cout << fsm.report_current_state() << '\n';
+fsm.process_event(event::Purchased{2});
+std::cout << fsm.report_current_state() << '\n';
+fsm.process_event(event::DeliveryArrived{2});
+std::cout << fsm.report_current_state() << '\n';
+fsm.process_event(event::Purchased{3});
+std::cout << fsm.report_current_state() << '\n';
+fsm.process_event(event::Discontinued{});
+std::cout << fsm.report_current_state() << '\n';
+//fsm.process_event(event::DeliveryArrived{1});
+\end{codebox}
+
+运行时，会得到如下输出：
+
+\begin{codebox}[text]
+Item is temporarily out of stock
+3 items available
+1 items available
+3 items available
+Item is temporarily out of stock
+Item has been discontinued
+\end{codebox}
+
+也就是说，除非你取消注释最后一行那个不受支持的转换，那样的话最后会抛出异常。
+
+我们的解决方案比基于动态多态的实现性能高得多，后者在调用方法时需要进行经由虚函数表（vtable）的间接寻址。不过，它只支持编译期已知的状态和事件。关于状态、variant 以及实现访问的各种方式的更多信息，请参阅 Mateusz Pusz 在 CppCon 2018 上的演讲，也列在 \emph{延伸阅读} 一节中。
+
+在结束本章之前，我们希望你再了解的最后一件事是内存处理。下面开始我们的最后一节。
+
+\section{高效地处理内存}
+
+\label{idx:598}
+即使你的内存并不十分受限，审视一下自己如何使用内存也是明智之举。通常，内存吞吐量是现代系统的性能瓶颈，因此善用内存始终很重要。执行过多的动态分配会拖慢程序，并导致内存碎片。下面我们来学习几种缓解这些问题的方法。
+
+\subsection{使用 SSO/SBO/SOO 减少动态分配}
+
+\label{idx:599}
+\label{idx:600}
+\label{idx:601}
+\label{idx:602}
+动态分配有时给你带来的麻烦，远不止在内存不足时构造对象会抛异常这一点。它们往往还会消耗 CPU 周期，并导致内存碎片。幸运的是，有一种办法可以防范这一问题。如果你使用过 \texttt{std::\allowbreak{}string}（GCC 5.0 之后的版本），那你很可能用过一种名为\textbf{小字符串优化（SSO）}或\textbf{小缓冲区优化（SBO）}的优化。这是一种更通用的优化——\textbf{小对象优化（SOO}）——的一个例子，它可以在 Abseil 的 \texttt{Inlined\allowbreak{}Vector} 等类型中见到。
+
+核心思想相当直接：如果动态分配的对象足够小，就应该把它存储在拥有它的类内部，而不是进行动态分配，从而避免额外的动态内存分配。对于 \texttt{std::\allowbreak{}string}，通常需要存储容量、长度以及实际的字符串。如果字符串足够短（在 GCC 中，64 位平台上为 15 字节），它就会存储在这些成员中的某几个里。
+
+\label{idx:603}
+将对象就地存储，而不是在别处分配对象、只保存一个指针，还有另一个好处：更少的指针追逐（pointer chasing）。每当你需要访问存储在一个指针背后的数据时，都会增加 CPU 缓存的压力，并有可能需要从主内存中取数据。如果这是一种常见的模式，就可能影响应用的整体性能，尤其是在被指向的地址没有被 CPU 预取器猜中的情况下。使用 SSO、SBO 和 SOO 等技术对减少这类问题大有价值。
+
+这个示例实现了该技术，包括拷贝构造函数、移动构造函数以及赋值运算符的实现。
+
+首先，这个类定义了双重存储——用于短字符串的固定大小内联缓冲区，以及用于较长字符串的堆分配缓冲区：
+
+\begin{codebox}[cpp]
+class String final {
+    static const std::size_t BUF_SIZE = 15;
+    union {
+        char buffer[BUF_SIZE + 1];
+        char* data;
+    };
+    std::size_t size{};
+\end{codebox}
+
+\label{idx:604}
+这里，该类使用一个 union 来保存内联缓冲区或指向堆内存的指针。两个成员占据同一块内存位置，这使得该类可以根据字符串长度在内联存储和动态存储之间切换。
+
+接下来，我们定义一个辅助函数，用于确定该使用 union 的哪个字段：内置的定长数组 \texttt{buffer}，还是指向动态内存的指针 \texttt{data}：
+
+\begin{codebox}[cpp]
+[[nodiscard]] bool is_small_string() const noexcept { return size <= BUF_SIZE; }
+public:
+\end{codebox}
+
+在下一个代码片段中，构造函数在初始化时就确定了字符串的存储模式，因此其内存位置或长度之后不会再改变：
+
+\begin{codebox}[text]
+explicit String(const char *s) {
+    size = strlen(s);
+    data = !is_small_string() ? new char[size] : buffer;
+    memcpy(data, s, size + 1);
+};
+~String() {
+    if (!is_small_string()) {
+        delete[] data;
+    }
+}
+\end{codebox}
+
+\label{idx:605}
+拷贝构造函数和移动构造函数会递归地调用各自对应的赋值运算符，这简化了实现并避免了代码重复：
+
+\begin{codebox}[cpp]
+String(const String& other) {*this = other;}
+    String &operator=(const String &other) {
+        if (this != &other) {
+            if (!is_small_string()) {
+                delete[] data;
+        }
+       size = other.size;
+       if (!is_small_string()) {
+           data = new char[size];
+           memcpy(data, other.data, size + 1);
+        } else {
+            memcpy(buffer, other.buffer, size + 1);
+        }
+    }
+    return *this;
+};
+String(String &&other) noexcept { *this = std::move(other); }
+String &operator=(String &&other) noexcept {
+    if (this != &other) {
+        size = other.size;
+        if (!is_small_string()) {
+            data = other.data;
+        } else {
+            memcpy(buffer, other.buffer, size + 1);
+        }
+        other.size = 0;
+        other.data = nullptr;
+        }
+    return *this;
+}
+\end{codebox}
+
+\label{idx:606}
+这个实现遵循了 Raymond Chen 的博客及类似讨论中描述的 SSO/SBO 常见模式。虽然这个简化版本清晰地展示了其思想，但实际实现还会加入一些改进，例如更好的异常安全（使用 copy-and-swap）。
+
+然后，使用一个数组下标运算符来获取和设置值：
+
+\begin{codebox}[cpp]
+char &operator[](std::size_t idx) {
+    return !is_small_string() ? data[idx] : buffer[idx];
+}
+\end{codebox}
+
+这个 \texttt{const} 函数会拷贝返回值，因为 \texttt{char} 是基本类型。一般来说，这样的成员函数会返回一个 \texttt{const\&} 引用：
+
+\begin{codebox}[cpp]
+char operator[](std::size_t idx) const {
+    return !is_small_string() ? data[idx] : buffer[idx];
+}
+[[nodiscard]] std::size_t length() const noexcept { return size; }
+\end{codebox}
+
+这里，\texttt{friend} 函数是合理的，因为它简化了实现并封装了类的内部细节：
+
+\begin{codebox}[cpp]
+    friend std::ostream &operator<<(std::ostream &os, const String &s) {os << (!s.is_small_string() ? s.data : s.buffer);
+    return os;
+    }
+};
+\end{codebox}
+
+\begin{myTip}{提示}
+使用 \textbf{AI 代码讲解器}和 \textbf{快速复制}功能，提升你的编码体验。在下一代 Packt Reader 中打开本书。点击 \textbf{复制}按钮
+
+（\textbf{1}）即可将代码快速复制到你的编码环境中，或者点击 \textbf{讲解}按钮
+
+（\textbf{2}）让 AI 助手为你讲解一段代码。
+
+\myGraphic{0.92}{images/image__2_.png}{}
+
+\textbf{下一代 Packt Reader }随本书购买免费提供。扫描二维码或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后在搜索栏中按书名查找本书。请仔细核对显示的版本，确保你拿到的是正确的版本。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/Latest_QR.png}\end{center}
+\end{myTip}
+
+\label{idx:607}
+在 SSO 成为主流之前，一些 \texttt{std::\allowbreak{}string} 实现使用了不同的策略。
+
+\subsection{通过圈养 COW 来节省内存}
+
+\label{idx:608}
+较旧的 \texttt{std::\allowbreak{}string} 实现使用了另一种名为\textbf{写时复制}（\textbf{COW}）的优化。在这种实现中，使用相同底层字符数组创建的多个实例共享数组的同一内存地址。当向字符串写入时，底层存储才会被复制——因此得名。
+
+然而，保留指向字符串内部数据的指针和引用仍然不安全，因为字符串被修改时内部数据可能会被重新分配。由于在某些情况下会出现悬垂指针和引用，这项优化在 C++11 中被弃用了。
+
+在我们的示例中，字符串 \texttt{s} 和它的 \texttt{copy} 共享相同的底层数据，但对 \texttt{operator[]} 的调用触发了内存重新分配。因此，当 copy 离开作用域时，\texttt{p} 就变成了悬垂指针：
+
+\begin{codebox}[cpp]
+std::string s("sample");
+const char* p = s.data();
+{
+    std::string copy = s;
+    std::cout << s[0] << std::endl; //COW 触发内存重新分配
+}
+std::cout << *p << '\n';  //p 是悬垂的
+\end{codebox}
+
+这种技术有助于节省内存、保持缓存热，并且通常在单线程上提供稳健的性能。不过，在多线程环境下使用它要当心。加锁的需求可能成为真正的性能杀手。与任何与性能相关的话题一样，最好的做法就是实测一下它在你这里是不是最合适的工具。
+
+下面我们来讨论 C++17 中的一项特性，它可以帮你在使用动态分配时获得良好的性能。
+
+\subsection{利用多态分配器}
+
+\label{idx:609}
+我们所说的特性就是多态分配器。具体来说，是 \texttt{std::\allowbreak{}pmr::\allowbreak{}polymorphic\_\allowbreak{}allocator} 以及分配器用来分配内存的多态类 \texttt{std::\allowbreak{}pmr::\allowbreak{}memory\_\allowbreak{}resource}。
+
+\label{idx:610}
+本质上，这些分配器让你可以轻松地串联内存资源，从而最大限度地利用内存。这个链条可以很简单，比如一个资源预留一大块内存并进行分发，内存耗尽时回退到另一个只调用 \texttt{new} 和 \texttt{delete} 的资源。链条也可以复杂得多：你可以构建一条很长的内存资源链，处理不同大小的内存池，只在需要时才提供线程安全，绕过堆直接使用系统内存，返回最近释放的内存块以保持缓存热，以及做其他各种花哨的事情。\textbf{多态内存资源}（\textbf{PMR}）库并未提供所有这些能力，但得益于它们的设计，扩展起来很容易。
+
+我们先来解决内存竞技场（memory arena）这个主题。
+
+\subsubsection{使用内存竞技场}
+
+\label{idx:611}
+内存竞技场（也称区域、地带、域或内存上下文）不过是一大块在有限时间内存在的内存。你可以用它来分配较小的对象，这些对象在竞技场的整个生命周期内使用。竞技场中的对象既可以像平常一样被逐个释放，也可以在一种称为\emph{瞬间熄灭}（winking out）的过程中一次性全部清除。我们稍后会描述它。
+
+与通常的分配和释放相比，竞技场有几个很大的优势——它们能提升性能，因为它们限制了需要向上游资源申请的内存的分配次数。基于区域的内存管理还能减少内存碎片，因为任何碎片都只会发生在竞技场内部。一旦竞技场的内存被释放，碎片也就不复存在了。一个很好的做法是为每个线程创建独立的竞技场。如果一个竞技场只由单个线程使用，它就不需要使用任何加锁或其他线程安全机制，从而减少线程争用，并给你带来可观的性能提升。
+
+要有效地使用内存竞技场，你需要一种在预先分配好的内存块中直接构造对象的方法。定位 new（placement new）正是在这种场景下登场的。placement new 是一项 C++ 特性，它允许你在特定的内存地址上显式构造对象，而不进行额外的分配。
+
+\label{idx:612}
+从历史上看，C++ 提供了 placement new 和 placement delete 运算符，用于在特定地址（包括内存映射的硬件区域）上构造和析构对象。Bjarne Stroustrup 在 1994 年出版的著作 \emph{The Design and Evolution of C++} 中描述了定位语法。定位语法可用于控制对象在内存中的放置位置，以便实现自定义内存管理、对象池、将对象放置在共享内存中、在预先分配的缓冲区中构造对象、防止异常，以及在嵌入式系统或实时应用中进行性能优化。
+
+\begin{myNotic}{注意}
+
+C++ 还从 \texttt{<new>} 中提供了 \texttt{std::\allowbreak{}nothrow} 常量，它会返回 \texttt{nullptr}，而不是抛出 \texttt{std::\allowbreak{}bad\_\allowbreak{}alloc} 异常。此外，诸如 \texttt{std::\allowbreak{}vector} 之类的标准容器会使用 placement new 在预先分配的缓冲区中构造元素。
+\end{myNotic}
+
+\label{idx:613}
+下面是一个使用定位语法的简单示例，它只是把缓冲区中的三个字母改为大写。它展示了 placement new 背后的基本思想：直接在特定的内存位置上构造对象：
+
+\begin{codebox}[text]
+char buffer[] = "into the eagle's nest";
+const auto p1 = new (buffer) cha('I');
+const auto p2 = new (buffer + 9) char('E');
+const auto p3 = new (buffer + 17) char('N');
+\end{codebox}
+
+除非你确实需要并且清楚自己在做什么，否则应尽量避免使用这种语法，因为它会引发在编译期和运行期都难以处理的错误。
+
+在继续深入之前，我们先创建简单的 \texttt{Point} 结构体，它将在后面的示例中使用：
+
+\begin{codebox}[cpp]
+struct Point {
+    double x, y;
+    constexpr bool operator==(const Point &) const noexcept = default;
+};
+\end{codebox}
+
+\label{idx:614}
+C++20 引入了 \texttt{std::\allowbreak{}construct\_\allowbreak{}at} 和 \texttt{std::\allowbreak{}ranges::\allowbreak{}construct\_\allowbreak{}at} 函数，作为在给定地址上创建用给定参数初始化的对象的一种更安全的替代方案。注意后者对 ADL（实参依赖查找）不可见。这些函数可用于在编译期求值的常量表达式。应用它们有几种方式：
+
+\begin{codebox}[cpp]
+constexpr auto N = 51.528100;
+constexpr auto E = 45.977859;
+alignas(Point) unsigned char buf[sizeof(Point)];
+Point *ptr = std::construct_at(reinterpret_cast<Point *>(buf), N, E);
+const bool res{*ptr == Point{N, E}};
+std::destroy_at(ptr);
+\end{codebox}
+
+由于 \texttt{reinterpret\_\allowbreak{}cast} 不是常量表达式，对于可平凡复制（trivially copyable）的对象，一个更安全的替代方案是 \texttt{std::\allowbreak{}bit\_\allowbreak{}cast}，它可以在编译期求值。（可平凡复制意味着对象可以使用诸如 \texttt{memcpy} 或 \texttt{memmove} 这样的基本内存操作来复制。）
+
+无论你使用的是 \texttt{reinterpret\_\allowbreak{}cast} 还是 \texttt{bit\_cast}，完成后都必须显式销毁对象。\texttt{std::\allowbreak{}destroy\_\allowbreak{}at} 函数模板可以处理这件事：
+
+\begin{codebox}[cpp]
+alignas(Point) unsigned char buf[sizeof(Point)];
+auto p = std::bit_cast<Point>(buf);
+std::destroy_at(&p);
+Point *ptr = std::construct_at(std::addressof(p), N, E);
+const bool res{*ptr == Point{N, E}};
+std::destroy_at(ptr);
+\end{codebox}
+
+现在我们已经看到了使用 \texttt{construct\_\allowbreak{}at} 和 \texttt{bit\_cast} 的基于库的方法，接下来回到 placement new 语法本身，看看如何通过运算符重载来扩展它。
+
+\label{idx:615}
+定位语法允许重载 operator new 和 operator delete 函数，以支持自定义分配器和竞技场。\texttt{void* operator new (\allowbreak{}size\_\allowbreak{}t,\allowbreak{} void* buffer)\allowbreak{}} 和 \texttt{void operator delete(\allowbreak{}void*,\allowbreak{} void*)\allowbreak{}} 函数位于 \texttt{<new>} 头文件中，无法重新定义，但你可以添加接受额外参数的类专属重载：
+
+\begin{codebox}[cpp]
+struct Point final {
+    double x, y;
+    Point(double x, double y) : x(x), y(y) {
+        std::cout << "Point(" << x << ',' << y << ')' << std::endl;
+        //throw std::runtime_error("Point(): std::runtime_error");
+    }
+    Point() : Point(0, 0) { std::cout << "Point(0, 0)" << std::endl; }
+    ~Point() { std::cout << "~Point()" << std::endl; }
+};
+void *operator new(std::size_t size, std::byte *buffer) {
+    std::cout << "operator new " << size << " bytes" << std::endl;
+    return ::operator new(size, static_cast<void *>(buffer));
+}
+void operator delete(void *ptr, std::byte *buffer) {
+    std::cout << "operator delete at " << ptr << std::endl;
+    ::operator delete(ptr, static_cast<void *>(buffer));
+}
+\end{codebox}
+
+\label{idx:616}
+定位语法有其自身的特殊之处，使用自定义 placement new/delete 时，有几条规则值得记住：你需要显式调用析构函数，但不需要调用 delete 运算符；如果对象完全位于缓冲区中且不管理其他资源，则可以省略析构函数。此外，只有在使用 placement new 构造对象时构造函数抛出异常的情况下，才会调用 placement delete 运算符，以防止内存泄漏：
+
+\begin{codebox}[cpp]
+try {
+    std::array<std::byte, 1024> buffer;
+    auto *p1 = new (buffer.data()) Point{48.290178, 37.171792};
+    p1->x = 52.194845;
+    p1->y = 20.924213;
+const auto *p2 = new (&buffer[sizeof(Point)]) Point{53.946519, 27.688998};
+    std::cout << "p1.x=" << p1->x << " p1.y=" << p1->y << std::endl;
+    std::cout << "p2.x=" << p2->x << " p2.y=" << p2->y << std::endl;
+    p1->~Point();
+    p2->~Point();
+} catch (const std::exception &ex) {
+    std::cout << ex.what() << '\n';
+}
+\end{codebox}
+
+前面的示例说明了 placement new 为什么重要——它使得在现有存储中直接创建对象成为可能。如果没有 placement new 或 \texttt{std::\allowbreak{}construct\_\allowbreak{}at} 这样的特性，就无法在现有存储中创建对象。它们让你能够细粒度、低层次地控制在现有内存中构造对象的方式。C++17 增加了一个更高级的抽象，以便更灵活地管理内存——PMR 库，它主要位于 \texttt{<memory\_\allowbreak{}resource>} 头文件和 \texttt{std::pmr} 命名空间中。
+
+例如，如果你的程序是单线程的，那么一个低成本地提升其性能的方案可以如下所示：
+
+\begin{codebox}[cpp]
+auto single_threaded_pool = std::pmr::unsynchronized_pool_resource();
+std::pmr::set_default_resource(&single_threaded_pool);
+\end{codebox}
+
+\label{idx:617}
+如果你不显式设置任何资源，默认资源将是 \texttt{new\_\allowbreak{}delete\_\allowbreak{}resource}，它每次都会调用 \texttt{new} 和 \texttt{delete}——正如普通的 \texttt{std::\allowbreak{}allocator} 那样——并带有它所提供的（以及所付出代价的）全部线程安全保证。
+
+如果你使用前面那个代码片段，所有使用 \texttt{pmr} 分配器进行的内存分配都将无锁完成。不过你仍然需要使用 \texttt{pmr} 类型。例如，要对标准容器做到这一点，你只需把 \texttt{std::\allowbreak{}pmr::\allowbreak{}polymorphic\_\allowbreak{}allocator<T>} 作为分配器模板参数传入即可。许多标准容器都有启用 \texttt{pmr} 的类型别名。接下来创建的两个变量类型相同，并且都会使用默认内存资源：
+
+\begin{codebox}[cpp]
+auto ints = std::vector<int, std::pmr::polymorphic_allocator<int>>(std::pmr::get_default_resource());
+auto also_ints = std::pmr::vector<int>{};
+\end{codebox}
+
+不过第一个变量是显式传入资源的。下面我们来了解一下 \texttt{pmr} 中可用的各种资源。
+
+\subsubsection{使用单调内存资源}
+
+\label{idx:618}
+我们要讨论的第一个是 \texttt{std::\allowbreak{}pmr::\allowbreak{}monotonic\_\allowbreak{}buffer\_\allowbreak{}resource}。它是一种只分配内存、在释放时不做任何事的资源。只有在资源被销毁时，或显式调用了 \texttt{release()} 时，它才会释放内存。再加上它不提供线程安全，这使该类型的性能极高。如果你的应用偶尔需要在某个线程上执行一个会进行大量分配的任务，然后在之后一次性释放所用到的所有对象，那么使用单调资源将带来巨大的收益。它也是构建资源链的极佳基础模块。
+
+\subsubsection{使用池资源}
+
+\label{idx:619}
+两种资源的一种常见组合，是把池资源（pool resource）叠放在单调缓冲区资源（monotonic buffer resource）之上。标准池资源会创建由不同大小块组成的池。\texttt{std::pmr} 中有两种类型：\texttt{unsynchronized\_\allowbreak{}pool\_\allowbreak{}resource} 适用于只有一个线程从中分配和释放内存的场景，\texttt{synchronized\_\allowbreak{}pool\_\allowbreak{}resource} 则用于多线程场景。与全局分配器相比，二者都应能带来好得多的性能，尤其是在用单调缓冲区作为其上游资源时。如果你想知道如何将它们串联起来，方法如下：
+
+\begin{codebox}[cpp]
+auto buffer = std::array<std::byte, 1 * 1024 * 1024>{};
+auto monotonic_resource = std::pmr::monotonic_buffer_resource{buffer.data(), buffer.size()};
+auto pool_options = std::pmr::pool_options{.max_blocks_per_chunk = 0,.largest_required_pool_block = 512};
+auto arena =std::pmr::unsynchronized_pool_resource{pool_options, &monotonic_resource};
+\end{codebox}
+
+我们创建一个 1 MB 的缓冲区，供 arena 复用。把它传给一个单调资源（monotonic resource），再把这个单调资源传给一个非同步池资源（unsynchronized pool resource），从而构成一条简单而高效的分配器链：在初始缓冲区全部用完之前，这条链不会调用 \texttt{new}。
+
+\label{idx:620}
+你可以向这两种池类型都传入一个 \texttt{std::\allowbreak{}pmr::\allowbreak{}pool\_\allowbreak{}options} 对象，用以限制给定大小的块的最大数量（\texttt{max\_\allowbreak{}blocks\_\allowbreak{}per\_\allowbreak{}chunk}），或限制最大块的尺寸（\texttt{largest\_\allowbreak{}required\_\allowbreak{}pool\_\allowbreak{}block}）。传入 \texttt{0} 会让实现采用其默认值。就 GCC 的库而言，每个分块（chunk）中实际的块数量会随块大小而变化。如果超出最大尺寸，池资源会直接从其上游资源分配。如果初始内存耗尽，它同样会转向上游资源。此时，它会按几何级数增长的方式分配内存块。
+
+\subsubsection{编写自己的内存资源}
+
+\label{idx:621}
+如果标准内存资源无法满足你的全部需求，你总能相当简单地创建一个自定义资源。例如，有一种不错的优化（并非所有标准库实现都提供）是：记录给定大小的、最近被释放的那些块，并在后续相同大小的分配中把它们返回回来。这种 \texttt{Most Recently Used} 缓存有助于提升数据缓存的热度，从而改善应用性能。你可以把它看作一连串针对各个块的后进先出队列。
+
+有时你可能还想调试内存的分配与释放。下面的代码片段展示了一个简单的资源，可以帮你完成这项任务：
+
+\begin{codebox}[cpp]
+class verbose_resource : public std::pmr::memory_resource {
+    std::pmr::memory_resource *upstream_resource_;
+public:
+    explicit verbose_resource(std::pmr::memory_resource *upstream_resource)
+        : upstream_resource_(upstream_resource) {}
+\end{codebox}
+
+这个 \texttt{verbose resource} 类继承自多态基类资源（polymorphic base resource）。它还接受一个上游资源，并在实际分配中使用它。它必须实现三个私有函数——一个用于分配，一个用于释放，还有一个用于比较该资源自身的实例。下面是第一个：
+
+\begin{codebox}[cpp]
+private:
+    void *do_allocate(size_t bytes, size_t alignment) override {
+        std::cout << "Allocating " << bytes << " bytes\n";
+        return upstream_resource_->allocate(bytes, alignment);
+    }
+\end{codebox}
+
+它所做的只是在标准输出上打印分配大小，然后使用上游资源来分配内存。下一个类似：
+
+\begin{codebox}[cpp]
+void do_deallocate(void *p, size_t bytes, size_t alignment) override {
+    std::cout << "Deallocating " << bytes << " bytes\n";
+    upstream_resource_->deallocate(p, bytes, alignment);
+}
+\end{codebox}
+
+\label{idx:622}
+我们记录释放了多少内存，并使用上游资源来完成任务。所需的最后一个函数如下：
+
+\begin{codebox}[cpp]
+[[nodiscard]] bool
+do_is_equal(const memory_resource &other) const noexcept override {
+    return this == &other;
+}
+\end{codebox}
+
+我们只是比较实例的地址来判断它们是否相等。\texttt{[[nodiscard]]} 属性有助于确保调用方确实使用了返回的值，从而帮助我们避免无意中误用该函数。
+
+\label{idx:623}
+就是这样。对于 \texttt{pmr} 分配器这样强大的特性来说，这套 API 现在并不算复杂，对吧？
+
+除了追踪分配之外，我们还可以用 \texttt{pmr} 来防止在不该分配的时候进行分配。
+
+\subsubsection{确保没有意料之外的分配}
+
+\label{idx:624}
+特殊的 \texttt{std::\allowbreak{}pmr::\allowbreak{}null\_\allowbreak{}memory\_\allowbreak{}resource(\allowbreak{})\allowbreak{}} 调用在任何人试图用它分配内存时都会抛出异常。你可以把它设为默认资源，从而确保不会通过 \texttt{pmr} 进行任何分配，如下所示：
+
+\begin{codebox}[cpp]
+std::pmr::set_default_resource(null_memory_resource());
+\end{codebox}
+
+你还可以用它来限制本不该发生的上游分配。看看下面的代码：
+
+\begin{codebox}[cpp]
+auto buffer = std::array<std::byte, 640 * 1024>{}; //640K 对任何人来说都应该足够了
+auto resource = std::pmr::monotonic_buffer_resource{
+    buffer.data(), buffer.size(), std::pmr::null_memory_resource()};
+\end{codebox}
+
+如果有人试图分配超过我们设定缓冲区大小的内存，就会抛出 \texttt{std::\allowbreak{}bad\_\allowbreak{}alloc}。
+
+下面我们进入本章的最后一项内容。
+
+\subsubsection{让内存瞬间蒸发}
+
+\label{idx:625}
+\label{idx:626}
+有时，像单调缓冲区资源那样无需释放内存，对性能来说仍然不够。一种名为 \textbf{瞬间蒸发（winking out）} 的特殊技术可以帮上忙。让对象「瞬间蒸发」，意味着它们不仅不会被逐个释放，连析构函数也不会被调用。所有对象会一下子凭空消失，而用过的 arena 内存会被回收，从而省去通常花在调用 arena 中每个对象及其成员（以及成员的成员……）的析构函数上的时间。因此，使用这项技术时，析构函数里不允许有任何副作用！arena 中的对象不应获取 arena 之外的资源，因为当析构函数被跳过时，那些资源不会被释放。
+
+\begin{myTip}{提示}
+
+这是一个高级话题。使用这项技术时要小心，只有在可能带来的收益值得时才使用它。
+\end{myTip}
+
+\label{idx:627}
+这项技术可以节省你宝贵的 CPU 周期，但并非总能使用。如果你的对象还要管理内存之外的资源，就应避免让内存瞬间蒸发；否则会出现资源泄漏。如果你依赖对象析构函数本应产生的任何副作用，情况也是如此。
+
+下面来看看瞬间蒸发的实际运用：
+
+\begin{codebox}[cpp]
+auto verbose = verbose_resource(std::pmr::get_default_resource());
+auto monotonic = std::pmr::monotonic_buffer_resource(&verbose);
+std::pmr::set_default_resource(&monotonic);
+auto alloc = std::pmr::polymorphic_allocator{};
+auto *vector = alloc.new_object<std::pmr::vector<std::pmr::string>>();
+vector->push_back("first one");
+vector->emplace_back("long second one that must allocate");
+\end{codebox}
+
+\label{idx:628}
+这里，我们手动创建了一个多态分配器（polymorphic allocator），它会使用我们的默认资源——一个每次到达上游时都会记录日志的单调资源。为了创建对象，我们使用了 C++20 为 \texttt{pmr} 新增的 \texttt{new\_\allowbreak{}object} 函数。我们创建了一个字符串的 vector。第一个字符串可以用 \texttt{push\_\allowbreak{}back} 传入，因为得益于 SSO，它足够小，能放进我们的小字符串缓冲区。而第二个字符串，如果用 \texttt{push\_\allowbreak{}back}，就需要先用默认资源分配一个字符串，然后才能传给我们这个 vector。而就地构造（emplace）则会让该字符串在 vector 的函数内部被构造（而不是在调用之前），因此它会使用 vector 自己的分配器。最后，我们不在任何地方调用已分配对象的析构函数，只是在退出作用域时一次性释放全部内存。这应该能带来难以超越的性能。
+
+\label{idx:629}
+\label{idx:630}
+再看一个例子。这个 \texttt{Test} 类会在对象创建和销毁时打印消息，以作演示：
+
+\begin{codebox}[cpp]
+struct Test final {
+    std::string name;
+    explicit Test(std::string n) : name(std::move(n)) {
+        std::cout << "Constructed: " << name << '\n';
+    }
+    ~Test() {
+        std::cout << "Destructed: " << name << '\n';
+    }
+};
+\end{codebox}
+
+这段代码创建了一个 PMR arena，并使用定位（placement）语法把对象放入该 arena：
+
+\begin{codebox}[cpp]
+std::cout << "Creating arena and constructing objects manually...\n";
+std::byte buffer[1024];
+std::pmr::monotonic_buffer_resource arena{buffer, sizeof(buffer)};
+void* mem1 = arena.allocate(sizeof(Test), alignof(Test));
+new (mem1) Test("Alpha");
+void* mem2 = arena.allocate(sizeof(Test), alignof(Test));
+new (mem2) Test("Beta");
+std::cout << "Constructed 2 objects. Exiting scope...\n";
+//没有调用任何析构函数！
+\end{codebox}
+
+\label{idx:631}
+\label{idx:632}
+当 PMR 分配器离开作用域时，已分配的内存会被释放。这个例子会打印 “Constructed” 消息，但不会打印 “Destructed” 消息，因为析构函数根本没有被调用。这些对象被 \emph{瞬间蒸发} 了：
+
+\begin{codebox}[text]
+Creating arena and constructing objects manually...
+Constructed: Alpha
+Constructed: Beta
+Constructed 2 objects. Exiting scope...
+\end{codebox}
+
+这是本章清单上的最后一项内容。下面总结一下我们学到的东西。
+
+\section{小结}
+
+在本章中，我们梳理了 C++ 世界中使用的各种惯用法和模式。你现在应该能够写出流畅、地道的 C++ 代码了。我们揭开了如何执行自动清理，以及如何编写能够正确移动、复制和交换的更安全类型的神秘面纱。你学会了如何使用 ADL 来同时改善编译性能与定制点（customization point）的设计。我们讨论了如何在静态多态与动态多态之间做选择。我们还学习了如何为你的类型引入策略（policy），以及何时使用类型擦除和显式对象参数（explicit object parameter）——这是 C++23 的一个特性，称为 \texttt{deducing this}。
+
+此外，我们还讨论了如何使用工厂和流式构建器（fluent builder）创建对象。我们也探索了基于区域（region-based）的 arena 内存管理。而且，使用 \texttt{std::\allowbreak{}variant} 这类工具编写状态机，对你来说应该不再是什么谜题了。
+
+我们在做这些的同时，还顺带涉及了一些额外话题。呼！我们旅程的下一站将是构建和打包你的软件。
+
+\section{问题}
+
+\begin{enumerate}
+\item 三法则、五法则和零法则分别是什么？
+\item 何时使用 niebloid，何时使用隐藏友元（hidden friend）？
+\item 如何改进数组接口，使其更接近生产可用？
+\item 什么是折叠表达式（fold expression）？
+\item 什么时候不应该使用静态多态？
+\item C++ 为在预分配缓冲区中放置对象提供了哪些设施？这样做有哪些原因？
+\item 在瞬间蒸发的示例中，我们怎样才能再省下一次分配？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Lewis Baker、Eric Niebler 和 Kirk Shoop，\emph{tag\_invoke: A General Pattern for Supporting Customisable Functions}（ISO C++ 提案 P1895）： \href{https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1895r0.pdf}{https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1895r0.pdf}
+\item Gašper Ažman，\emph{tag\_invoke:: niebloids Evolved}（会议演讲），Core C++ Meetup： \href{https://www.youtube.com/watch?v=oQ26YL0J6DU}{https://www.youtube.com/watch?v=oQ26YL0J6DU}
+\item Sean Parent，\emph{Inheritance Is The Base Class of Evil }（会议演讲），GoingNative 2013： \href{https://learn.microsoft.com/en-us/shows/goingnative-2013/inheritance-base-class-of-evil }{https://learn.microsoft.com/en-us/shows/goingnative-2013/inheritance-base-class-of-evil}
+\item Scott Meyers，\emph{How Non-Member Functions Improve Encapsulation}： \href{https://www.aristeia.com/Papers/CUJ_Feb_2000.pdf}{https://www.aristeia.com/Papers/CUJ\_Feb\_2000.pdf}
+\item Abseil，\emph{Returning a Status or a Value, Status User Guide}： \href{https://abseil.io/docs/cpp/guides/status\#returning-a-status-or-a-value}{https://abseil.io/docs/cpp/guides/status\#returning-a-status-or-a-value}
+\item Bartłomiej Filipek，\emph{How To Use std::visit with Multiple Variants and Parameters}（博客），C++ Stories： \href{https://www.bfilipek.com/2018/09/visit-variants.html}{https://www.bfilipek.com/2018/09/visit-variants.html}
+\item Andreas Fertig，\emph{Visiting a std::variant Safely }（博客），Andreas Fertig 的博客： \href{https://andreasfertig.com/blog/2023/07/visiting-a-stdvariant-safely/}{https://andreasfertig.com/blog/2023/07/visiting-a-stdvariant-safely/}
+\item Mateusz Pusz，\emph{Effective Replacement of Dynamic Polymorphism with std::variant }（会议演讲），CppCon 2018： \href{https://www.youtube.com/watch?v=gKbORJtnVu8}{https://www.youtube.com/watch?v=gKbORJtnVu8}
+\item C++ Reference，\emph{Constrained Algorithms (Since C++20) }（niebloid）： \href{https://en.cppreference.com/w/cpp/algorithm/ranges}{https://en.cppreference.com/w/cpp/algorithm/ranges}
+\item C++ Reference，\emph{C++ Named Requirements: Allocator}：\href{https://en.cppreference.com/w/cpp/named_req/Allocator}{https://en.cppreference.com/w/cpp/named\_req/Allocator}
+\item C++ Reference，\emph{Explicit Object Member Functions }（deducing this）： \href{https://en.cppreference.com/w/cpp/language/member_functions\#Explicit_object_member_functions}{https://en.cppreference.com/w/cpp/language/member\_functions\#Explicit\_object\_member\_functions}
+\item ISO C++，\emph{What is “Placement New” and Why Would I Use It?}： \href{https://isocpp.org/wiki/faq/dtors\#placement-new}{https://isocpp.org/wiki/faq/dtors\#placement-new}
+\item ISO C++，\emph{Is There a Placement Delete?}： \href{https://isocpp.org/wiki/faq/dtors\#placement-delete }{https://isocpp.org/wiki/faq/dtors\#placement-delete}
+\item Eli Bendersky，\emph{The Cost of Dynamic (Virtual Calls) vs. Static (CRTP) Dispatch in C++}，Eli Bendersky 的网站： \href{https://eli.thegreenplace.net/2013/12/05/the-cost-of-dynamic-virtual-calls-vs-static-crtp-dispatch-in-c}{https://eli.thegreenplace.net/2013/12/05/the-cost-of-dynamic-virtual-calls-vs-static-crtp-dispatch-in-c}
+\item Raymond Chen，\emph{Inside STL: The String}，Microsoft： \href{https://devblogs.microsoft.com/oldnewthing/20230803-00/?p=108532}{https://devblogs.microsoft.com/oldnewthing/20230803-00/?p=108532}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描此二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前，请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

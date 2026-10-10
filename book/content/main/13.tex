@@ -1,0 +1,1993 @@
+在确保系统代码、依赖项和环境的安全性之后，我们现在转向现代软件系统中另一个关键的质量属性——性能。选择 C++ 作为项目核心编程语言最常见的原因，是它具有高性能、对系统资源的细粒度控制以及面向对象特性。此外，C++ 应用内存占用小且能效高。这些特性使 C++ 在与其他面向性能的语言（如 C、Rust、Ada、Go、C\# 或 Java）竞争时极具优势。
+
+本章聚焦于通过性能度量与实用的编码技巧来提升 C++ 软件的性能。我们首先探讨用于度量性能的工具，然后介绍几种提升单线程计算速度的技巧。接着，我们讨论如何利用并行计算。之后，我们展示如何用 C++20 的协程（coroutine）实现非抢占式多任务。最后，我们讨论如何实现高效的算法。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 度量性能
+\item 帮助编译器生成高性能代码
+\item 并行化计算
+\item 使用协程
+\item 实现高效的算法
+\end{itemize}
+
+首先，我们来说明运行本章示例所需的准备工作。
+
+\section{技术要求}
+
+要复现本章的示例，你需要安装以下内容：
+
+\begin{itemize}
+\item CMake 3.28+
+\item 支持 C++23 的编译器（推荐 GCC 14+）
+\end{itemize}
+
+本章的源代码片段可在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter13}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter13} 找到。
+
+\section{度量性能}
+
+\label{idx:1158}
+要有效提升代码的性能，你必须从度量其表现开始。如果不清楚真正的瓶颈在哪里，你就会去优化错误的地方，浪费时间，并且惊讶而沮丧地发现自己的辛苦付出几乎没有带来任何收益。本节将展示如何用基准测试（benchmark）正确度量性能、如何成功地对代码进行性能剖析，以及如何获取分布式系统中的性能洞察。但首先，我们来看看如何为精确且可重复的性能度量准备好环境，随后概述前面提到的三种方法。
+
+\subsection{为精确且可重复的性能度量做好准备}
+
+\label{idx:1159}
+为获得精确且可重复的度量结果，你可能希望将机器置于性能模式，而不是通常默认的节能模式。节能模式通过降低处理器性能来延长电池续航，这不可避免地会影响度量的准确性。如果你需要系统具备低延迟，可能希望在做基准测试的机器和生产环境中永久禁用节能。很多时候，这可能意味着要进入 UEFI 或 BIOS（取决于固件）来正确配置服务器。请注意，如果你使用公有云服务商，这可能无法做到。
+
+如果你在自己的机器上拥有 root/admin 权限，操作系统通常也能控制其中一些设置。例如，在 Linux 系统上，你可以通过运行以下命令强制 CPU 以最高频率运行：
+
+\begin{codebox}[text]
+sudo cpupower frequency-set --governor performance
+\end{codebox}
+
+此外，为了获得有意义的结果，你可能希望在与生产环境尽可能接近的系统上进行度量。硬件相关的配置因素，例如不同的内存速度、CPU 缓存的数量以及 CPU 的微架构，也可能让你的结果产生偏差，导致你得出错误的结论。硬盘配置乃至所使用的网络拓扑和硬件也是如此。你所基于构建的软件同样起着关键作用：从所使用的固件，到操作系统与内核，一直到软件栈上游的各类依赖。最好准备一个与生产环境完全相同、并用相同的工具和脚本管理的第二套环境。
+
+现在我们已经有了一个可靠的度量环境，接下来看看可以用哪些工具来执行这些度量。
+
+\subsection{利用不同类型的度量工具}
+
+度量性能有若干种方式，每种方式关注的范围各不相同。下面我们逐一介绍。
+
+\label{idx:1160}
+基准测试通常用于在预先准备好的测试中度量执行速度。它们的结果一般以执行时间或另一种性能指标（例如每秒处理的订单数）来表示。基准测试有几种类型：
+
+\begin{itemize}
+\item \textbf{微基准测试}，可用于度量一小段代码片段的执行情况。我们将在下一节介绍它们。
+\item \textbf{模拟}，即使用人工数据在更大规模上进行的合成测试。当你无法访问目标数据或目标硬件时，它们会很有用——例如，当你打算检查正在开发的硬件的性能，但该硬件尚不存在时，或者当你计划处理传入流量，却只能假设流量会是什么样子时。
+\item \textbf{回放}，这是一种在真实工作负载下度量性能的非常精确的方式。其思路是记录进入生产系统的所有请求或工作负载，通常带有时间戳。这些数据转储随后可以被“回放”到接受基准测试的系统中，并遵循它们之间的时间间隔，以检查系统表现如何。这类基准测试非常适合用来观察对代码或环境的潜在改动会如何影响系统的延迟和吞吐量。
+\item \textbf{行业标准基准测试}，这是了解我们的产品与竞争对手相比表现如何的好方法。此类基准测试的例子包括用于 CPU 的 Super Pi、用于显卡的 3DMark，以及用于人工智能处理器的 ResNet-50。
+\end{itemize}
+
+除了基准测试之外，在度量性能方面另一种极其宝贵的工具是性能剖析器（profiler）。剖析器不只是给你总体性能指标，还允许你检查代码在做什么并寻找瓶颈。它们有助于发现那些拖慢系统的意外情况。我们将在 \emph{性能} \emph{剖析} 一节中介绍它们。
+
+另一种了解系统性能的方式是追踪。追踪本质上是一种在执行期间记录系统行为的方式。通过监测一个请求完成各个处理步骤（例如由不同类型的微服务处理）所花费的时间，你可以洞察系统的哪些部分需要改进性能，或者系统处理被接受和被拒绝请求的表现如何。我们将在 \emph{追踪} 一节中更详细地介绍这个主题。
+
+接下来，我们聚焦于微基准测试，因为它们能帮助我们评估 C++ 中底层架构决策所带来的性能影响。
+
+\subsection{使用微基准测试}
+
+\label{idx:1161}
+微基准测试用于度量一小段“微”代码的执行速度。如果你想知道如何实现某个功能，或者不同的第三方库处理同一任务的速度如何，那么它们就是完成这项工作的理想工具。虽然它们并不能代表真实环境，但非常适合执行这类小型实验。
+
+\label{idx:1162}
+下面我们展示如何使用 C++ 中最常用的微基准测试框架之一——Google Benchmark——来运行这类实验。
+
+\subsubsection{搭建 Google Benchmark}
+
+\label{idx:1163}
+我们先用 Conan 把该库引入代码。将以下内容放入 \texttt{conanfile.\allowbreak{}py}：
+
+\begin{codebox}[python]
+from conan import ConanFile
+class Pkg(ConanFile):
+    settings = "os", "arch", "compiler", "build_type"
+    generators = "CMakeDeps"
+    def requirements(self):
+        self.requires("benchmark/1.9.4")
+    def build_requirements(self):
+        pass
+\end{codebox}
+
+我们将使用 CMakeDeps 生成器，因为它是 Conan 2.0 中推荐的 CMake 生成器。它依靠 CMake 的 \texttt{find\_\allowbreak{}package} 功能来使用由依赖管理器安装的包。要安装各依赖项的发布版本，请运行以下命令：
+
+\begin{codebox}[text]
+cd <build_directory>
+conan install .. --build=missing -s build_type=Release -of .
+\end{codebox}
+
+在你的 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件中使用该库也非常简单，如下所示：
+
+\begin{codebox}[text]
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}")
+find_package(benchmark REQUIRED)
+\end{codebox}
+
+然后，我们把构建目录添加到 \texttt{CMAKE\_\allowbreak{}PREFIX\_\allowbreak{}PATH}，好让 CMake 能找到 Conan 生成的配置文件和/或目标文件。接下来，我们直接用它们来查找依赖项。
+
+由于我们要创建多个微基准测试，可以用一个 CMake 函数来帮助我们定义它们：
+
+\begin{codebox}[cmake]
+function(add_benchmark NAME SOURCE)
+  add_executable(${NAME} ${SOURCE})
+  target_compile_features(${NAME} PRIVATE cxx_std_20)
+  target_link_libraries(${NAME} PRIVATE benchmark::benchmark)
+endfunction()
+\end{codebox}
+
+\label{idx:1164}
+该函数能够创建单编译单元的微基准测试，每个都使用 C++20 并链接到 Google Benchmark 库。下面我们用这个函数创建第一个微基准测试：
+
+\begin{codebox}[text]
+add_benchmark(microbenchmark_1 microbenchmarking/main_1.cpp)
+\end{codebox}
+
+现在我们可以在源文件中写一些代码了。
+
+\subsubsection{编写你的第一个微基准测试}
+
+\label{idx:1165}
+我们将测试在有序 vector 中用二分法查找比线性扫描快多少。先从创建有序 vector 的代码开始：
+
+\begin{codebox}[cpp]
+using namespace std::ranges;
+template <typename T>
+auto make_sorted_vector(std::size_t size) {
+  auto sorted = std::vector<T>{};
+  sorted.reserve(size);
+  auto sorted_view = views::iota(T{0}) | views::take(size);
+  std::ranges::copy(sorted_view, std::back_inserter(sorted));
+  return sorted;
+}
+\end{codebox}
+
+我们的 vector 将包含 size 个元素，即从 0 到 size - 1 的所有数字，并按升序排列。现在我们指定要查找的元素和容器大小：
+
+\begin{codebox}[cpp]
+constexpr auto MAX_HAYSTACK_SIZE = std::size_t{10'000'000};
+constexpr auto NEEDLE = 2137;
+\end{codebox}
+
+现在我们来测试在有序的“草堆”中找到 \texttt{NEEDLE} 需要多长时间。简单的线性查找可以按如下方式实现：
+
+\begin{codebox}[text]
+void linear_search_in_sorted_vector(benchmark::State &state) {
+  auto haystack = make_sorted_vector(MAX_HAYSTACK_SIZE);
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(find(haystack, NEEDLE));
+  }
+}
+\end{codebox}
+
+这里我们看到了 Google Benchmark 的首次使用。每个微基准测试都应接受 \texttt{State} 作为参数。这个特殊类型的作用如下：
+
+\begin{itemize}
+\item 包含关于已执行迭代次数以及被测计算所花费时间的信息
+\item 如果需要，可以统计已处理的字节数
+\item 可以返回其他状态信息，例如是否需要继续运行（通过 \texttt{Keep\allowbreak{}Running(\allowbreak{})\allowbreak{}} 成员函数）
+\item 可用于暂停和恢复某次迭代的计时（分别通过 \texttt{Pause\allowbreak{}Timing(\allowbreak{})\allowbreak{}} 和 \texttt{Resume\allowbreak{}Timing(\allowbreak{})\allowbreak{}} 成员函数）
+\end{itemize}
+
+\label{idx:1166}
+循环中的代码会被度量，根据运行该基准测试所允许的总时间，执行任意多次迭代。草堆的创建在循环之外，不会被度量。
+
+循环内部有一个名为 \texttt{Do\allowbreak{}Not\allowbreak{}Optimize} 的 sink 辅助函数。它的作用是防止编译器消除它认为不必要的计算。在我们的例子中，它会把 \texttt{std::find} 的结果标记为必要，这样真正用于查找针的代码就不会被优化掉。
+
+使用诸如 \texttt{objdump} 之类的工具，或 Compiler Explorer（Godbolt）、Quick Bench 之类的网站，可以让你查看想要运行的代码是否被优化掉了。Quick Bench 还有一个额外优势：能在云端运行基准测试并在线分享结果。
+
+回到手头的任务，我们已经有了线性查找的微基准测试，现在在另一个微基准测试中为二分查找计时：
+
+\begin{codebox}[text]
+void binary_search_in_sorted_vector(benchmark::State &state) {
+  auto haystack = make_sorted_vector<int>(MAX_HAYSTACK_SIZE);
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(lower_bound(haystack, NEEDLE));
+  }
+}
+\end{codebox}
+
+我们的新基准测试非常相似，区别只在于所用的函数：\texttt{lower\_\allowbreak{}bound} 将执行二分查找。注意，与我们的基础示例类似，我们甚至没有检查返回的迭代器指向的是 vector 中的有效元素还是其末尾。就 \texttt{lower\_\allowbreak{}bound} 而言，我们可以检查迭代器所指的元素是否就是我们要找的那个。
+
+现在我们已经有了微基准测试函数，下面通过添加以下内容把它们变成真正的基准测试：
+
+\begin{codebox}[text]
+BENCHMARK(binary_search_in_sorted_vector);
+BENCHMARK(linear_search_in_sorted_vector);
+\end{codebox}
+
+如果默认的基准测试设置对你来说没问题，那么只需传入这些就够了。最后一步，我们添加一个 \texttt{main()} 函数：
+
+\begin{codebox}[text]
+BENCHMARK_MAIN();
+\end{codebox}
+
+就这么简单！或者，你也可以把程序链接到 \texttt{benchmark\_\allowbreak{}main}，而不用自己用 \texttt{BENCHMARK\_\allowbreak{}MAIN(\allowbreak{})\allowbreak{}} 定义 \texttt{main()}。使用 Google Benchmark 的 \texttt{main()} 函数的好处是它为我们提供了一些默认选项。如果你编译我们的基准测试并以 \texttt{--help} 作为参数运行它，就会看到以下内容：
+
+\begin{codebox}[text]
+benchmark [--benchmark_list_tests={true|false}]
+          [--benchmark_filter=<regex>]
+          [--benchmark_min_time=<min_time>]
+          [--benchmark_min_warmup_time=<min_warmup_time>]
+          [--benchmark_repetitions=<num_repetitions>]
+          [--benchmark_dry_run={true|false}]
+          [--benchmark_enable_random_interleaving={true|false}]
+          [--benchmark_report_aggregates_only={true|false}]
+          [--benchmark_display_aggregates_only={true|false}]
+          [--benchmark_format=<console|json|csv>]
+          [--benchmark_out=<filename>]
+          [--benchmark_out_format=<json|console|csv>]
+          [--benchmark_color={auto|true|false}]
+          [--benchmark_counters_tabular={true|false}]
+          [--benchmark_context=<key>=<value>,...]
+          [--benchmark_time_unit={ns|us|ms|s}]
+          [--v=<verbosity>]
+\end{codebox}
+
+这是一组很好用的功能。例如，在设计实验时，你可以使用 \texttt{benchmark\_\allowbreak{}format} 开关来获得 CSV 输出，以便更轻松地绘制图表。
+
+\label{idx:1167}
+现在我们在不带任何命令行参数的情况下运行编译好的可执行文件，看看基准测试的实际效果。运行 \texttt{.\allowbreak{}/\allowbreak{}microbenchmark\_\allowbreak{}1} 可能得到如下输出：
+
+\begin{codebox}[text]
+2025-01-31T18:27:16+01:00
+Running ./benchmark_1
+Run on (20 X 2022.06 MHz CPU s)
+CPU Caches:
+  L1 Data 48 KiB (x10)
+  L1 Instruction 32 KiB (x10)
+  L2 Unified 1280 KiB (x10)
+  L3 Unified 24576 KiB (x1)
+Load Average: 2.18, 2.55, 2.42
+-------------------------------------------------------------------------
+Benchmark                Time       CPU  Iterations
+-------------------------------------------------------------------------
+binary_search_in_sorted_vector       24.2 ns         24.2 ns     28711079
+linear_search_in_sorted_vector        471 ns          471 ns      1477557
+\end{codebox}
+
+开头是一些关于运行环境的数据（基准测试的时间、可执行文件名称、服务器的 CPU 以及当前负载），随后是我们定义的每个基准测试的结果。对每个基准测试，我们可以得到每次迭代的平均墙上时间（wall time，即代码从头到尾实际运行的时间）、每次迭代的平均 CPU 时间，以及基准测试框架为我们运行的迭代次数。默认情况下，单次迭代耗时越长，运行的迭代次数就越少。运行更多次迭代能确保结果更加稳定。
+
+\subsubsection{通过参数捕获复用微基准测试逻辑}
+
+\label{idx:1168}
+如果我们要测试更多处理手头问题的方式，可以寻找一种方法来复用基准测试代码，只需把用于执行查找的函数传进去即可。Google Benchmark 有一项功能可供我们使用。该框架允许我们通过把任意参数作为额外参数添加到函数签名中，把它们传给基准测试。
+
+下面看看我们基准测试的统一签名可以是什么样子：
+
+\begin{codebox}[text]
+void search_in_sorted_vector(benchmark::State &state, auto finder) {
+  auto haystack = make_sorted_vector<int>(MAX_HAYSTACK_SIZE);
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(finder(haystack, NEEDLE));
+  }
+}
+\end{codebox}
+
+你会注意到函数新增了 \texttt{finder} 参数，它被用在我们之前调用 \texttt{find} 或 \texttt{lower\_\allowbreak{}bound} 的位置。现在我们可以用与上次不同的宏来创建这两个微基准测试：
+
+\begin{codebox}[text]
+BENCHMARK_CAPTURE(search_in_sorted_vector, binary, lower_bound);
+BENCHMARK_CAPTURE(search_in_sorted_vector, linear, find);
+\end{codebox}
+
+\texttt{BENCHMARK\_\allowbreak{}CAPTURE} 宏接受函数、名称后缀以及任意数量的参数。如果我们想要更多参数，直接在这里传入即可。我们的基准测试函数可以是普通函数，也可以是模板——两者都支持。
+
+现在我们看看运行这段代码会得到什么：
+
+\begin{codebox}[text]
+-------------------------------------------------------------------------
+Benchmark                               Time             CPU   Iterations
+-------------------------------------------------------------------------
+search_in_sorted_vector/binary       24.4 ns         24.4 ns     28365179
+search_in_sorted_vector/linear        441 ns          441 ns      1597863
+\end{codebox}
+
+\label{idx:1169}
+如你所见，传给函数的参数并不构成名称的一部分，但函数名和我们的后缀会。
+
+现在我们来看看如何进一步定制基准测试。
+
+\subsubsection{使用微基准测试参数改变输入规模}
+
+\label{idx:1170}
+在设计像我们这样的实验时，一个常见需求是在不同规模的参数上检验它们。这类需求在 Google Benchmark 中有多种满足方式。最简单的是在 \texttt{BENCHMARK} 宏返回的对象上调用 \texttt{Args()}。这样，我们可以传入一组值供某个微基准测试使用。要使用传入的值，我们需要按如下方式修改基准测试函数：
+
+\begin{codebox}[cpp]
+void search_in_sorted_vector(benchmark::State &state, auto finder) {
+  const auto haystack = make_sorted_vector<int>(state.range(0));
+  constexpr auto needle = 2137;
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(finder(haystack, needle));
+  }
+}
+\end{codebox}
+
+调用 \texttt{state.\allowbreak{}range(\allowbreak{}0)\allowbreak{}} 会读取传入的第 0 个参数。可以支持任意数量的参数。在我们的例子中，它用于参数化草堆的大小。
+
+\label{idx:1171}
+如果我们想改为传入一个值集合的范围呢？这样，我们就能更容易地看出改变规模会如何影响性能。为此，我们可以不调用 \texttt{Args()}，而是在基准测试上调用 \texttt{Range()}：
+
+\begin{codebox}[cpp]
+constexpr auto MIN_HAYSTACK_SIZE = std::size_t{1'000};
+constexpr auto MAX_HAYSTACK_SIZE = std::size_t{10'000'000};
+BENCHMARK_CAPTURE(search_in_sorted_vector, binary, lower_bound)
+    ->RangeMultiplier(10)
+    ->Range(MIN_HAYSTACK_SIZE, MAX_HAYSTACK_SIZE);
+BENCHMARK_CAPTURE(search_in_sorted_vector, linear, find)
+    ->RangeMultiplier(10)
+    ->Range(MIN_HAYSTACK_SIZE, MAX_HAYSTACK_SIZE);
+\end{codebox}
+
+我们用预定义的最小值和最大值来指定范围的边界。然后告诉基准测试框架按乘以 10 而不是默认值来创建范围。运行这类基准测试时，我们可能得到如下结果：
+
+\begin{codebox}[text]
+-------------------------------------------------------------------------
+Benchmark                                 Time        CPU     Iterations
+-------------------------------------------------------------------------
+search_in_sorted_vector/binary/1000           6.25 ns         6.24 ns    110876712
+search_in_sorted_vector/binary/10000          11.7 ns         11.7 ns     59759090
+search_in_sorted_vector/binary/100000         14.0 ns         14.0 ns     49900767
+search_in_sorted_vector/binary/1000000        17.7 ns         17.7 ns     39763768
+search_in_sorted_vector/binary/10000000       24.2 ns         24.2 ns     28917491
+search_in_sorted_vector/linear/1000            210 ns          210 ns      3327907
+search_in_sorted_vector/linear/10000           437 ns          437 ns      1600476
+search_in_sorted_vector/linear/100000          437 ns          437 ns      1602461
+search_in_sorted_vector/linear/1000000         441 ns          441 ns      1601974
+search_in_sorted_vector/linear/10000000        437 ns          437 ns      1601447
+\end{codebox}
+
+\label{idx:1172}
+你可能会奇怪，为什么线性查找没有表现出线性增长。这是因为我们查找的是一个固定值的针，它出现在固定的位置。如果草堆中包含我们的针，那么无论草堆多大，找到它所需的操作数都相同，因此执行时间不再增长（但仍可能出现小幅波动）。
+
+为什么不也试试改变针的位置呢？
+
+虽然用 \texttt{Args()} 或 \texttt{Range()} 传入固定值很有用，但有时我们希望在控制输入方面有更大的灵活性。用一个简单的函数来同时生成草堆大小和针的位置可能是最容易的。Google Benchmark 允许以编程方式生成参数来应对这类场景。
+
+我们首先重写基准测试函数，让每次迭代使用两个参数：
+
+\begin{codebox}[text]
+void search_in_sorted_vector(benchmark::State &state, auto finder) {
+  const auto needle = state.range(0);
+  const auto haystack = make_sorted_vector<int>(state.range(1));
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(finder(haystack, needle));
+  }
+}
+\end{codebox}
+
+如你所见，\texttt{state.\allowbreak{}range(\allowbreak{}0)\allowbreak{}} 表示针的位置，而 \texttt{state.\allowbreak{}range(\allowbreak{}1)\allowbreak{}} 则是草堆大小。这意味着我们每次需要传入两个值，而这个函数负责生成它们：
+
+\begin{codebox}[text]
+void generate_sizes(benchmark::internal::Benchmark *b) {
+  for (long haystack = MIN_HAYSTACK_SIZE; haystack <= MAX_HAYSTACK_SIZE;
+       haystack *= 100) {
+    for (auto needle :
+         {haystack / 8, haystack / 2, haystack - 1, haystack + 1}) {
+      b->Args({needle, haystack});
+    }
+  }
+}
+\end{codebox}
+
+我们不再使用 \texttt{Range()} 和 \texttt{Range\allowbreak{}Multiplier(\allowbreak{})\allowbreak{}}，而是写一个循环来生成草堆大小，这次每次增加 100。至于针，我们使用草堆中成比例的三个位置，以及一个落在草堆之外的位置。我们在每次循环迭代中调用 \texttt{Args}，传入生成的两个值。
+
+现在，把我们的生成器函数应用到基准测试上：
+
+\begin{codebox}[text]
+BENCHMARK_CAPTURE(search_in_sorted_vector, binary, lower_bound)->Apply(generate_sizes);
+BENCHMARK_CAPTURE(search_in_sorted_vector, linear, find)->Apply(generate_sizes);
+\end{codebox}
+
+\label{idx:1173}
+使用这类函数可以轻松地把同一个生成器传给多个基准测试。这类基准测试可能得到的结果如下：
+
+\begin{codebox}[text]
+-------------------------------------------------------------------------
+Benchmark                                        Time     CPU  Iterations
+-------------------------------------------------------------------------
+...
+search_in_sorted_vector/binary/1250000/10000000        24.2 ns         24.2 ns     29021816
+search_in_sorted_vector/binary/5000000/10000000        24.1 ns         24.1 ns     29127297
+search_in_sorted_vector/binary/9999999/10000000        24.1 ns         24.1 ns     29109150
+search_in_sorted_vector/binary/10000001/10000000       24.1 ns         24.1 ns     29127571
+...
+search_in_sorted_vector/linear/1250000/10000000      255229 ns       255119 ns         2755
+search_in_sorted_vector/linear/5000000/10000000     1207806 ns      1207357 ns          601
+search_in_sorted_vector/linear/9999999/10000000     2857079 ns      2856264 ns          248
+search_in_sorted_vector/linear/10000001/10000000    2847455 ns      2846680 ns          246
+// et cetera
+\end{codebox}
+
+现在，我们有了一个定义得相当清晰的查找实验。作为练习，请在你自己的机器上运行这个实验，查看完整结果，并试着从结果中得出一些结论。
+
+作为对比，相同的基准测试将使用 Catch2 和 nanobench 框架来实现。
+
+\subsubsection{使用 Catch2 进行基准测试}
+
+\label{idx:1174}
+\label{idx:1175}
+Catch2 是一个测试框架，介绍见 \emph{第 10 章} \emph{编写可测试代码}。使用该框架实现线性查找和二分查找的方式如下：
+
+\begin{codebox}[text]
+TEST_CASE("binary_search_in_sorted_vector", "[benchmark]") {
+  BENCHMARK_ADVANCED("lower_bound")(Catch::Benchmark::Chronometer meter) {
+    auto haystack = make_sorted_vector(MAX_HAYSTACK_SIZE);
+    meter.measure([&] { return lower_bound(haystack, NEEDLE); });
+  };
+}
+TEST_CASE("linear_search_in_sorted_vector", "[benchmark]") {
+  BENCHMARK_ADVANCED("find")(Catch::Benchmark::Chronometer meter {
+  auto haystack = make_sorted_vector(MAX_HAYSTACK_SIZE);
+  meter.measure([&] { return find(haystack, NEEDLE); }); }; }
+}
+\end{codebox}
+
+\label{idx:1176}
+\texttt{BENCHMARK\_\allowbreak{}ADVANCED} 块会被调用两次：一次在估算阶段，一次在执行阶段，以便从测试的总执行时间中扣除被测代码的执行时间。被测代码显然是在 \texttt{measure()} 函数中调用的。\texttt{return} 语句很重要，可以避免基准测试的代码被编译器优化掉。
+
+\label{idx:1177}
+与 Google Benchmark 不同，Catch2 中没有 \texttt{BENCHMARK\_\allowbreak{}CAPTURE} 这类宏。因此，线性查找和二分查找的基准测试只使用一个公共函数。相同的功能也可以通过其他方式实现：
+
+\begin{codebox}[text]
+void search_in_sorted_vector(Catch::Benchmark::Chronometer &meter, auto finder) {
+  auto haystack = make_sorted_vector(MAX_HAYSTACK_SIZE);
+  meter.measure([&] { return finder(haystack, NEEDLE); });
+}
+TEST_CASE("binary_search_in_sorted_vector", "[benchmark]") {
+  BENCHMARK_ADVANCED("lower_bound")(Catch::Benchmark::Chronometer meter) {
+    search_in_sorted_vector(meter, lower_bound);
+  };
+}
+TEST_CASE("linear_search_in_sorted_vector", "[benchmark]") {
+  BENCHMARK_ADVANCED("find")(Catch::Benchmark::Chronometer meter) {
+    search_in_sorted_vector(meter, find);
+  };
+}
+\end{codebox}
+
+Catch2 中的数据驱动测试通过数据生成器来实现，并且该框架支持自定义生成器：
+
+\begin{codebox}[cpp]
+Catch::Generators::GeneratorWrapper<size_t> size_generator() {
+  struct Generator final : Catch::Generators::IGenerator<size_t> {
+    size_t cur{MIN_HAYSTACK_SIZE}, end{MAX_HAYSTACK_SIZE}, multiplier{10};
+    const size_t& get() const override { return cur; }
+    bool next() override {
+      cur *= multiplier;
+      return cur < end;
+    }
+  };
+  return Catch::Generators::GeneratorWrapper<size_t>{
+      Catch::Detail::make_unique<Generator>()};
+}
+TEST_CASE("binary_search_in_sorted_vector", "[benchmark]") {
+  const auto size = GENERATE(size_generator());
+  search_in_sorted_vector("lower_bound", size, lower_bound);
+}
+TEST_CASE("linear_search_in_sorted_vector", "[benchmark]") {
+  const auto size = GENERATE(size_generator());
+  search_in_sorted_vector("find", size, find);
+}
+\end{codebox}
+
+\label{idx:1178}
+\label{idx:1179}
+在 Catch2 中，也可以借助 \texttt{BENCHMARK} 宏来复用带不同参数的基准测试：
+
+\begin{codebox}[cpp]
+void search_in_sorted_vector(const std::string &benchmarkName, std::size_t size,
+                             int needle, auto finder) {
+  auto haystack = make_sorted_vector<int>(size);
+  BENCHMARK(std::format("{}/{}/{}", benchmarkName, needle, size)) {
+    return finder(haystack, needle);
+  };
+}
+void generate_sizes(const std::string &benchmarkName, auto finder) {
+  for (std::size_t haystack = MIN_HAYSTACK_SIZE; haystack <= MAX_HAYSTACK_SIZE;
+       haystack *= 100) {
+    for (auto needle :
+         {haystack / 8, haystack / 2, haystack - 1, haystack + 1}) {
+      search_in_sorted_vector(benchmarkName, haystack, needle, finder);
+    }
+  }
+}
+TEST_CASE("binary_search_in_sorted_vector", "[benchmark]") {
+  generate_sizes("lower_bound", lower_bound);
+}
+TEST_CASE("linear_search_in_sorted_vector", "[benchmark]") {
+  generate_sizes("find", find);
+}
+\end{codebox}
+
+\label{idx:1180}
+\label{idx:1181}
+如果你已经在使用 Catch2 进行测试，那么它是一个不错的选择。它提供了相当不错的基准测试能力，并减少了对额外依赖的需求。
+
+\subsubsection{使用 nanobench 进行基准测试}
+
+\label{idx:1182}
+\label{idx:1183}
+nanobench（通过 \texttt{ankerl::\allowbreak{}nanobench} 命名空间使用）是一个轻量级、单头文件、与平台无关的库，支持 C++11/14/17/20，其设计目的是被包装到另一个测试框架中运行。该框架会根据基准测试的多次运行计算渐进复杂度（大 O），并能生成多种格式的报告（Mustache、CSV、HTML Box Plots、JSON 或 pyperf）。
+
+使用 nanobench 和 doctest（上一章介绍的测试框架）实现线性查找和二分查找的方式如下：
+
+\begin{codebox}[text]
+TEST_CASE("binary_search_in_sorted_vector") {
+  ankerl::nanobench::Bench().run("binary_search_in_sorted_vector", [&]() {
+    auto haystack = make_sorted_vector(MAX_HAYSTACK_SIZE);
+    ankerl::nanobench::doNotOptimizeAway(lower_bound(haystack, NEEDLE));
+  });
+}
+TEST_CASE("linear_search_in_sorted_vector") {
+  ankerl::nanobench::Bench().run("linear_search_in_sorted_vector", [&]() {
+    auto haystack = make_sorted_vector(MAX_HAYSTACK_SIZE);
+    ankerl::nanobench::doNotOptimizeAway(find(haystack, NEEDLE));
+  });
+}
+\end{codebox}
+
+nanobench 没有 \texttt{BENCHMARK\_\allowbreak{}CAPTURE} 这类宏，但与 Google Benchmark 相同的功能可以通过其他方式实现：
+
+\begin{codebox}[cpp]
+void search_in_sorted_vector(const std::string &benchmarkName, auto finder){
+    ankerl::nanobench::Bench().run(benchmarkName, [&]() {
+    auto haystack = make_sorted_vector(MAX_HAYSTACK_SIZE);
+    ankerl::nanobench::doNotOptimizeAway(finder(haystack, NEEDLE));
+  });
+}
+TEST_CASE("binary_search_in_sorted_vector") {
+  search_in_sorted_vector("binary_search_in_sorted_vector", lower_bound);
+}
+TEST_CASE("linear_search_in_sorted_vector") {
+  search_in_sorted_vector("linear_search_in_sorted_vector", find);
+}
+\end{codebox}
+
+\label{idx:1184}
+使用不同的输入参数运行 nanobench 基准测试非常简单：
+
+\begin{codebox}[cpp]
+void search_in_sorted_vector(const std::string &benchmarkName, auto finder) {
+  for (std::size_t s = MIN_HAYSTACK_SIZE; s <= MAX_HAYSTACK_SIZE; s *= 10) 
+  {
+          ankerl::nanobench::Bench().run(
+          std::format("{}/{}", benchmarkName, s), [&]() {
+          auto haystack = make_sorted_vector<int>(s);
+          constexpr auto needle = 2137;
+          ankerl::nanobench::doNotOptimizeAway(finder(haystack, needle));
+        });
+  }
+}
+TEST_CASE("binary_search_in_sorted_vector") {
+  search_in_sorted_vector("binary_search_in_sorted_vector", lower_bound);
+}
+TEST_CASE("linear_search_in_sorted_vector") {
+  search_in_sorted_vector("linear_search_in_sorted_vector", find);
+}
+\end{codebox}
+
+\label{idx:1185}
+要测量渐进复杂度，所有基准测试必须运行在同一个 \texttt{bench} 对象上：
+
+\begin{codebox}[cpp]
+void search_in_sorted_vector(ankerl::nanobench::Bench &bench,
+                             const std::string &benchmarkName,
+                             const std::size_t size, int needle, auto finder) {
+        bench.complexityN(size).run(
+        std::format("{}/{}/{}", benchmarkName, needle, size), [&]() {
+        auto haystack = make_sorted_vector<int>(size);
+        ankerl::nanobench::doNotOptimizeAway(finder(haystack, needle));
+      });
+}
+void generate_sizes(ankerl::nanobench::Bench &bench,
+                    const std::string &benchmarkName, auto finder) {
+  for (std::size_t haystack = MIN_HAYSTACK_SIZE; haystack <= 
+       MAX_HAYSTACK_SIZE; haystack *= 100) {
+       for (auto needle :
+         {haystack / 8, haystack / 2, haystack - 1, haystack + 1}) {
+          search_in_sorted_vector(bench, benchmarkName, haystack, needle,
+                                  finder);
+         }
+  }
+}
+TEST_CASE("binary_search_in_sorted_vector") {
+  ankerl::nanobench::Bench bench;
+  generate_sizes(bench, "binary_search_in_sorted_vector", lower_bound);
+  std::cout << bench.complexityBigO() << std::endl;
+}
+TEST_CASE("linear_search_in_sorted_vector") {
+  ankerl::nanobench::Bench bench;
+  generate_sizes(bench, "linear_search_in_sorted_vector", find);
+  std::cout << bench.complexityBigO() << std::endl;
+}
+\end{codebox}
+
+\label{idx:1186}
+\label{idx:1187}
+本节和上一节的目的是展示如何在不使用 Google Benchmark 的情况下实现具有类似功能的基准测试。例如，你可能已经在使用 Catch2，而再引入另一个基准框架会增加项目的复杂度。
+
+或者，如果出于某种原因本章介绍的框架不适合你，可以考虑 hyperfine、Celero、nonius、picobench、sltbench、plf::nanotimer 或 microbench 等基准测试框架。
+
+\subsubsection{选择对什么进行微基准测试与优化}
+
+\label{idx:1188}
+运行这类实验可能很有教育意义，甚至令人上瘾。但请记住，微基准测试不应该是项目中唯一的一类性能测试。正如 Donald Knuth 在其论文 \emph{Structured Programming with go to Statements}（1974）中那句名言所说：
+
+\begin{myQuote}
+我们应该忽略那些微小的效率提升，大约 97\% 的情况下都应如此：过早优化是万恶之源
+
+\end{myQuote}
+
+这意味着你只应对真正重要的代码做微基准测试，尤其是热路径上的代码。更大规模的基准测试，再加上追踪和性能分析，可以帮助你看清应该在何处、何时进行优化，而不是靠猜测和过早优化。首先，要理解你的软件是如何执行的。
+
+\begin{myNotic}{注意}
+
+关于前面那句引文，我们还想再补充一点。它并不意味着你可以任由过早的\emph{劣化}发生。数据结构或算法选择不当，甚至只是遍布整个代码库的微小低效，有时也会影响系统的整体性能。例如，执行不必要的动态分配，虽然一开始看起来问题不大，但随着时间推移会导致堆碎片化，如果你的应用需要长时间运行，就会给你带来严重麻烦。过度使用基于节点的容器也会导致更多的缓存未命中。长话短说，如果写出高效代码而非低效代码并不会花费太多精力，那就去做。
+\end{myNotic}
+
+\label{idx:1189}
+我们已经介绍了如何谨慎地着手性能改进，接下来看看如何长期保持稳定的性能，尤其是在代码库中对性能敏感的部分。
+
+\subsubsection{使用基准测试创建性能测试}
+
+\label{idx:1190}
+就像用单元测试做精确验证、用功能测试做更大规模的正确性测试一样，你也可以用微基准测试和更大规模的基准测试来检验代码的性能。
+
+\label{idx:1191}
+如果你对某些代码路径的执行时间有严格约束，那么有一个确保满足该限制的测试会非常有用。即使没有这类具体约束，你也可能想要监控性能随代码变更而发生的变化。如果在某次变更之后，代码的运行速度比之前慢了超过某个阈值，就可以将该测试标记为失败。
+
+这类测试虽然也是一种有用的工具，但请记住，它们容易受到温水煮青蛙效应的影响：随时间缓慢退化的性能可能一直不被察觉，所以一定要偶尔检查一下执行时间。在把性能测试引入 CI 时，务必始终在相同的环境中运行，以获得稳定的结果。
+
+接下来我们讨论性能工具箱里的下一类工具。
+
+\subsection{性能分析}
+
+\label{idx:1192}
+\label{idx:1193}
+基准测试和追踪能为给定范围提供具体的测量值和整体概览，而性能分析器则能帮你分析这些性能数字从何而来。如果你需要深入了解性能并加以改进，它是必不可少的工具。
+
+\subsubsection{选择要使用的性能分析器类型}
+
+可用的性能分析器有两种：插桩式分析器和采样式分析器。
+
+\label{idx:1194}
+插桩式分析器的工作原理是向程序的源代码或编译后的二进制文件中添加额外的指令，以跟踪特定事件。这类分析器（例如 Callgrind，它是适用于 Linux、Android、FreeBSD、Solaris、Illumos 和 macOS 的 Valgrind 工具套件）会引入大量开销，因为它们需要插入额外的代码（插桩）来记录每次函数调用的精确时间和频率。这样，它们产生的结果包含详细数据，甚至包括最小函数的行为，但它们报告的执行时间可能会因分析开销而失真。
+
+它们还有一个缺点，就是并不总能捕捉到\textbf{输入/输出}（\textbf{I/O}）的缓慢和抖动。它们会拖慢执行速度，因此虽然能告诉你某个特定函数被调用了多少次，却无法告诉你变慢是否是因为在等待磁盘读取完成。
+
+由于插桩式分析器存在这些缺陷，通常更好的做法是使用采样式分析器，它们采用统计学方法定期探测调用栈，而不是记录每一次调用。这类分析器轻量且非常擅长识别性能瓶颈，因为少数几个函数往往占据了大部分执行时间。
+
+值得一提的两个工具是用于在 Linux 系统上做性能分析的开源工具 \texttt{perf}，以及 Intel 的专有工具 VTune（对开源项目免费）。尽管由于采样本身的特性，它们有时会漏掉关键事件，但通常能让你更清楚地看到代码把时间花在了哪里。
+
+如果你决定使用 perf，应该知道可以通过调用 \texttt{perf stat} 来使用它，它会快速给出 CPU 缓存使用情况等统计概览。若要做更详细的分析，可以用 \texttt{perf record -g} 采集结果，再用 \texttt{perf report -g} 进行分析。
+
+如果你不使用 Linux，或者这些工具不足以满足你的需求，那么可以考虑以下采样式分析器：gprof（Linux/Unix）、Very Sleepy（Windows）、Superluminal（Windows、Xbox One、PlayStation 以及 C++、Rust、.NET）、AMD uProf CPU profiler（Windows、Linux 和 FreeBSD）以及 Linaro MAP（Linaro Forge）。
+
+\label{idx:1195}
+请观看 Hubert Matthews 和 Chandler Carruth 的视频，其中展示了这些工具的能力以及如何使用它们，能让你对 \texttt{perf} 及其他一些工具有扎实的了解。两者的链接都在\emph{延伸阅读}一节中。
+
+插桩式分析器需要直接集成到 C++ 代码库中，而采样式分析器虽然也很常用，但通常作为外部工具运行。因此，下面我们更详细地看看前者。
+
+插桩式分析器的一个例子是 Tracy，它是一种混合分析器，结合了手动插桩（基于帧的分析）和自动采样（统计分析）来分析性能。它在 C++ 场景中很有价值，尤其适用于游戏、实时系统或高性能计算等对性能要求极高的应用。该分析器可直接集成到 C++ 代码中，并实时提供细粒度的性能分析。它还支持 C、Lua、Python 和 Fortran 等其他编程语言，并为 Rust、Zig、C\#、OCaml、Odin 等提供了第三方绑定。
+
+Tracy 专为面向帧的应用而设计，用于检测拖慢帧的瓶颈。它有详尽的指南，并可在 Linux、macOS、Windows、Android、iOS、FreeBSD、QNX、Fuchsia 和 WSL 等主要平台上运行。
+
+\label{idx:1196}
+它支持众多功能，例如 CPU 和\textbf{图形处理器}（\textbf{GPU}）性能分析（OpenGL、Vulkan、Direct3D、Metal、OpenCL）、内存分配跟踪、锁竞争分析、上下文切换监控、帧捕获、基于 zone 的统计信息收集、追踪对比，以及源代码到汇编代码的映射。
+
+功能列表相当丰富，因此非常值得关注。但该项目仍在积极开发中，所以其协议可能不兼容。
+
+要使用 Tracy，请将该库添加到 \texttt{conanfile.\allowbreak{}py} 中：
+
+\begin{codebox}[python]
+from conan import ConanFile
+class Pkg(ConanFile):
+    settings = "os", "arch", "compiler", "build_type"
+    generators = "CMakeDeps"
+    default_options = {"tracy/*:no_exit": True}
+    def requirements(self):
+        self.requires("benchmark/1.9.4")
+        self.requires("nanobench/4.3.11")
+        self.requires("doctest/2.4.12")
+        self.requires("catch2/3.10.0")
+        self.requires("tracy/0.12.2")
+    def build_requirements(self):
+        pass
+\end{codebox}
+
+如果启用了 \texttt{TRACY\_\allowbreak{}NO\_\allowbreak{}EXIT} 选项，程序不会终止，而是等待性能分析追踪数据被发送到 Tracy 服务器。
+
+\label{idx:1197}
+为了展示 Tracy 的实际用法，这里以一个摩尔斯电码解码器为例。我们首先定义摩尔斯电码与英文字母之间的映射：
+
+\begin{codebox}[cpp]
+#include <cassert>
+#include <string>
+#include <tracy/Tracy.hpp>
+#include <unordered_map>
+using namespace std;
+const unordered_map<string, string> morse_code{
+    {".-", "A"}, {"-...", "B"}, {"-.-.", "C"}, {"-..", "D"},
+    {".", "E"}, {"..-.", "F"}, {"--.", "G"}, {"....", "H"},
+    {"..", "I"}, {".---", "J"}, {"-.-", "K"}, {".-..", "L"},
+    {"--", "M"}, {"-.", "N"}, {"---", "O"}, {".--.", "P"},
+    {"--.-", "Q"}, {".-.", "R"}, {"...", "S"}, {"-", "T"},
+    {"..-", "U"}, {"...-", "V"}, {".--", "W"}, {"-..-", "X"},
+    {"-.--", "Y"}, {"--..", "Z"}, {"-----", "0"}, {".----", "1"},
+    {"..---", "2"}, {"...--", "3"}, {"....-", "4"}, {".....", "5"},
+    {"-....", "6"}, {"--...", "7"}, {"---..", "8"}, {"----.", "9"},
+    {".-.-.-", "."}, {"--..--", ","}, {"..--..", "?"}, {".----.", "'"},
+    {"-.-.--", "!"}, {"-..-.", "/"}, {"-.--.", "("}, {"-.--.-", ")"},
+    {".-...", "&"}, {"---...", ":"}, {"-.-.-.", ";"}, {"-...-", "="},
+    {".-.-.", "+"}, {"-....-", "-"}, {"..--.-", "_"},     {".-..-.", "\""},
+    {"...-..-", "$"}, {".--.-.", "@"}, {"...---...", "SOS"}};
+\end{codebox}
+
+\label{idx:1198}
+\texttt{Zone\allowbreak{}Scoped} 和 \texttt{Zone\allowbreak{}Scoped\allowbreak{}N} 是 Tracy 库中用于标记被测作用域的宏。它们会记录函数名、源文件名和位置。第一个宏根据函数名自动为作用域命名，第二个宏则允许使用任意名称。宏的列表并不仅限于这两个：
+
+\begin{codebox}[cpp]
+std::string decode_morse(const std::string &morse_msg) {
+  std::string decoded, seq;
+  bool is_space{false};
+  ZoneScoped; //作用域名称为 decode_morse
+  for (const auto c : morse_msg) {
+    ZoneScopedN("decode-loop");
+    if (c == '.' || c == '-') {
+      ZoneScopedN("dot-dash");
+      if (is_space && !decoded.empty()) decoded += ' ';
+      seq += c;
+      is_space = false;
+    } else if (c == ' ') {
+      ZoneScopedN("space");
+      if (!seq.empty()) {
+        decoded += morse_code.at(seq);
+        seq.clear();
+      } else {
+        is_space = true;
+      }
+    }
+  }
+  if (!seq.empty()) {
+    decoded += morse_code.at(seq);
+  }
+  return decoded;
+}
+int main() {
+  ZoneScoped; //作用域名称为 main
+  assert(decode_morse("-.-- --- -....- .-- .- -.-- -....- -.-- ---") = "YO-WAY-YO");
+  return 0;
+}
+\end{codebox}
+
+\label{idx:1199}
+Tracy 分析器 GUI（见\emph{图 13.1}）及其配套指南随每个版本一同发布。你可以从 Ubuntu、Debian、Arch、Gentoo 和 FreeBSD 的包管理器中安装 Tracy。在 macOS 和 Linux 上，该工具还可以通过 Homebrew 获取。或者，你也可以从源代码构建分析器，这并不需要花费太多精力。作为服务器的分析器可能因服务器与客户端之间的协议不匹配而与客户端库不兼容，因此这种情况下要使用相同的版本。下图展示了所有程序作用域，甚至包括作用域与源代码的绑定关系：
+
+\myGraphic{0.920}{images/B18456_13_01.png}{图 13.1：Tracy 分析器 GUI 概览（部分展示且已调亮）}
+
+\begin{myTip}{提示}
+想查看这幅图的高分辨率版本？请在下一代 Packt Reader 中打开本书，或在 PDF/ePub 版本中查看。
+
+购买本书即可获得\textbf{下一代 Packt Reader} 以及本书的\textbf{免费 PDF/ePub 版本}。扫描二维码，或者访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按名称查找本书。请仔细核对显示的版本，以确保你拿到的是正确的版本。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/01.png}\end{center}
+\end{myTip}
+
+\label{idx:1200}
+如果 Tracy 不适合你的需求，可以考虑以下插桩式分析库：gperftools（Linux、macOS、FreeBSD、Windows）、Optick（原 Brofiler；Linux、Windows、macOS）、Perfetto（Android、Linux、CrOS、macOS、Windows）、easy\_profiler（Linux、macOS、FreeBSD、Windows、QNX、Android）、Palanteer（Linux、Windows）、Coz: Causal Profiling（Linux）、Spall、microprofile（OpenGL、D3D11、D3D12、Vulkan）、MicroProfiler（Linux、Windows）或 DTrace（Solaris、Illumos、macOS、FreeBSD、OpenBSD、NetBSD、Linux、Windows，以及嵌入式系统）。
+
+使用 IDE 内置的性能工具也很有意义，例如 Visual Studio IDE 中的 Windows Performance Toolkit、Xcode（macOS）中的 Apple Instruments、Qt Creator 中的 Performance Analyzer，以及 CLion 中的 CPU profiler（基于 \texttt{perf} 和 DTrace）。
+
+\label{idx:1201}
+要分析编译过程，有几种选择：CMake 自 3.18 起支持通过 \texttt{--profiling-format=\allowbreak{}google-trace} 和 \texttt{--profiling-output=\allowbreak{}path} 标志进行分析；ninjatracing 可以将 \texttt{.\allowbreak{}ninja\_\allowbreak{}log} 文件转换为 Chrome 的 \texttt{about:tracing} 格式；Clang Build Analyzer。
+
+\subsubsection{准备环境并处理结果}
+
+\label{idx:1202}
+\label{idx:1203}
+在分析性能分析结果时，你往往需要做一些准备工作、清理和处理。例如，如果你的代码大部分时间都在空转，你可能想把它过滤掉。在启动分析器之前，务必尽可能为你的代码、依赖项，甚至操作系统库和内核编译或下载调试符号。此外，禁用帧指针优化也至关重要。在 GCC 和 Clang 上，可以通过传入 \texttt{-fno-omit-frame-pointer} 标志来实现。它不会对性能产生太大影响，却能为你提供关于代码执行情况的更多数据。
+
+至于结果的后处理，在使用 perf 时，通常最好根据结果生成火焰图。本节\emph{延伸阅读}中 Brendan Gregg 的工具就很适合做这件事。火焰图是一种简单而有效的工具，可以看清哪些地方的执行耗时过多，因为图中每一项的宽度对应着资源使用量。你既可以生成 CPU 使用情况的火焰图，也可以为内存使用、分配、缺页等资源生成火焰图，或者针对代码未执行时花费的时间生成火焰图，例如在系统调用、互斥锁、I/O 操作等上被阻塞的时间。还有办法对生成的火焰图做差异对比。
+
+\subsubsection{分析结果}
+
+\label{idx:1204}
+请记住，并非所有性能问题都会出现在性能分析输出中，也并非所有问题都能靠分析器发现。因此，建议你对硬件环境以及软件的执行模型建立深入的理解。
+
+\label{idx:1205}
+例如，积累一定经验后，你就能看出为线程设置亲和性，或者改变哪些线程在特定 NUMA 节点上执行，可能会带来好处。\textbf{非统一内存访问}（\textbf{NUMA}）是一种计算机系统架构，其中内存访问时间取决于内存相对于处理器的位置。
+
+\label{idx:1206}
+\label{idx:1207}
+\label{idx:1208}
+此外，有些问题并不总是那么容易看出来，比如你忘了关闭节能特性，或者开启或关闭超线程会带来好处。有时你可能会发现程序中用到了 CPU 的\textbf{单指令多数据}（\textbf{SIMD}）寄存器，但代码仍未达到全速运行：你可能使用的是\textbf{流式 SIMD 扩展}（\textbf{SSE}）指令，而不是\textbf{高级矢量扩展}（\textbf{AVX}），或者用 AVX 而不是 AVX2，用 AVX2 而不是 AVX512。在分析性能分析结果时，了解你的 CPU 能够运行哪些特定指令可能至关重要。
+
+如果你无法完全控制应用运行的环境，可以依靠遥测和可观测性框架来监控实际运行中的性能。更多信息请参阅 \emph{第 17 章} \emph{可观测性} 以及 \emph{第 18 章} \emph{云原生设计}。
+
+解决性能问题也需要一些经验。但另一方面，经验有时也会让你产生错误的假设。例如，很多情况下使用动态多态会损害性能，但也有一些场景它对代码无害。在下结论之前，最好先对代码做性能分析，并了解编译器优化代码的各种方式以及这些技术的局限性。
+
+具体到 virtual 而言，当你不想让其他类型继承并覆盖虚成员函数时，将包含这些函数的类标记为 \texttt{final} 往往是有益的。在很多情况下这都能帮助编译器。
+
+\label{idx:1209}
+如果编译器能“看到”对象是什么类型，它就能优化得更好：如果你在作用域内创建一个类型并调用它的虚成员函数，编译器应该能够推断出应该调用哪个函数。GCC 通常比其他编译器更擅长去虚化（devirtualize）。更多信息可以参考\emph{延伸阅读}中 Arthur O'Dwyer 的博客文章。
+
+与本节介绍的其他类型工具一样，尽量不要只依赖分析器。性能分析结果的改善并不保证系统真的变快了。看起来更漂亮的性能剖析未必能告诉你全部真相，而且单个组件的性能提升也不一定意味着整个系统的性能得到了改善。这时，我们要介绍的最后一种工具就能派上用场。
+
+\subsection{追踪}
+
+\label{idx:1210}
+本节要讨论的最后一种技术对分布式系统特别有价值。面对通常部署在云端的整体系统时，仅在单台机器上对软件做性能分析无法说明全部情况。在这种情况下，最好的办法是追踪流经系统的请求和响应。
+
+追踪是一种记录代码执行路径的方法。当某个请求（有时还包括其响应）必须流经系统的许多部分时，常常会用到它。通常，这类消息会沿途被追踪，并在执行的观测点打上时间戳，这对于理解和调试微服务以及复杂的分布式系统至关重要。
+
+在时间戳之外，常见的补充是使用关联 ID 和追踪 ID。很多时候人们会把追踪 ID 当作关联 ID 来用，这容易造成混淆，但二者并不是一回事。追踪 ID 标识一条分布式追踪，代表单个请求跨多个服务的完整路径。而关联 ID 则把属于同一流程的相关追踪或日志条目关联起来。
+
+基本上，它们是分配给每条消息的唯一标识符。其作用是关联系统不同组件（比如不同的微服务）在处理同一个传入请求时产生的日志和追踪，有时也用于关联它引发的事件。这类 ID 应随消息传递到它所到之处，例如把 ID 添加到 HTTP 头中。即使原始请求已经消失，你也可以把它的唯一 ID 添加到所产生的每一个响应中。
+
+通过使用关联 ID 和追踪 ID，你可以追踪某个请求的消息如何在系统中传播，以及系统的不同部分处理这些消息花了多长时间。
+
+通常，除了时间戳和追踪 ID 之外，你还希望追踪能沿途捕获更多数据，例如执行计算所用的线程、为某个请求产生的响应类型和数量，或者所涉及机器的名称。
+
+\label{idx:1211}
+OpenTelemetry 之类的工具能帮你以最小的成本为系统添加这种级别的追踪支持。有意思的是，追踪还可以用来调试 CI/CD 流水线，以找出性能瓶颈；例如，有一个 Jenkins 的 OpenTelemetry 插件，可以通过对 HTTP 请求做分布式追踪来排查 Jenkins 的性能问题。
+
+接下来，我们将讨论另一个主题，了解如何编写对编译器友好的代码以实现更快的执行。
+
+\section{帮助编译器生成高性能代码}
+
+\label{idx:1212}
+本节聚焦于通过帮助编译器生成优化指令来编写更快的单线程代码。有很多做法能帮助编译器为你生成高效的代码。有些归结为正确地引导编译器，另一些则要求以对编译器友好的方式编写代码。
+
+\label{idx:1213}
+\label{idx:1214}
+同样重要的是，弄清楚关键路径上需要做什么，并对其进行高效的设计。例如，尽量避免在关键路径上使用虚调用（除非你能证明它会被去虚化），也尽量不要在关键路径上分配新内存。很多时候，通过巧妙设计代码来避免加锁（或至少使用无锁算法）会很有帮助。一般来说，凡是可能降低性能的东西，都应排除在热路径之外。让\textbf{指令缓存}（\textbf{I-cache}）和\textbf{数据缓存}（\textbf{D-cache}）都保持热态，收益会非常可观。即便是 \texttt{[[likely]]} 和 \texttt{[[unlikely]]} 这类向编译器提示应预期执行哪个分支的属性，有时也能产生影响——当然，前提是编译器没有忽略这些属性。
+
+接下来的几个小节将探讨几种帮助编译器生成更快代码的方法。
+
+\subsection{优化整个程序}
+
+\label{idx:1215}
+\label{idx:1216}
+\label{idx:1217}
+提升许多 C++ 项目性能的一个有趣方法是启用\textbf{链接时优化}（\textbf{LTO}）来优化程序，因为在常规编译期间，链接器看到的是整个程序，而不是单个编译单元（模块文件）。在常规编译阶段，编译器并不知道代码将如何与其他目标文件或库链接。许多优化可执行文件的机会只有在链接阶段才会出现，此时工具能够从整体上看到程序各部分如何相互作用。
+
+通过启用 LTO，你有时能以很小的代价获得显著的性能提升。在 CMake 项目中，可以通过设置全局的 \texttt{CMAKE\_\allowbreak{}INTERPROCEDURAL\_\allowbreak{}OPTIMIZATION} 标志，或在目标上设置 \texttt{INTERPROCEDURAL\_\allowbreak{}OPTIMIZATION} 属性来启用 LTO。
+
+\label{idx:1218}
+使用 LTO 的一个缺点是会让构建过程变长——有时会长很多。为了减轻开发者的这种成本，你可能只想在需要进行性能测试或准备发布的构建上启用这项优化。
+
+\subsection{基于真实使用模式进行优化}
+
+\label{idx:1219}
+\label{idx:1220}
+\label{idx:1221}
+\label{idx:1222}
+优化可执行文件的另一种方式是应用\textbf{配置文件引导优化}（\textbf{PGO}），又称\textbf{配置文件导向反馈}（\textbf{PDF}）或\textbf{反馈导向优化}（\textbf{FDO}）。这种编译器优化技术之所以有优势，是因为编译器在选择优化方法时并不做假设，而是依赖程序执行期间收集到的真实数据。
+
+你需要用额外的标志来编译代码，让可执行文件在运行时收集特殊的剖析信息。然后，应在预期的生产负载下运行程序。重要的是要记住，程序的测试运行应按照最典型的场景进行，这样统计数据才具有代表性；否则，程序性能甚至可能下降。
+
+在下一阶段，你可以利用收集到的数据再次编译可执行文件，这一次传入另一个标志，指示编译器使用这些收集到的数据来生成更适合你性能剖析指标的代码。
+
+这样，最终得到的二进制文件就是针对你特定工作负载准备并调优过的。
+
+\subsection{编写对缓存友好的代码}
+
+LTO 和 PGO 都有用武之地，但在开发高性能系统时，还有一件更重要的事需要牢记：缓存友好性。
+
+\label{idx:1223}
+\label{idx:1224}
+这是因为现代处理器严重依赖缓存内存，它比主存（RAM）更小、更快。因此，频繁访问的指令和数据会被加载到缓存中。当程序把活跃数据保持在缓存行内时，就能最大限度减少缓存未命中，从而带来速度提升。
+
+提高缓存效率的一种常见策略是使用扁平（flat）数据结构，而非基于节点的数据结构，这意味着运行时需要执行的指针追踪（pointer chasing）更少，有助于提升性能。使用在内存中连续的数据，无论你是正向还是反向读取，CPU 的内存预取器都能在数据被使用之前将其加载进来，这往往能带来巨大的差异。基于节点的数据结构以及前面提到的指针追踪会造成随机的内存访问模式，这些模式会“迷惑”预取器，使其无法预取正确的数据。
+
+这些考量会直接转化为实际应用中容器的性能。如果想查看一些性能结果，请参考 \emph{C++ Containers Benchmark}，其链接位于 \emph{进一步阅读} 一节。它比较了 \texttt{std::\allowbreak{}vector}、\texttt{std::list}、\texttt{std::\allowbreak{}deque} 和 \texttt{plf::\allowbreak{}colony} 的各种使用场景。如果你不了解最后一个容器，它是一种有趣的“袋”（bag）类型容器，在插入和删除大量数据时速度极快。
+
+\label{idx:1225}
+在选择关联容器时，你通常最想用的是“扁平”实现，而不是基于节点的实现（分离链接法）。这意味着，与其使用 \texttt{std::\allowbreak{}unordered\_\allowbreak{}map} 和 \texttt{std::\allowbreak{}unordered\_\allowbreak{}set}，你或许可以尝试 \texttt{tsl::\allowbreak{}hopscotch\_\allowbreak{}map}、Abseil 的 \texttt{flat\_\allowbreak{}hash\_\allowbreak{}map} 和 \texttt{flat\_\allowbreak{}hash\_\allowbreak{}set}，或者 C++23 的\texttt{ std::\allowbreak{}flat\_\allowbreak{}map} 和 \texttt{std::\allowbreak{}flat\_\allowbreak{}set}。扁平哈希映射（flat hash map）效率非常高，因为其元素直接存储在槽数组中，能提供出色的 D-cache 性能，但此类映射在插入或删除后往往不保证指针稳定性，这意味着指向其元素的指针可能因重新哈希（re-hashing）操作而失效。
+
+\label{idx:1226}
+此外，把较冷的指令（如异常处理代码）放到非内联函数中这样的技巧，有助于提高 I-cache 的热度。这样，把很少使用的代码放到单独的非内联函数中，主要的常用代码路径就能保持得更小，更好地容纳在 I-cache 中，从而维持更高的\emph{热度}（hotness）或命中率，减少 I-cache 未命中次数（额外的处理器指令加载），进而改善程序性能。
+
+为了更好地理解这些技术为何重要，下面快速看看 CPU 缓存是如何工作的，以及它们为何对性能如此关键。
+
+\myGraphic{0.920}{images/B18456_13_02.png}{图 13.2：CPU 缓存、主存（或随机存取存储器（RAM））和数据存储}
+
+\label{idx:1227}
+处理器缓存具有层级：L1、L2、L3，偶尔甚至还有 L4。L1 缓存是最小、最快的缓存，位于 CPU 内部，通常分为 I-cache 和 D-cache。L2 缓存比 L1 更大、稍慢，可以在片上或片外。L3 缓存是三者中最大、最慢的，由所有核心共享。\textbf{静态 RAM}（\textbf{SRAM}）比\textbf{动态 RAM}（\textbf{DRAM}）昂贵得多，因为静态内存不像动态内存那样需要刷新再生。L4 缓存目前并不常见，一般实现为\textbf{嵌入式 DRAM}（\textbf{eDRAM}），CPU 和 GPU 都可访问。
+
+在编写性能关键的 C++ 代码时，理解这种缓存层级至关重要。这是因为数据和指令离 L1 或 L2 缓存越近，程序运行得就越快。在设计与选择数据结构和访问模式时兼顾这一点，会有好处。
+
+\label{idx:1228}
+我们已经讨论了主存和缓存，但了解更宏观的计算机内存层级也很有帮助，它影响着数据与指令的存储和访问方式：
+
+\myGraphic{0.920}{images/B18456_13_03.png}{图 13.3：计算机内存层级（改编自康奈尔大学 Hakim Weatherspoon 的讲座幻灯片《Caches \& Memory》：\texthref{https://www.cs.cornell.edu/courses/cs3410/2019sp/schedule/slides/12-caches-pre.pdf}）}
+
+从图中可以看出，在计算机体系结构中，内存层级把计算机存储划分为不同的层级，其中内存的成本与容量和速度成反比。这种层级结构有助于加速访问位于下一更低层级、离处理器更远的庞大且相对缓慢的存储。
+
+\subsection{设计代码时兼顾数据}
+
+\label{idx:1229}
+如果你想帮助缓存更好地发挥作用，另一种有用的技术是面向数据的设计（data-oriented design）。通常，把使用更频繁的数据在内存中放得彼此靠近是个好主意。较冷的数据通常可以放到另一个 struct 中，仅通过 ID 或指针与较热的数据关联起来。
+
+例如，图节点在内存中的表示会影响图算法的性能，这涉及所用数据结构的选择：边列表（edge list）、边集数组（edge set array）、邻接表（adjacency list）、邻接矩阵（adjacency matrix）或邻接数组（adjacency array）。邻接表通常存储稀疏数据，邻接矩阵通常存储稠密数据，二者更适合快速查找和稠密图遍历；而边列表在计算时高效且内存友好。邻接矩阵通常用向量的向量（嵌套动态数组）来实现，由于存在多次内存分配，效率不高。幸运的是，C++23 引入了 \texttt{std::\allowbreak{}mdspan}，它是多维数组的一种轻量级、非拥有（non-owning）表示。这个类把多维索引映射到存储矩阵元素的单个连续向量中的某个元素，从而改善缓存局部性、减少内存碎片，且没有嵌套容器的开销。
+
+另一种做法是偏向使用“数组的对象”（objects of arrays），而非“对象的数组”（arrays of objects）。这意味着，不要把代码写成面向对象的方式，而是把对象的数据成员拆分到几个数组中，每个数组包含多个对象的数据。换句话说，来看下面这段代码：
+
+\begin{codebox}[cpp]
+struct Widget {
+    Foo foo;
+    Bar bar;
+    Baz baz;
+};
+auto widgets = std::vector<Widget>{};
+\end{codebox}
+
+\label{idx:1230}
+考虑把它替换为下面这样：
+
+\begin{codebox}[cpp]
+struct Widgets {
+    std::vector<Foo> foos;
+    std::vector<Bar> bars;
+    std::vector<Baz> bazs;
+};
+\end{codebox}
+
+这样一来，在处理针对某些对象的一组特定数据点时，D-cache 的热度会提高，性能也随之提升，因为在顺序处理过程中，当前元素之后的相续数组元素会被部分加载到 D-cache 中。如果你不确定这样做能否让代码获得更高的性能，那就去测量。
+
+有时，甚至只是重新排列类型的成员，也能带来更好的性能。这是因为数据结构在内存中的数据对齐会影响它们的存储和访问效率。如果性能很重要，那么通常一个好办法是合理安排成员顺序，让编译器不必在成员之间插入太多填充（padding）。得益于此，你的数据类型大小可以更小，从而让许多这样的相续对象都能放进一个缓存行（数据块）中，而这个缓存行是从主存中取回的实际数据。
+
+来看看下面这个例子（假设是 x86\_64 架构）：
+
+\begin{codebox}[cpp]
+struct TwoSizesAndTwoChars {
+    std::size_t first_size;
+    char first_char;
+    std::size_t second_size;
+    char second_char;
+};
+static_assert(sizeof(TwoSizesAndTwoChars) == 32);
+\end{codebox}
+
+尽管两个 size 各占 8 字节、两个 char 各只占 1 字节，我们最终却得到了总共 32 字节！这是因为 \texttt{second\_\allowbreak{}size} 必须起始于 8 字节对齐的地址，所以在 \texttt{first\_\allowbreak{}char} 之后，就出现了 7 字节的填充。对 \texttt{second\_\allowbreak{}char} 也是如此，因为类型需要相对于其最大的数据类型成员进行对齐。
+
+我们能做得更好吗？下面来试着交换一下成员的顺序：
+
+\begin{codebox}[cpp]
+struct TwoSizesAndTwoChars {
+    std::size_t first_size;
+    std::size_t second_size;
+    char first_char;
+    char second_char;
+};
+static_assert(sizeof(TwoSizesAndTwoChars) == 24);
+\end{codebox}
+
+\label{idx:1231}
+仅仅把最大的成员放在最前面，我们就将结构体的大小缩减了 8 字节——减少了 25\%。对如此微不足道的改动来说，这相当不错。如果你想把许多这样的 struct 打包到一块连续的内存中并遍历它们，那么这一改动可能带来巨大的性能提升。
+
+\emph{图 13.4} 直观地比较了 \texttt{Two\allowbreak{}Sizes\allowbreak{}And\allowbreak{}Two\allowbreak{}Chars} 结构体在重新排列成员前后的内存布局：
+
+\myGraphic{0.920}{images/B18456_13_04.png}{图 13.4：TwoSizesAndTwoChars 在计算机内存中的数据结构对齐}
+
+这样一来，就有更大量的连续数据被加载到处理器的 D-cache 中。下面我们再来谈谈另一种提升性能的方式。
+
+\section{并行化计算}
+
+\label{idx:1232}
+在本节中，我们将讨论几种并行化计算的方法，即把大任务拆分成更小的、相互独立的子任务，并在多个处理器或核心上同时执行。在开始之前，我们先简单说说如何估算通过并行化代码所能获得的最大可能收益。这里有三条定律可以帮助我们。
+
+第一条是阿姆达尔定律（Amdahl's law，见图 \emph{13.5}）。它指出，如果我们想通过投入更多核心来加速程序，那么代码中必须保持串行（无法并行化）的那部分将限制我们的可扩展性。例如，如果 90\% 的代码可以并行化，那么即使拥有无限多的核心，最多也只能得到 10 倍的加速。即便把那 90\% 的执行时间压缩到零，那 10\% 的代码也始终存在。
+
+\myGraphic{0.920}{images/B18456_13_05.png}{图 13.5：阿姆达尔定律展示了理论上的最大加速比}
+
+\label{idx:1233}
+阿姆达尔定律中关于程序并行化后最大执行加速比的公式为 \texttt{S(\allowbreak{}p,\allowbreak{} n)\allowbreak{} =\allowbreak{} 1/\allowbreak{}(\allowbreak{}1 – p +\allowbreak{} p/\allowbreak{}n)\allowbreak{}}，其中 \texttt{S(p, n)} 是期望的加速比，\texttt{p} 是程序串行执行的部分，\texttt{n} 是处理器或计算机的数量。该定律表明，最大加速比受限于程序中串行执行的那部分。
+
+第二条是古斯塔夫森定律（Gustafson's law，见图 \emph{13.6}）。它指出，任何足够大的任务都能被高效地并行化。这意味着，通过增大问题规模，我们可以获得更好的并行化效果（前提是有空闲的计算资源可用）。换句话说，有时在相同的时间框架内增加更多功能，比设法缩短现有代码的执行时间更好。如果核心数翻倍能把任务执行时间减半，那么继续把核心数翻倍最终会产生收益递减。到那时，把那部分处理能力分配到别处可能更有效。
+
+\myGraphic{0.920}{images/B18456_13_06.png}{图 13.6：古斯塔夫森定律展示了并行计算在理论上的执行时间加速比}
+
+\label{idx:1234}
+古斯塔夫森定律描述并行计算的加速比，其公式为 \texttt{S(\allowbreak{}α,\allowbreak{} n)\allowbreak{} =\allowbreak{} n }\texttt{- α(\allowbreak{}n - 1)\allowbreak{}}，其中 \texttt{S(α, n)} 是总体加速比，\texttt{n} 是处理器数量，\texttt{α} 表示计算中本质串行（无法并行化）的比例。该定律表明，通过增加处理器数量和任务规模，你可以获得比阿姆达尔定律预测更大的加速比。
+
+\label{idx:1235}
+第三条是 Gunther 博士的\textbf{通用可扩展性定律 }（\textbf{USL}，见图 \emph{13.7}），它被用于对分布式系统的可扩展性进行建模和优化，把系统可扩展性概念化为由三个不同的系统特征组成：并发性、争用和相干性。该定律在资源数量增加时对系统行为给出了更完整的描述。它同时考虑分布式系统中并行化的正面和负面影响。阿姆达尔定律关注的是并行化的局限，而 USL 则更真实地描述系统的行为。
+
+USL 的公式为 \texttt{S(\allowbreak{}α,\allowbreak{} β,\allowbreak{} n)\allowbreak{} =\allowbreak{} n/\allowbreak{}(\allowbreak{}1 +\allowbreak{} α(\allowbreak{}n - 1)\allowbreak{} +\allowbreak{} βn(\allowbreak{}n - 1)\allowbreak{})\allowbreak{}}，其中 \texttt{S(\allowbreak{}α,\allowbreak{} β,\allowbreak{} n)\allowbreak{}} 是系统的加速比，\texttt{n} 是系统中处理器或节点的数量，\texttt{α} 是争用系数，\texttt{β} 是相干系数。
+
+并发性代表理想情况，此时加速比随处理器数量线性增长。争用代表资源之间的竞争；对同一资源（内存或网络）的竞争加剧，会因对共享资源的等待或排队而限制性能提升。相干性指的是随着处理器数量增加，对同步的需求也随之增加；由于数据要通过点对点交换才能变得一致（或相干），这种延迟也会降低系统的效率。
+
+\myGraphic{0.920}{images/B18456_13_07.png}{图 13.7：通用可扩展性定律（USL）展示了并行系统中实际（α = 0.05，β = 0.001）与理想吞吐量扩展的对比}
+
+USL 的特性：
+
+\begin{itemize}
+\label{idx:1236}
+\item 当 \texttt{n} 趋于无穷大且 \texttt{α} 与 \texttt{β} 较低时，系统性能可以随处理器数量线性增长，这是可扩展性良好的系统的典型表现
+\item 在实践中，性能增长最常因资源竞争（\texttt{α}）的影响而放缓，加速不再呈线性
+\end{itemize}
+
+当处理器或节点过多时，开销（\texttt{β}）的影响变得至关重要，系统可能开始变慢，因为资源被花在协调上，而不是有用的工作上。
+
+在接下来的几个小节中，我们首先讨论并行计算中究竟适合用线程还是进程，然后探讨 C++ 引入的标准并行算法和执行策略，简要介绍 OpenMP 和 MPI 框架，最后介绍一些用于并行编程的额外工具和框架。
+
+\subsection{在线程与进程之间做选择}
+
+\label{idx:1237}
+为了高效地并行化计算，你还需要理解何时该用进程来执行计算，何时线程才是更合适的选择。
+
+只要一台机器有多个 CPU 核心，即使单机也能实现并行。如果你唯一的目标是加速工作，那么最好先从增加额外线程开始，一直加到由于 CPU 饱和而不再带来额外收益为止。到了这个节点，就通过在网络中其他机器上增加更多进程来横向扩展，而每个进程同样可以拥有多个线程。
+
+为什么加速工作时最好先从增加额外线程入手？因为进程比线程更重量级。创建进程以及在进程之间切换，比创建线程以及在线程之间切换更耗时。每个进程都需要自己的内存空间，而同一进程内的线程则共享内存。此外，进程间通信也比在线程之间传递变量更慢。使用线程比使用进程更容易，因此开发速度也会更快。
+
+\label{idx:1238}
+不过，进程在单个应用的范围内也有其用途。它们非常适合用来隔离组件，这些组件可以独立运行和崩溃，而不会把整个应用一起拖垮。拥有独立的内存也意味着一个进程无法窥探另一个进程的内存，当你需要运行可能怀有恶意的第三方代码时，这一点非常有用。正因这两个原因，浏览器等应用才使用进程。除此之外，还可以用不同的操作系统权限或特权来运行不同的进程，这是多线程无法实现的。
+
+下面我们来讨论一种在单机范围内并行化工作的简单方法。
+
+\subsection{使用标准并行算法}
+
+\label{idx:1239}
+\label{idx:1240}
+如果你执行的计算可以并行化，有两种方式可以利用这一点，我们将在本节和下一节分别介绍。第一种方式是把对标准库算法的常规调用替换为可并行化的调用。如果你不熟悉并行算法，它们是在 C++17 中加入的，行为与各自的串行版本类似，但你可以给每个算法传入一个执行策略，用以决定算法如何执行以及与底层硬件如何交互。执行策略共有四种，其中一种是在 C++20 中引入的：
+
+\begin{itemize}
+\item \texttt{std::\allowbreak{}execution::\allowbreak{}seq}：顺序策略，用于以非并行化的方式、按老样子执行算法。这一种我们再熟悉不过了。
+\item \texttt{std::\allowbreak{}execution::\allowbreak{}par}：并行策略，表示执行\emph{可以}被并行化，通常底层使用线程池。
+\item \texttt{std::\allowbreak{}execution::\allowbreak{}par\_\allowbreak{}unseq}：一种并行策略，表示执行\emph{可以}被并行化和向量化，即一条处理器指令同时作用于多个数据元素（SIMD）。
+\item \texttt{std::\allowbreak{}execution::\allowbreak{}unseq}：C++20 为该家族新增的策略。该策略表示执行可以被向量化但不能被并行化。
+\end{itemize}
+
+如果前面的策略对你来说还不够，标准库实现可能会提供额外的策略。未来可能新增的策略或许会包括面向 CUDA、SyCL、OpenCL 乃至人工智能处理器的策略。
+
+下面来看看并行算法的实际用法。举例来说，要以并行方式对一个 vector 排序，可以这样写：
+
+\begin{codebox}[cpp]
+std::sort(std::execution::par, v.begin(), v.end());
+\end{codebox}
+
+\label{idx:1241}
+\label{idx:1242}
+这简单又容易。虽然在很多情况下这能带来更好的性能，但在某些情况下，用传统方式执行算法可能更好。为什么？把工作调度到更多线程上需要额外的工作和同步。另外，取决于应用的架构，它可能影响其他已有线程的性能，并冲刷掉它们所在核心的 D-cache。一如既往，先测量。
+
+\subsection{使用 OpenMP 和 MPI}
+
+\label{idx:1243}
+\label{idx:1244}
+\label{idx:1245}
+\label{idx:1246}
+\label{idx:1247}
+实现并发与并行算法有两种常见方式：面向共享内存并行编程的 \textbf{Open Multi-Processing}（\textbf{OpenMP}）API 规范，以及在分布式内存架构中实现分布式算法的 \textbf{Message Passing Interface}（\textbf{MPI}）标准，后者是协作计算节点之间交换数据（通过消息）的一种标准化手段。OpenMP pragma 是一种简便的方式，只需添加几行代码就能并行化多种类型的计算，不过对于具有复杂数据依赖的循环或任务，其效果较差。如果你想在\textbf{高性能计算}（\textbf{HPC}）集群的多个节点上分发代码，也许可以看看 MPI 能为你做些什么。这两者可以结合起来使用。
+
+借助 OpenMP，你可以使用各种 pragma 轻松地并行化代码。例如，在 \texttt{for} 循环之前写上 \texttt{\#pragma omp parallel for}，就能让它用并行线程来执行。OpenMP 库还能做更多事情，比如在 GPU 和其他加速器上执行计算。
+
+将 MPI 集成到项目中比只是添加一个合适的 pragma 要复杂得多。在这里，你需要在代码库中使用 MPI API 来在进程之间发送或接收数据（使用 \texttt{MPI\_Send} 和 \texttt{MPI\_Recv} 之类的调用），或执行各种 gather 和 reduce 操作（调用 \texttt{MPI\_\allowbreak{}Bcast} 和 \texttt{MPI\_\allowbreak{}Reduce}，以及该系列中的其他函数）。通信可以点对点进行，也可以使用称为通信子（communicator）的对象面向所有集群进行。
+
+取决于算法的实现方式，所有 MPI 进程既可以执行相同的代码，也可以根据各自被分配的角色执行不同的代码。进程会根据自身的 rank（秩）来确定该如何行事——rank 是在计算开始时分配的一个唯一编号，用于决定该进程在执行期间的角色。说到这个，要使用 MPI 启动进程，应当通过一个包装器（wrapper）来运行，如下所示：
+
+\begin{codebox}[text]
+$ mpirun --hostfile my_hostfile -np 4 program args
+\end{codebox}
+
+这条命令会从 \texttt{my\_\allowbreak{}hostfile} 中逐一读取主机，连接到每一台主机，并用指定的参数运行四个 \texttt{program} 实例。
+
+MPI 有很多种实现。其中最著名的一种是 OpenMPI（不要把它和 OpenMP 搞混）。在众多有用特性之中，它提供了容错能力。毕竟，节点宕机并不罕见。
+
+\label{idx:1248}
+到目前为止，我们关注的都是基于 CPU 的并行方法，但现代高性能系统常常使用 GPU 之类的加速器。下面我们简要看看支持异构并行编程的平台和工具，既包括基于 GPU 的解决方案，也包括面向多核和分布式环境的更通用的框架。
+
+\subsection{其他并行编程平台与工具}
+
+\label{idx:1249}
+\label{idx:1250}
+\label{idx:1251}
+来自 NVIDIA 的一个流行并行编程平台允许使用\textbf{通用 GPU}（\textbf{GPGPU}），它就是\textbf{统一计算设备架构}（\textbf{CUDA}），它还支持分布式共享内存。为了支持非 NVIDIA 硬件，ZLUDA 库充当翻译层，允许在其他 GPU 上运行未经修改的 CUDA 应用。
+
+针对 Intel 硬件的主要 CUDA 替代方案是 Intel 的 oneAPI 计划，它包括以下内容：
+
+\begin{itemize}
+\item \textbf{SYCL（读作“sickle”）}：一种免版税的开放标准，用于以标准 C++ 为异构架构编程
+\label{idx:1252}
+\item \textbf{DPC++（Data Parallel C++）编译器}：SYCL 的一种实现，旨在跨硬件目标（CPU 以及 GPU、FPGA 等加速器）复用代码
+\label{idx:1253}
+\item \textbf{OpenCL（Open Computing Language）}：用于异构并行计算的底层 API
+\label{idx:1254}
+\item \textbf{oneTBB（oneAPI Threading Building Blocks）}：由 Intel 开发的 C++ 模板库，用于简化多核处理器上并行程序的编写
+\end{itemize}
+
+\label{idx:1255}
+\label{idx:1256}
+AMD GPU 上主要的 CUDA 替代方案有：ROCm（最初名为 Radeon Open Compute platform）及其用于移植 CUDA 代码的 \textbf{HIP}（\textbf{Heterogeneous-compute Interface for Portability}）工具、\textbf{OpenCL}（\textbf{Open Computing Language}），以及更新、更高层的 C++ 标准 SYCL。
+
+同样值得一提的还有 OpenACC，它是一种编程标准，使用预处理指令为加速器（主要是 GPU）编写并行代码。其主要目标是通过把计算卸载到图形处理器，并用特殊的编译器指令对代码进行并行化来简化面向加速器的并行应用开发，而不是采用底层编程。该规范支持 C、C++ 和 Fortran。
+
+本节我们要介绍的最后一个是 GNU Parallel，这是一个命令行实用工具，如果你想通过派生并行进程来轻松启动执行工作的进程，它可能会很有用。它既可以用在单台机器上，也可以跨计算集群使用。
+
+这些工具和平台通常部署在分布式内存环境中，例如 HPC 集群。
+
+接下来我们讨论 C++20 引入的一个重要特性：协程（coroutine）。
+
+\section{使用协程}
+
+\label{idx:1257}
+线程是操作系统层面较重量级的并发执行组件，每个线程都有自己的内存栈。相比之下，协程是可以挂起和恢复执行的函数。它们支持协作式多任务，让你能以与编写同步代码极为相似的方式编写异步代码。
+
+与使用 \texttt{std::\allowbreak{}async} 编写异步代码相比，协程可以写出更整洁、更易于理解和维护的代码。不再需要编写回调，也不必应付 \texttt{std::\allowbreak{}async} 搭配 promise 和 future 时的冗长代码。协程是比线程更轻量的替代方案，当成千上万个这类任务只需在少数几个线程上运行时，它非常适合 I/O 密集型任务。由于挂起时不会阻塞底层线程，它们在异步操作中能获得更高的效率和性能。
+
+基于 \texttt{std::\allowbreak{}async} 的代码通常因为线程切换和等待而带来更多开销。相比之下，协程的恢复和挂起成本极低（与调用函数的开销相当），这意味着它们能带来更好的延迟和吞吐量。此外，其设计目标之一就是具备极高的可扩展性，甚至能支持数十亿个并发协程。
+
+\label{idx:1258}
+\emph{图 13.8} 展示了控制权如何从调用方函数传递到协程再返回，并标出了协程让出控制权（\texttt{co\_yield}）以及调用方恢复执行（\texttt{co\_\allowbreak{}await)\allowbreak{}}）的位置。与普通函数不同，协程可以多次挂起和恢复，因而能够无限期地继续执行：
+
+\myGraphic{0.638}{images/B18456_13_08.png}{图 13.8：调用和执行协程与普通函数的对比}
+
+C++20 协程是无栈的，这意味着它们的状态并不存储在调用线程的栈上。这赋予了它们一个有趣的特性：多个不同的线程都可以接手执行同一个协程。换句话说，虽然协程函数体看起来是顺序执行的，但其中一些部分可以在不同线程中执行。这使得我们可以把函数的某些部分留给专用线程去执行。例如，I/O 操作可以在专用的 I/O 线程中完成。
+
+本书示例中使用的 Drogon Web 应用框架同样支持协程，这有助于避免回调地狱（嵌套回调），并使异步编程像同步编程一样简单。
+
+C++23 带来了一个新的标准库组件 \texttt{std::\allowbreak{}generator}，它实现了面向 range 的同步协程生成器。借助它，你可以编写使用 \texttt{co\_yield} 一次产出一个值的函数。配套函数 \texttt{std::\allowbreak{}ranges::\allowbreak{}elements\_\allowbreak{}of }允许生成器逐个产出另一个 range 的每个元素。下面这个示例用协程和 \texttt{std::\allowbreak{}generator} 实现了树的中序遍历：
+
+\begin{codebox}[cpp]
+//省略了部分代码
+...
+struct Node {
+  int value{};
+  Node *left{nullptr}, *right{nullptr};
+};
+std::generator<const Node *> in_order(const Node *node) {
+  namespace ranges = std::ranges;
+  if (node == nullptr)
+    co_return;
+  if (node->left != nullptr)
+    co_yield ranges::elements_of(in_order(node->left));
+  co_yield node;
+  if (node->right != nullptr)
+    co_yield ranges::elements_of(in_order(node->right));
+}
+void print_tree(
+    const Node *node,
+    const std::function<std::generator<const Node *>(const Node *node)> &walk) {
+  for (const auto *n : walk(node)) {
+    std::cout << n->value << ' ';
+  }
+  std::cout << std::endl;
+}
+\end{codebox}
+
+\label{idx:1259}
+此外，C++26 原本预计会引入称为纤程（fiber）的有栈协程，以避免与 C++20 的协程在名称上冲突。然而，该特性尚未在标准中确认，在撰写本书时是否纳入仍属推测。无栈协程需要编译器支持，而有栈协程则可以通过 Boost 之类的库来实现。
+
+要判断一个函数是否为 C++ 协程，你需要在函数体中查找以下关键字之一：
+
+\begin{itemize}
+\item \texttt{co\_await} 挂起协程，直到值就绪，然后把控制权返回给调用方。
+\item \texttt{co\_yield} 用于向调用方返回一个值并挂起当前协程。与 Python 的 \texttt{yield} 关键字类似，它用在生成器中。它可以惰性地生成值。
+\item \texttt{co\_\allowbreak{}return} 结束当前协程的执行，并把值（如果有）返回给调用方，该值是可选的。它相当于协程中的 \texttt{return} 关键字；不过，与普通函数不同，协程并不总是需要 \texttt{co\_\allowbreak{}return} 语句，因为它们可以被设计成无限期挂起。
+\end{itemize}
+
+只要函数体中出现上述任一关键字，该函数就会自动成为协程。除了我们刚刚了解的实现细节外，还有一个线索可供你参考：协程的返回类型必须满足一定要求；我们将在下一节介绍几种返回类型。
+
+协程在 C++ 世界里是一等公民。这意味着你可以获取它们的地址、把它们用作函数参数、从函数中返回它们，以及把它们存储在对象中。
+
+\label{idx:1260}
+\label{idx:1261}
+值得注意的是，在 C++ 中，甚至在 C++20 之前你就能编写协程。这得益于 Boost.Coroutine2 之类的库。还有一些小众工具，例如 Bloomberg 的 Quantum，也是为流处理等特定用例而开发的，不过在发源地机构之外它们并不太知名。后者甚至被用来实现 CoroKafka——一个 Bloomberg 内部库，旨在使用协程高效地处理 Kafka 流。
+
+随着标准 C++ 协程的出现，libcoro、coost、Boost.Cobalt 等新库开始涌现。
+
+要在项目中使用这些库，请把它们添加到 \texttt{conanfile.\allowbreak{}py}：
+
+\begin{codebox}[python]
+from conan import ConanFile
+class Pkg(ConanFile):
+    settings = "os", "arch", "compiler", "build_type"
+    generators = "CMakeDeps"
+    default_options = {"tracy/*:no_exit": True, "libcoro/*:with_networking": False}
+    def requirements(self):
+        self.requires("benchmark/1.9.4")
+        self.requires("nanobench/4.3.11")
+        self.requires("doctest/2.4.12")
+        self.requires("catch2/3.10.0")
+        self.requires("tracy/0.12.2")
+        # 联网功能需要 Linux
+        self.requires("libcoro/0.15.0")
+        self.requires("boost/1.88.0")
+        if not self.settings.os == "Windows":
+            self.requires("coost/3.0.2")
+    def build_requirements(self):
+        pass
+\end{codebox}
+
+在撰写本书时，libcoro 仅在 Linux 上支持联网功能，而 coost 由于编译错误在 Windows 上被禁用。
+
+\begin{myNotic}{注意}
+
+还有许多其他流行的协程相关库值得探索。
+
+高性能框架包括 Seastar（服务器端应用）、concurrencpp（任务、执行器、定时器和 C++20 协程）、async\_simple（阿里云提供的异步组件库，支持 C++20 无栈协程和 C++ 有栈协程，并附带大量异步工具）、libunifex（Meta 提供的实验性统一执行器）、Marl（用 C++11 编写的线程/纤程混合任务调度器）以及 Boost.Asio（网络与底层 I/O 编程）。
+
+\label{idx:1262}
+不太知名的库有 asyncio（一个使用 async/await 语法编写并发代码的 C++20 库）、Continuable（C++14 感知内存分配的异步 future）、Boost.fiber（用户态线程）、libfiber（面向 Linux/FreeBSD/macOS/Windows 的高性能 C/C++ 协程/纤程库，支持 select/poll/epoll/kqueue/iouring/iocp/Windows GUI）、QCoro（用于 Qt5 和 Qt6 的 C++20 协程）、cppcoro（类似 libcoro 的 C++ 协程抽象）、coros（一个为基于任务的并行而设计的仅头文件 C++23 库）以及 asio-grpc（使用 Asio/统一执行器的异步 gRPC）。
+
+新兴或实验性的库有 liburing4cpp（使用 C++20 协程的 liburing C++ 绑定）、Coop（基于 C++20 协程的协作式多任务）、COROIO（使用 C++ 协程的高性能网络库）、zpp::throwing（使用协程为独立环境实现 C++ 异常）以及 ZAB（由 liburing 支撑的 C++20 协程执行器和事件循环框架）。
+\end{myNotic}
+
+在深入实现细节之前，我们先来看看 libcoro 提供的实用工具。
+
+\subsection{区分 libcoro 的各种实用工具}
+
+\label{idx:1263}
+\label{idx:1264}
+从零开始编写基于协程的代码并不容易。C++20 只提供了编写协程所需的基础工具，因此在编写自己的协程时，我们需要一套原语。libcoro 之类的库就提供了这些原语。本节我们将介绍 libcoro 库，并演示在编写基于协程的代码时如何使用它。
+
+我们先来概览该库提供的协程类型：
+
+\begin{itemize}
+\item \texttt{coro::\allowbreak{}task<>}：用于把工作安排到稍后执行——当对它执行 \texttt{co\_await} 或 \texttt{co\_yield} 时才开始执行。
+\item \texttt{coro::\allowbreak{}generator<>}：惰性且同步地产生一个值序列。它本质上是一个 \texttt{std::\allowbreak{}range}：有一个返回迭代器的 \texttt{begin()} 和一个返回哨兵值的 \texttt{end()}。
+\label{idx:1265}
+\item \texttt{coro::\allowbreak{}ring\_\allowbreak{}buffer<>}：一个大小固定的环形缓冲区，其中的生产者和消费者按 \textbf{后进先出}（\textbf{LIFO}）的方式挂起和恢复。
+\end{itemize}
+
+你应当根据协程的预期行为来选择其返回类型。通常，如果你的协程返回生成器类型（例如 \texttt{coro::\allowbreak{}generator<T>}），你会希望用 \texttt{co\_yield} 返回数值（就像 Python 生成器那样），并同步地消费这些值。而在任务（task）中，通常你会希望用 \texttt{co\_await} 异步地安排工作。
+
+\label{idx:1266}
+该库提供的编程抽象远不止前面那些协程类型。它还提供以下类型：
+
+\begin{itemize}
+\item \textbf{可等待对象（Awaitables）}：可以对它们使用 \texttt{co\_await} 的类型，例如协程风格的 \texttt{coro::\allowbreak{}event} 以及同步原语：\texttt{coro::\allowbreak{}mutex}、\texttt{coro::\allowbreak{}shared\_\allowbreak{}mutex}、\texttt{coro::\allowbreak{}latch} 和 \texttt{coro::\allowbreak{}semaphore}
+\item \textbf{调度器（Schedulers）}——允许你通过它来安排工作的对象，例如 \texttt{coro::\allowbreak{}thread\_\allowbreak{}pool} 和 \texttt{coro::\allowbreak{}io\_\allowbreak{}scheduler}
+\item \textbf{I/O 与网络实用工具}，让你可以读写网络套接字：\texttt{coro::\allowbreak{}net::\allowbreak{}dns::\allowbreak{}resolver}（用于异步 DNS）、\texttt{coro::\allowbreak{}net::\allowbreak{}tcp::\allowbreak{}client}、\texttt{coro::\allowbreak{}net::\allowbreak{}tcp::\allowbreak{}server}、\texttt{coro::\allowbreak{}net::\allowbreak{}tls::\allowbreak{}client}（OpenSSL）、\texttt{coro::\allowbreak{}net::\allowbreak{}tls::\allowbreak{}server}（OpenSSL）、\texttt{coro::\allowbreak{}net::\allowbreak{}udp::\allowbreak{}peer}
+\label{idx:1267}
+\item \textbf{元函数与概念}，例如 \texttt{awaitable\_\allowbreak{}traits}、\texttt{awaitable}、\texttt{awaiter}、\texttt{const\_\allowbreak{}buffer}、\texttt{mutable\_\allowbreak{}buffer}、\texttt{executor}、\texttt{promise} 和 \texttt{range\_of}，它们有助于构建通用的基于协程的组件
+\end{itemize}
+
+除了上述实用工具外，libcoro 还为我们提供了一些函数——用于使用其他类并引导执行的实用工具——例如以下这些：
+
+\begin{itemize}
+\item \texttt{sync\_\allowbreak{}wait}：阻塞，直到传入的可等待对象完成
+\item \texttt{when\_all}：返回一个可等待对象，当所有传入的可等待对象都完成时它才完成
+\end{itemize}
+
+在开始把这些实用工具组合使用之前，我们再谈几句可等待对象。
+
+\subsection{深入探究可等待对象与协程的内部机制}
+
+\label{idx:1268}
+除了 libcoro 提供的之外，标准库还在 \texttt{<courotine>} 头文件中定义了两个更简单的可等待对象：\texttt{std::\allowbreak{}suspend\_\allowbreak{}never} 和 \texttt{std::\allowbreak{}suspend\_\allowbreak{}always}。它们指示一个 \texttt{await} 表达式是否应该挂起协程，并且不产生值。
+
+\label{idx:1269}
+查看它们的实现有助于我们理解在需要时如何创建自己的可等待对象：
+
+\begin{codebox}[cpp]
+struct suspend_never {
+    constexpr bool await_ready() const noexcept { return true; }
+    constexpr void await_suspend(coroutine_handle<>) const noexcept {}
+    constexpr void await_resume() const noexcept {}
+};
+struct suspend_always {
+    constexpr bool await_ready() const noexcept { return false; }
+    constexpr void await_suspend(coroutine_handle<>) const noexcept {}
+    constexpr void await_resume() const noexcept {}
+};
+\end{codebox}
+
+使用 \texttt{co\_\allowbreak{}await }运算符时，编译器会隐式调用等待体的 \texttt{await\_\allowbreak{}ready(\allowbreak{})\allowbreak{}} 方法。如果它通过返回 \texttt{true} 表示等待体已就绪，就会调用 \texttt{await\_\allowbreak{}resume(\allowbreak{})\allowbreak{}}。\texttt{await\_\allowbreak{}resume(\allowbreak{})\allowbreak{}} 的返回类型（如果有）应该是等待体实际产生的类型。如果等待体尚未就绪，程序将改为执行 \texttt{await\_\allowbreak{}suspend(\allowbreak{})\allowbreak{}}。它执行完后，有三种情况：
+
+\begin{itemize}
+\item \texttt{await\_\allowbreak{}suspend} 返回 \texttt{void}：此后执行总会挂起
+\item \texttt{await\_\allowbreak{}suspend} 返回 \texttt{bool}：执行是否挂起取决于返回的值
+\item \texttt{await\_\allowbreak{}suspend} 返回 \texttt{std::\allowbreak{}coroutine\_\allowbreak{}handle<Promise\allowbreak{}Type>}：另一个协程将被恢复
+\end{itemize}
+
+\label{idx:1270}
+\label{idx:1271}
+协程的内部机制还有更多内容。尽管协程并不使用 \texttt{return} 关键字，编译器也会在底层生成代码来管理控制流和协程状态。当使用 \texttt{co\_yield} 之类的关键字时，编译器会把它们改写为对辅助类型相应成员函数的调用。例如，调用 \texttt{co\_\allowbreak{}yield x} 等价于 \texttt{co\_await} \texttt{promise.\allowbreak{}yield\_\allowbreak{}value(\allowbreak{}x)\allowbreak{}}。如果你想更深入地了解具体发生了什么并编写自己的协程类型，请参阅 \emph{延伸阅读} 部分中的 \emph{Your First Coroutine} 一文。
+
+好，现在我们用学到的全部知识来编写自己的协程。我们将创建一个简单应用，模拟做一些有意义的工作。它会使用线程池向一个 vector 中填充一些数字。
+
+\subsection{使用 libcoro 的实践示例}
+
+\label{idx:1272}
+首先，我们在 CMake 文件中定义构建目标。CMake 目标如下所示：
+
+\begin{codebox}[cmake]
+add_executable(coroutines_1 coroutines/main_1.cpp)
+target_link_libraries(coroutines_1 PRIVATE libcoro::libcoro)
+target_compile_features(coroutines_1 PRIVATE cxx_std_23)
+\end{codebox}
+
+\label{idx:1273}
+接下来，我们通过定义一些常量和 \texttt{main} 函数来开始实现：
+
+\begin{codebox}[cpp]
+inline constexpr auto WORK_ITEMS = 5;
+int main() {
+  auto thread_pool = coro::thread_pool::make_shared({.thread_count = 3});
+\end{codebox}
+
+我们希望使用三个池化线程来产生五个条目。libcoro 的线程池是安排工作的一种简洁方式。默认情况下，它会创建与机器 CPU 核心数相同数量的线程。继续往下，我们需要指定我们的工作：
+
+\begin{codebox}[cpp]
+ std::println("Thread {}: preparing work",  std::this_thread::get_id());
+  auto work = do_routine_work(thread_pool);
+  std::println("Thread {}: starting work",  std::this_thread::get_id());
+  const auto ints = coro::sync_wait(work);
+\end{codebox}
+
+\label{idx:1274}
+\label{idx:1275}
+我们会在代码中穿插日志消息，让你能更清楚地看到哪个线程里发生了什么。这有助于我们更好地理解协程的工作方式。我们通过调用一个名为 \texttt{do\_\allowbreak{}routine\_\allowbreak{}work} 的协程来创建工作。它返回该协程，我们用阻塞函数 \texttt{sync\_\allowbreak{}wait} 来运行它。协程在被等待之前不会开始执行。这意味着我们真正的工作将在这个函数调用内部开始。
+
+得到结果后，我们把它们记录下来：
+
+\begin{codebox}[cpp]
+  std::print("Thread {}: work done.\nProduced ints are: ",
+             std::this_thread::get_id());
+  for (auto i : ints) {
+    std::print("{}, ", i);
+  }
+  std::println();
+\end{codebox}
+
+这里没有什么玄乎的东西。我们来定义 \texttt{do\_\allowbreak{}routine\_\allowbreak{}work} 协程：
+
+\begin{codebox}[cpp]
+coro::task<std::vector<int>>
+do_routine_work(std::shared_ptr<coro::thread_pool> thread_pool) {
+  auto mutex = coro::mutex{};
+  auto ints = std::vector<int>{};
+  ints.reserve(WORK_ITEMS);
+\end{codebox}
+
+它返回一个任务（task），该任务会产生一些整数。由于我们要使用线程池，那就用 libcoro 的 \texttt{async\_\allowbreak{}mutex} 来同步线程。现在开始使用线程池：
+
+\begin{codebox}[cpp]
+  std::println("Thread {}: passing execution to the pool",
+               std::this_thread::get_id());
+  co_await thread_pool->schedule();
+\end{codebox}
+
+你可能会惊讶地发现，\texttt{schedule(\allowbreak{})\allowbreak{}} 调用并没有传入任何可执行的可调用对象。对于协程而言，这个调用会挂起当前协程并把控制权交还给它的调用方。这意味着运行它的线程现在会等待该协程结束（就在 \texttt{sync\_\allowbreak{}wait} 调用中的某处）。
+
+与此同时，线程池中的某个线程会恢复被挂起的协程，并继续执行它的函数体。下面是该协程的下一部分：
+
+\begin{codebox}[cpp]
+  std::println("Thread {}: running first pooled job",
+               std::this_thread::get_id());
+  std::vector<coro::task<>> tasks;
+  tasks.reserve(WORK_ITEMS);
+  for (int i = 0; i < WORK_ITEMS; ++i) {
+    tasks.emplace_back(fill_number(i, ints, thread_pool, mutex));
+  }
+  co_await coro::when_all(std::move(tasks));
+  co_return ints;
+\end{codebox}
+
+\label{idx:1276}
+我们创建一个待执行任务的 vector。每个任务在互斥锁的保护下向 \texttt{ints} 中填入一个数字。\texttt{schedule\_\allowbreak{}on} 调用确保每个负责填充的协程都使用线程池中的一个独立线程。我们等待所有结果。此时，我们的任务开始执行。最后，由于我们的协程是一个任务，我们用 \texttt{co\_\allowbreak{}return} 返回最终结果。
+
+\begin{myTip}{提示}
+
+别忘了用 \texttt{co\_\allowbreak{}return} 返回产生的值。如果我们从示例中删掉 \texttt{co\_\allowbreak{}return ints;\allowbreak{}} 这一行，就会只返回一个默认构造的 vector。程序会照常运行，愉快地打印出空 vector，并以返回码 0 退出。
+\end{myTip}
+
+\label{idx:1277}
+最后一步是实现产生数字的那个协程：
+
+\begin{codebox}[cpp]
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_int_distribution<> distrib(0, 800);
+  coro::task<> fill_number(int i, std::vector<int> &ints,
+                           std::shared_ptr<coro::thread_pool> thread_pool,
+                           coro::mutex &mutex) {
+  co_await thread_pool->schedule();
+  std::println("Thread {}: producing {}",  std::this_thread::get_id(), i);
+  std::this_thread::sleep_for(std::chrono::milliseconds(distrib(gen)));
+\end{codebox}
+
+这个协程是一个不返回任何值的任务。相反，它会向我们的 vector 中添加一个数字。它的“辛苦工作”先是打盹几毫秒。醒来之后，协程继续做更有成效的事情——获取锁并往共享 vector 中追加一个数字：
+
+\begin{codebox}[text]
+  {
+    // remember to co_await!
+    auto lock = co_await mutex.scoped_lock();
+    ints.emplace_back(i);
+  }
+\end{codebox}
+
+该协程会使用 \texttt{co\_await} 来锁定互斥锁。在我们的例子里，加锁只是一个 await 表达式。一旦获取到互斥锁，协程就会向 vector 中添加一个数字——正是调用它时传入的那个数字。
+
+\begin{myTip}{提示}
+
+记得使用 \texttt{co\_await}。如果你忘了，而你的可等待对象又允许这样（也许是因为不消费每个可等待对象也没关系），那你可能会跳过一些必要的计算。在我们的例子里，这可能意味着没有锁定互斥锁。
+\end{myTip}
+
+现在我们来完成这个协程的实现：
+
+\begin{codebox}[cpp]
+  std::println("Thread {}: produced {}",  std::this_thread::get_id(), i);
+  co_return;
+\end{codebox}
+
+\label{idx:1278}
+只需要简单地打印一行状态信息，并用 \texttt{co\_\allowbreak{}return} 把协程标记为完成即可。它一旦返回，协程帧就可以被销毁，从而释放它占用的内存。
+
+就这样。现在我们运行代码，看看会发生什么：
+
+\begin{codebox}[text]
+Thread 140471890347840: preparing work
+Thread 140471890347840: starting work
+Thread 140471890347840: passing execution to the pool
+Thread 140471890282240: running first pooled job
+Thread 140471890282240: producing 4
+Thread 140471881828096: producing 1
+Thread 140471873373952: producing 0
+Thread 140471890282240: produced 4
+Thread 140471890282240: producing 3
+Thread 140471890282240: produced 3
+Thread 140471890282240: producing 2
+Thread 140471881828096: produced 1
+Thread 140471873373952: produced 0
+Thread 140471890282240: produced 2
+Thread 140471890347840: work done.
+Produced ints are: 4, 3, 1, 0, 2,
+\end{codebox}
+
+\label{idx:1279}
+我们的主线程在池上发起了工作，然后等待结果。接着，池中的三个线程开始产生数字。最后被安排的那个任务实际上是最先运行的，它产生了数字 4。这是因为它是一直在继续执行 \texttt{do\_\allowbreak{}routine\_\allowbreak{}work} 的那个：首先，它把其他所有任务都安排到池上，然后在调用 \texttt{when\_all} 时开始执行第一个任务。之后，执行由第一个空闲线程接管，它取走池上安排的下一个任务，直到整个 vector 被填满。最后，执行回到我们的主线程。
+
+\subsection{使用 coost 的实践示例}
+
+\label{idx:1280}
+coost 是一个高性能的跨平台库，它支持 Go 风格的协程而非 C++20 协程，这让它显得颇为特别。
+
+\label{idx:1281}
+coost 的一个突出特性是能够以极小的内存开销高效处理大量协程。与需要更多栈空间的标准 C++ 协程不同，coost 实现了一种轻量级、Go 风格的协程模型，专为可扩展性和并发性做了优化。根据 coost 作者的说法，\emph{“同一线程中的协程共享若干个栈（默认大小为 1 MB），内存占用很低。在 Linux 上的测试表明，1000 万个 [原文如此] 协程仅占用 2.8 G[B] 内存（仅供参考）”}（\href{https://coostdocs.github.io/en/co/concurrency/coroutine/basic/}{https://coostdocs.github.io/en/co/concurrency/coroutine/basic/}）。
+
+除了协程之外，coost 提供的其他核心特性还包括日志和 JSON 库、内存操作、单元测试与基准测试框架、诸如 socket API、TCP、HTTP、RPC 之类的网络编程工具，以及其他兼容 IPv6 的组件，还有 SSL 支持。
+
+和前面的例子一样，我们将使用随机生成的睡眠时长来模拟工作。首先声明工作项的数量并初始化随机数生成器：
+
+\begin{codebox}[cpp]
+inline constexpr auto WORK_ITEMS = 5;
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_int_distribution<> distrib(0, 800);
+\end{codebox}
+
+\texttt{DEF\_main} 宏定义了在协程中运行的 main 函数。该宏还会解析命令行参数：
+
+\begin{codebox}[cpp]
+co::mutex g_m;
+DEF_main(argc, argv) {
+  std::println("Thread {} co_thread {} co_sched {}: preparing work",
+               std::this_thread::get_id(), co::thread_id(), co::sched_id());
+\end{codebox}
+
+\label{idx:1282}
+\texttt{co::\allowbreak{}wait\_\allowbreak{}group} 类是一个等待组，用于等待协程或线程的退出。\texttt{wg} 对象的内部计数器增加 \texttt{WORK\_\allowbreak{}ITEMS}，该等待组将等待 5 个协程的退出：
+
+\begin{codebox}[cpp]
+  co::wait_group wg;
+  wg.add(WORK_ITEMS);
+  std::vector<int> ints;
+  std::println("Thread {} co_thread {} co_sched {}: starting work",
+               std::this_thread::get_id(), co::thread_id(),
+               co::sched_id());
+\end{codebox}
+
+在这里，程序通过使用 \texttt{go} 函数来创建并运行协程：
+
+\begin{codebox}[cpp]
+for (int i = 0; i < WORK_ITEMS; ++i) {
+     go([wg, i, &ints]() {
+     std::println( "Thread {} co_thread {} co_routing {} co_sched {}:
+                    producing {}",
+     std::this_thread::get_id(), co::thread_id(), co::coroutine_id(),
+     co::sched_id(), i);
+\end{codebox}
+
+\label{idx:1283}
+每个协程等待一段时间，用 \texttt{co::\allowbreak{}mutex\_\allowbreak{}guard} 获取 vector 以添加一个值，然后释放它并退出：
+
+\begin{codebox}[cpp]
+      std::this_thread::sleep_for(std::chrono::milliseconds(distrib(gen)));
+      {
+        co::mutex_guard g(g_m);
+        ints.emplace_back(i);
+      }
+      std::println(
+          "Thread {} co_thread {} co_routing {} co_sched {}: produced {}",
+          std::this_thread::get_id(), co::thread_id(), co::coroutine_id(),
+          co::sched_id(), i);
+      wg.done();
+    });
+  }
+\end{codebox}
+
+\label{idx:1284}
+等待组 \texttt{wg} 等待所有协程结束。然后，程序打印随机添加到 vector 中的数字：
+
+\begin{codebox}[cpp]
+  wg.wait();
+  std::print(
+    "Thread {} co_thread {} co_sched {}: work done.\nProduced ints are: ",
+    std::this_thread::get_id(), co::thread_id(), co::sched_id());
+    for (auto i : ints) {
+        std::print("{}, ", i);
+    }
+  std::println();
+  return 0;
+}
+\end{codebox}
+
+基于这个示例，我们可以说，尽管 coost 并不使用 C++20 协程，但它这种不同的协程模型依然很方便。
+
+\subsection{使用 Boost.Cobalt 的实践示例}
+
+\label{idx:1285}
+\label{idx:1286}
+Boost.Cobalt 是一个构建在 Boost.Asio 之上的基于协程的库。它提供不同类型的协程：用于返回单个结果的 \texttt{promise}、\texttt{task}（promise 的惰性版本）以及用于产出多个值的 \texttt{generator}。为支持同步，它提供了诸如 \texttt{race}（等待一组协程中的一个）、\texttt{join}（等待一组协程）以及 \texttt{gather}（与 \texttt{join} 类似，只是会捕获异常）之类的函数。它还提供了一些实用工具，例如用于在协程之间发送值的 \texttt{channel}，以及 \texttt{with}（一个异步 RAII 辅助工具）。
+
+在这个示例中，我们再次向 vector 填充数值，只不过用的是 C++20 协程。Boost.Cobalt 没有互斥锁，但支持使用 channel 进行协程同步。channel 被限制为只能容纳一个值，这相当于用互斥锁对资源进行独占式捕获。当一个值写入 channel 时，即获取锁；当读取该值时，即释放锁。
+
+\label{idx:1287}
+和前面的示例一样，睡眠时长是随机的。不过这里的延迟是用 Boost.Asio 的异步定时器实现的：\texttt{async\_\allowbreak{}wait(\allowbreak{})\allowbreak{}} 不会阻塞，而是挂起协程直到定时器到期，这与 Asio 的异步模型一致。\texttt{fill\_\allowbreak{}number} 函数是一个不返回任何内容的协程。它产生一个数字并把它追加到共享 vector 中，并使用单值 channel 来同步访问：
+
+\begin{codebox}[cpp]
+cobalt::task<void> fill_number(int i, std::vector<int> &ints,
+                               cobalt::channel<void> &mutex) {
+  std::println("Thread {}: producing {}", std::this_thread::get_id(), i);
+  asio::steady_timer timer{cobalt::this_thread::get_executor(),
+                           std::chrono::milliseconds(distrib(gen))};
+  co_await timer.async_wait(cobalt::use_op);
+  {
+    //记得 co_await！
+    co_await mutex.write();
+    ints.emplace_back(i);
+    co_await mutex.read();
+  }
+  std::println("Thread {}: produced {}", std::this_thread::get_id(), i);
+  co_return;
+}
+\end{codebox}
+
+\label{idx:1288}
+\texttt{do\_\allowbreak{}routine\_\allowbreak{}work} 函数也是一个协程。它把所有数字收集到一个 vector 中。\texttt{mutex} channel 只接受一个值。因此，它的行为就像一个 mutex：
+
+\begin{codebox}[cpp]
+cobalt::task<std::vector<int>> do_routine_work() {
+  cobalt::channel<void> mutex{1, cobalt::this_thread::get_executor()};
+  auto ints = std::vector<int>{};
+  ints.reserve(WORK_ITEMS);
+  std::println("Thread {}: passing execution to the pool",
+               std::this_thread::get_id());
+  std::println("Thread {}: running first pooled job",
+               std::this_thread::get_id());
+\end{codebox}
+
+该函数创建了一个协程的 vector：
+
+\begin{codebox}[cpp]
+ std::vector<cobalt::task<void>> tasks;
+  tasks.reserve(WORK_ITEMS);
+  for (int i = 0; i < WORK_ITEMS; ++i) {
+    tasks.emplace_back(fill_number(i, ints, mutex));
+  }
+\end{codebox}
+
+\label{idx:1289}
+随后，\texttt{cobalt::\allowbreak{}gather} 函数等待所有这些协程退出，收集结果（如果有的话），并返回结果的 vector：
+
+\begin{codebox}[cpp]
+  co_await cobalt::gather(std::move(tasks));
+  co_return ints;
+}
+\end{codebox}
+
+\label{idx:1290}
+\texttt{co\_main} 函数定义了一个隐式的 \texttt{main} 函数并运行异步代码：
+
+\begin{codebox}[cpp]
+cobalt::main co_main(int argc, char *argv[]) {
+  auto executor = co_await cobalt::this_coro::executor;
+  std::println("Thread {}: preparing work", std::this_thread::get_id());
+\end{codebox}
+
+\texttt{do\_\allowbreak{}routine\_\allowbreak{}work} 任务通过调用 \texttt{run} 同步运行。随后，程序打印随机添加到 vector 中的数字：
+
+\begin{codebox}[cpp]
+  auto work = do_routine_work();
+  std::println("Thread {}: starting work", std::this_thread::get_id());
+  const auto ints = run(std::move(work));
+  std::print("Thread {}: work done.\nProduced ints are: ",
+             std::this_thread::get_id());
+  for (auto i : ints) {
+    std::print("{}, ", i);
+  }
+  std::println();
+  co_return 0;
+}
+\end{codebox}
+
+\label{idx:1291}
+\label{idx:1292}
+以上我们就结束了一组简短的示例，演示了使用不同库实现的协程。coost 在某种程度上是把 Go 语言实践迁移到 C++ 的一次实验，而 libcoro 更侧重异步操作，Boost.Cobalt 则更侧重于基于任务的并行。
+
+\section{实现高效的算法}
+
+\label{idx:1293}
+任何程序若不实现高效的算法与编程技巧，都不可能高效。
+
+\begin{myQuote}
+温故而知新，可以为师矣。
+
+——孔子，公元前 551—479 年
+
+\end{myQuote}
+
+\label{idx:1294}
+简而言之，一切新事物都是被遗忘的旧事物。算法设计同样如此：诸如迭代和递归这样既有的技术，启发了尾递归之类的优化。本节中，我们将实现迭代、递归和尾递归（一种递归优化形式）函数，对它们的性能进行基准测试，并得出一些结论。
+
+下面的代码展示了迭代实现，其中并没有什么特别之处：
+
+\begin{codebox}[cpp]
+namespace iteration {
+uint64_t factorial(uint32_t n) {
+  uint64_t res = 1;
+  for (auto i = 1; i <= n; ++i) {
+    res *= i;
+  }
+  return res;
+}
+uint64_t fibonacci(uint32_t n) {
+  uint64_t b = 0, a = 1, res = 0;
+  for (auto i = 2; i <= n; ++i) {
+    res = b + a;
+    b = a;
+    a = res;
+  }
+  return res;
+}
+} //namespace iteration
+\end{codebox}
+
+递归函数常用于把复杂问题分解为更简单的子问题，自顶向下地求解问题，实现分而治之的原则。这种做法把当前上下文保存在栈上，从而帮助将注意力集中在当前上下文上，当嵌套函数调用返回时再恢复该上下文。
+
+下面的代码展示了递归实现：
+
+\begin{codebox}[cpp]
+namespace recursion {
+uint64_t factorial(uint32_t n) {
+  if (n == 0) {
+    return 1;
+  }
+  return n * factorial(n - 1);
+}
+uint64_t fibonacci(uint32_t n) {
+  if (n < 2) {
+    return n;
+  }
+  return fibonacci(n - 2) + fibonacci(n - 1);
+}
+} //namespace recursion
+\end{codebox}
+
+这里值得注意的是，递归的 \texttt{fibonacci} 函数会被多次调用，重复计算相同的值。这种情况下，宜采用记忆化（memoization），这是一种把已计算的值存入缓存、以便相同输入再次出现时复用的优化技术。
+
+\label{idx:1295}
+记忆化的另一种替代方案是制表（tabulation），这是一种自底向上的方法：用较小子问题的解填充一张表，再用它来计算较大问题的解。这种方法常见于动态规划的迭代式求解中。
+
+另一种与递归相关的优化技术是尾调用消除，它可以显著提升深度递归函数的性能。\texttt{mustail} 属性被放在 \texttt{return} 语句上，以保证尾调用消除并防止栈溢出。遗憾的是，并非所有 C++ 编译器都实现了这一功能，或者实现方式各不相同。正因如此，这个宏对 Clang 和 GCC 有效，但对 MSVC 无效：
+
+\begin{codebox}[text]
+#ifndef __has_cpp_attribute
+#define musttail
+#elif __has_cpp_attribute(clang::musttail)
+#define musttail [[clang::musttail]]
+#elif __has_cpp_attribute(musttail)
+#define musttail [[musttail]]
+#else
+#define musttail
+#endif
+\end{codebox}
+
+与 C++ 编译器相比，WebAssembly 明确定义了返回指令 \texttt{return\_\allowbreak{}call}（尾调用版本）和 \texttt{return}，不留任何解释空间。
+
+下面的代码展示了尾递归实现。内层的匿名命名空间具有私有作用域，因此外层命名空间的内部细节被隐藏起来：
+
+\begin{codebox}[cpp]
+namespace tail_recursion {
+namespace { //匿名命名空间
+uint64_t factorial(uint32_t n, uint64_t a) {
+  if (n == 1) {
+    return a;
+  }
+  musttail return factorial(n - 1, a * n);
+}
+uint64_t fibonacci(uint32_t n, uint64_t a, uint64_t b) {
+  if (n == 0) {
+    return a;
+  }
+  if (n == 1) {
+    return b;
+  }
+  musttail return fibonacci(n - 1, b, a + b);
+}
+} //匿名命名空间
+uint64_t factorial(uint32_t n) { return factorial(n, 1); }
+uint64_t fibonacci(uint32_t n) { return fibonacci(n, 0, 1); }
+} //namespace tail_recursion
+\end{codebox}
+
+普通递归调用的缺点是大量使用调用栈，从而影响性能。尾递归的性能更高，因为编译器可以把它优化成迭代循环，消除每次调用都创建新栈帧的开销。这种优化还能防止栈溢出错误。
+
+\label{idx:1296}
+这类经过优化的函数只是直接终止，并不返回调用点——只有最顶层的函数除外，它把控制权返回给调用它的函数——因为它们的最后一条语句是 \texttt{return}。由于它们的栈帧被销毁、执行也随之结束，在把控制权交给其他函数之后，它们确实无处可去、无事可做。尾调用就是作为函数中最后一个动作执行的子程序调用。
+
+\myGraphic{0.920}{images/B18456_13_09.png}{图 13.9：递归与尾递归}
+
+就 \texttt{factorial} 而言，各函数在执行上的差异并不特别明显，尽管结果值会溢出整型：
+
+\begin{codebox}[cpp]
+void BM_test(benchmark::State &state, auto func) {
+  const auto n = state.range(0);
+  for (auto _ : state) {
+    benchmark::DoNotOptimize(func(n));
+  }
+}
+namespace {
+constexpr auto MIN_FACTORIAL = 32768;
+constexpr auto MAX_FACTORIAL = 65536;
+BENCHMARK_CAPTURE(BM_test, iteration::factorial, iteration::factorial)
+    ->RangeMultiplier(2)
+    ->Range(MIN_FACTORIAL, MAX_FACTORIAL);
+BENCHMARK_CAPTURE(BM_test, recursion::factorial, recursion::factorial)
+    ->RangeMultiplier(2)
+    ->Range(MIN_FACTORIAL, MAX_FACTORIAL);
+BENCHMARK_CAPTURE(BM_test, tail_recursion::factorial, tail_recursion::factorial)
+    ->RangeMultiplier(2)
+    ->Range(MIN_FACTORIAL, MAX_FACTORIAL);
+\end{codebox}
+
+\label{idx:1297}
+就斐波那契数列而言，你很可能等不到递归实现跑完就已经失去耐心，所以测试范围保持得很小：
+
+\begin{codebox}[cpp]
+constexpr auto MIN_FIBONACCI = 16;
+constexpr auto MAX_FIBONACCI = 32;
+BENCHMARK_CAPTURE(BM_test, iteration::fibonacci, iteration::fibonacci)
+    ->RangeMultiplier(2)
+    ->Range(MIN_FIBONACCI, MAX_FIBONACCI);
+BENCHMARK_CAPTURE(BM_test, recursion::fibonacci, recursion::fibonacci)
+    ->RangeMultiplier(2)
+    ->Range(MIN_FIBONACCI, MAX_FIBONACCI);
+BENCHMARK_CAPTURE(BM_test, tail_recursion::fibonacci, tail_recursion::fibonacci)
+    ->RangeMultiplier(2)
+    ->Range(MIN_FIBONACCI, MAX_FIBONACCI);
+} //namespace
+BENCHMARK_MAIN();
+\end{codebox}
+
+好了，是时候测量并分析结果了：
+
+\begin{codebox}[text]
+--------------------------------------------------------------------------
+Benchmark                                        Time             CPU   Iterations
+--------------------------------------------------------------------------
+BM_test/iteration::factorial/32768           20131 ns        20128 ns        34818
+BM_test/iteration::factorial/65536           40311 ns        40303 ns        17279
+BM_test/recursion::factorial/32768           20024 ns        20022 ns        34923
+BM_test/recursion::factorial/65536           39842 ns        39838 ns        17503
+BM_test/tail_recursion::factorial/32768      20047 ns        20037 ns        35243
+BM_test/tail_recursion::factorial/65536      39629 ns        39624 ns        17613
+BM_test/iteration::fibonacci/16               2.85 ns         2.85 ns    246077490
+BM_test/iteration::fibonacci/32               6.74 ns         6.74 ns    103553893
+BM_test/recursion::fibonacci/16                814 ns          813 ns       861534
+BM_test/recursion::fibonacci/32            2389913 ns      2389778 ns          292
+BM_test/tail_recursion::fibonacci/16          3.40 ns         3.40 ns    181188049
+BM_test/tail_recursion::fibonacci/32          6.94 ns         6.94 ns    100046816
+\end{codebox}
+
+\label{idx:1298}
+迭代实现和尾递归实现的性能不相上下，但递归的 \texttt{fibonacci} 函数则糟糕透顶。尽管由于计算简单，各阶乘实现的运行时间大致相同，但递归实现在处理较大数值时可能导致栈溢出。
+
+接下来的这种方法用得相当少，通常也不推荐使用，也许只有在特定场景下例外，比如实现解释字节码的虚拟机，以避免在注重性能的代码中 C/C++ \texttt{switch} 语句的开销。计算式 \texttt{goto} 是许多流行的 C 和 C++ 编译器都支持的非标准特性。基本上，该特性允许把标签当作值来使用，即把标签的地址存入一个变量，然后跳转到该标签；这与通过指针调用函数不同，因为它没有返回。这是一种非常底层的方案，让人联想到汇编语言中按地址跳转的实现方式。
+
+\texttt{goto} 语句允许跳转到程序的任意位置，但它会使程序逻辑变得复杂而混乱。在大多数 C++ 程序中，\texttt{goto} 语句都可以用 \texttt{break} 和 \texttt{continue} 语句来替代。总的来说，\texttt{goto} 语句在结构化编程中背负着恶名。或许该语句应用最广泛的地方是 20 世纪 80 年代诸如 ZX Spectrum BASIC 和 Commodore BASIC 之类的 BASIC 实现。
+
+\label{idx:1299}
+下面这个虚拟机实现基于 \texttt{switch} 语句。解释器从指令数组中取出下一条指令并执行它。在这个简化实现中，\texttt{OP\_HALT} 操作是必需的，否则执行永远不会停止。这里，\texttt{switch} 运算符选择要执行哪个条件分支：
+
+\begin{codebox}[cpp]
+enum class op_code {
+  OP_HALT = 0x00,
+  OP_INC = 0x01,
+  OP_DEC = 0x02,
+  OP_MUL2 = 0x03,
+  OP_DIV2 = 0x04,
+  OP_REM2 = 0x05,
+  OP_NEG = 0x06,
+  OP_SENTINEL = OP_NEG
+};
+namespace switch_vm {
+int64_t bytecode_interpreter(const op_code *bytecode, int64_t init_val) {
+  int64_t val = init_val;
+  std::size_t pc = 0;
+  while (true) {
+    switch (bytecode[pc++]) {
+    case op_code::OP_HALT:
+      return val;
+    case op_code::OP_INC:
+      ++val;
+      break;
+    case op_code::OP_DEC:
+      --val;
+      break;
+    case op_code::OP_MUL2:
+      val *= 2;
+      break;
+    case op_code::OP_DIV2:
+      val /= 2;
+      break;
+    case op_code::OP_REM2:
+      val %= 2;
+      break;
+    case op_code::OP_NEG:
+      val = -val;
+      break;
+    default:
+      return val;
+    }
+  }
+}
+} //namespace switch_vm
+\end{codebox}
+
+\label{idx:1300}
+这个虚拟机实现基于计算式 \texttt{goto}。在这个版本中，解释器同样从指令数组中取出下一条指令并执行它。但这里，无条件执行会立即转到下一条指令。在这个简化实现中，潜在的危险在于某条指令可能尚未实现，使 \texttt{goto} 语句无处可跳，从而导致运行时错误：
+
+\begin{codebox}[cpp]
+namespace computed_goto_vm {
+int64_t bytecode_interpreter(const op_code *bytecode, int64_t init_val) {
+  static void *dispatch[] = {&&TARGET_HALT, &&TARGET_INC,  &&TARGET_DEC,
+                           &&TARGET_MUL2, &&TARGET_DIV2, &&TARGET_REM2,
+                           &&TARGET_NEG};
+#define DISPATCH() goto *dispatch_table[std::to_underlying(bytecode[pc++])];
+  int64_t val = init_val;
+  std::size_t pc = 0;
+  DISPATCH()
+TARGET_HALT: { return val; }
+TARGET_INC: {
+  ++val;
+  DISPATCH()
+}
+TARGET_DEC: {
+  --val;
+  DISPATCH()
+}
+TARGET_MUL2: {
+  val *= 2;
+  DISPATCH()
+}
+TARGET_DIV2: {
+  val /= 2;
+  DISPATCH()
+}
+TARGET_REM2: {
+  val %= 2;
+  DISPATCH()
+}
+TARGET_NEG: {
+  val = -val;
+  DISPATCH()
+}
+}
+} //namespace computed_goto_vm
+\end{codebox}
+
+这个 C++ 实现比 C 实现更安全一些，因为操作码是有类型的。C++23 的 \texttt{std::\allowbreak{}to\_\allowbreak{}underlying} 函数把枚举转换为其底层整数类型，随后用它在分发表中选择标签的地址，因为枚举常量包含了操作码在表中的索引。
+
+\label{idx:1301}
+天哪！该对这些虚拟机做基准测试了。这个测试用相同的随机化测试数据对两个虚拟机进行比较。把整数强制转换为不存在的 \texttt{enum class} 值会导致未指明或未定义行为。这在某种程度上由 \texttt{OP\_\allowbreak{}SENTINEL} 码保护，它是连续操作码列表中的最后一个。这些虚拟机在编写时带有一些假设，目的是演示这些方法，而不让技术细节使实现过于臃肿：
+
+\begin{codebox}[cpp]
+TEST_CASE("virtual_machine", "[benchmark]") {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> distrib(
+      0, static_cast<int>(op_code::OP_SENTINEL));
+  constexpr auto SIZE = 1 << 24;
+  auto bytecode = std::unique_ptr<op_code[]>(new op_code[SIZE]);
+  std::generate_n(bytecode.get(), SIZE, [&distrib, &gen]() {
+    return static_cast<op_code>(distrib(gen));
+  });
+  bytecode[SIZE - 1] = op_code::OP_HALT;
+  BENCHMARK_ADVANCED("switch_vm")(Catch::Benchmark::Chronometer meter) {
+    meter.measure(
+        [&] { return switch_vm::bytecode_interpreter(bytecode.get(), 0); });
+  };
+  BENCHMARK_ADVANCED("computed_goto_vm")(Catch::Benchmark::Chronometer meter) {
+    meter.measure([&] {
+      return computed_goto_vm::bytecode_interpreter(bytecode.get(), 0);
+    });
+  };
+}
+\end{codebox}
+
+这个测试的结果胜过千言万语。基于计算式 \texttt{goto} 的实现比用一个大的 \texttt{switch} 的实现快 23\%：
+
+\begin{codebox}[text]
+benchmark name                  samples       iterations    est run time    
+                                mean          low mean      high mean
+                                std dev       low std dev   high std dev
+--------------------------------------------------------------------------
+switch_vm                       100           6181          618.1 us
+                                1.8159 ns     1.80829 ns    1.84087 ns
+                                0.0623443 ns  0.0187728 ns  0.136989 ns
+                                                                           
+computed_goto_vm                100           7913          791.3 us
+                                1.4094 ns     1.40561 ns    1.41721 ns
+                                0.0266696 ns  0.0147317 ns  0.0439994 ns
+\end{codebox}
+
+\label{idx:1302}
+这些展示的技术都有其现实依据。CPython 于 1991 年引入的第一个字节码解释器（虚拟机）基于 \texttt{switch}/\texttt{case} 分发。它取出下一条指令，查看其操作码，然后跳转到相应的 \texttt{case} 块。简单、可靠、稳定……但也慢！2008 年引入的第二个解释器基于计算式 \texttt{goto}，它不依赖编译器对 \texttt{switch}/\texttt{case} 的优化，而是把一个大 \texttt{switch} 转换成一张操作码表。如果解释器函数非常庞大，计算式 \texttt{goto} 解释器也可能成为问题之源，因为这类代码难以维护。因此，2025 年发布的第三个解释器是尾调用解释器。在某些场景下这种实现更快，在另一些场景下则比标准解释器慢。2025 年的解释器建立在 Guy Steele 于 1977 年首次论述的原理之上，这样实现解释器的理由是：他的工作论证了在大多数场景下尾调用等价于 \texttt{goto}。
+
+\section{小结}
+
+在本章中，我们探讨了如何让代码获得更好的性能。我们首先了解了如何搭建可靠的环境，以便进行准确的性能测量。然后，我们讨论了如何使用 Google Benchmark、Catch2 和 nanobench 编写微基准测试。此外，我们还介绍了性能剖析，并了解了如何使用 Tracy 之类的工具和库来观察运行时行为。我们还学习了如何在复杂系统中实现分布式追踪，以及为什么要这样做。在此过程中，我们探索了编写更高性能代码的技巧。我们还讨论了如何使用标准库工具和外部方案来并行化计算。接着，我们介绍了协程。你现在已经知道 C++20 和 C++23 为协程带来了什么、即将到来的 C++26 可能带来什么，以及 libcoro、coost 和 Boost.Cobalt 之类的库如何帮助构建基于协程的程序。你还学会了如何编写自己的协程。最后，我们研究了代码优化技术，以及实现选择如何影响虚拟机性能。
+
+本章最重要的一课是：在性能问题上，先测量，后优化。这将帮助你让自己的工作产生最大影响。
+
+关于性能就讲到这里——它是我们想在本书中讨论的最后一个质量属性。下一章，我们将开始进入服务与云的世界。
+
+\section{问题}
+
+\begin{enumerate}
+\item 从本章的微基准测试和性能剖析结果中，我们能学到什么？
+\item 遍历多维数组的方式对性能有影响吗？为什么有，或者为什么没有？
+\item 在我们的协程示例中，为什么用 libcoro 时不能在 \texttt{do\_\allowbreak{}routine\_\allowbreak{}work} 函数内部创建线程池？
+\item 我们该如何改写协程示例，让它使用生成器而不只是任务？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Arthur O'Dwyer，\emph{When Can the C++ Compiler Devirtualize a Call?}（博客）：\href{https://quuxplusone.github.io/blog/2021/02/15/devirtualization/}{https://quuxplusone.github.io/blog/2021/02/15/devirtualization/}
+\item Chandler Carruth，\emph{Tuning C++: Benchmarks, and CPUs, and Compilers! Oh My!}（YouTube 视频），CppCon 2015：\href{https://www.youtube.com/watch?v=nXaxk27zwlk}{https://www.youtube.com/watch?v=nXaxk27zwlk}
+\item Hubert Matthews，\emph{Optimising a Small Real-World C++ Application}（YouTube 视频），ACCU 2019：\href{https://www.youtube.com/watch?v=fDlE93hs_-U}{https://www.youtube.com/watch?v=fDlE93hs\_-U}
+\item Perf Wiki，\emph{perf: Linux Profiling with Performance Counters}：\href{https://perf.wiki.kernel.org/index.php/Tutorial}{https://perf.wiki.kernel.org/index.php/Tutorial}
+\item Brendan Gregg，\emph{CPU Flame Graphs}：\href{http://www.brendangregg.com/FlameGraphs/cpuflamegraphs.html}{http://www.brendangregg.com/FlameGraphs/cpuflamegraphs.html}
+\item Baptiste Wicht，\emph{C++ Containers Benchmark: vector, list, deque, plf::colony}（博客）：\href{https://baptiste-wicht.com/posts/2017/05/cpp-containers-benchmark-vector-list-deque-plf-colony.html}{https://baptiste-wicht.com/posts/2017/05/cpp-containers-benchmark-vector-list-deque-plf-colony.html}
+\item Dawid Pilarski，\emph{Your First Coroutine}（博客），Panic Software：\href{https://blog.panicsoftware.com/your-first-coroutine}{https://blog.panicsoftware.com/your-first-coroutine}
+\item Google，\emph{ Google Benchmark User Guide}，GitHub：\href{https://github.com/google/benchmark/blob/main/docs/user_guide.md}{https://github.com/google/benchmark/blob/main/docs/user\_guide.md}
+\item Catch2，\emph{Authoring Benchmarks}，GitHub：\href{https://github.com/catchorg/Catch2/blob/devel/docs/benchmarks.md}{https://github.com/catchorg/Catch2/blob/devel/docs/benchmarks.md}
+\item Catch2，\emph{Data Generators}，GitHub：\href{https://github.com/catchorg/Catch2/blob/devel/docs/generators.md}{https://github.com/catchorg/Catch2/blob/devel/docs/generators.md}
+\item nanobench，\emph{Test Set/Comparison}：\href{https://nanobench.ankerl.com/comparison.html}{https://nanobench.ankerl.com/comparison.html}
+\item Drogon Wiki\emph{，Coroutines}，GitHub：\href{https://github.com/drogonframework/drogon/wiki/ENG-17-Coroutines}{https://github.com/drogonframework/drogon/wiki/ENG-17-Coroutines}
+\item Drogon Wiki\emph{，Understanding Drogon's Threading Model，}GitHub：\href{https://github.com/drogonframework/drogon/wiki/ENG-FAQ-1-Understanding-drogon-threading-model}{https://github.com/drogonframework/drogon/wiki/ENG-FAQ-1-Understanding-drogon-threading-model}
+\item coost 文档，\emph{Introduction}，GitHub：\href{https://coostdocs.github.io/en/about/co/}{https://coostdocs.github.io/en/about/co/}
+\item coost 文档，\emph{Basic Concepts of Coroutine，}GitHub：\href{https://coostdocs.github.io/en/co/concurrency/coroutine/basic/}{https://coostdocs.github.io/en/co/concurrency/coroutine/basic/}
+\item Boost，\emph{Documentation boost.cobalt}：\href{https://www.boost.org/doc/libs/master/libs/cobalt/doc/html/index.html}{https://www.boost.org/doc/libs/master/libs/cobalt/doc/html/index.html}
+\item Tracy，\emph{Tracy Profiler}，GitHub：\href{https://github.com/wolfpld/tracy/releases}{https://github.com/wolfpld/tracy/releases}
+\item Tracy 官方网站：\href{https://tracy.nereid.pl/}{https://tracy.nereid.pl/}
+\item \texttt{Chris} \texttt{Lott}，\emph{C is the Greenest Programming Language}，Hackaday：\href{https://hackaday.com/2021/11/18/c-is-the-greenest-programming-language/}{https://hackaday.com/2021/11/18/c-is-the-greenest-programming-language/}
+\item Jim Ledin，\emph{Modern Computer Architecture and Organization: Learn x86, ARM, and RISC-V Architectures and the Design of Smartphones, PCs, and Cloud Servers}，第二版，Packt Publishing：\href{https://www.packtpub.com/en-pl/product/modern-computer-architecture-and-organization-second-edition-9781803234519}{https://www.packtpub.com/en-pl/product/modern-computer-architecture-and-organization-second-edition-9781803234519}
+\item Paulo Motta，\emph{GPU Programming with C++ and CUDA: Uncover Effective Techniques for Writing Efficient GPU-Parallel C++ Applications}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/gpu-programming-with-c-and-cuda-9781805128823}{https://www.packtpub.com/en-us/product/gpu-programming-with-c-and-cuda-9781805128823}
+\item Alibaba Cloud Community，\emph{The Mechanism behind Measuring Cache Access Latency}（博客）：\href{https://www.alibabacloud.com/blog/the-mechanism-behind-measuring-cache-access-latency_599384}{https://www.alibabacloud.com/blog/the-mechanism-behind-measuring-cache-access-latency\_599384}
+\item Eli Bendersky，\emph{Computed goto for Efficient Dispatch Tables}，Eli Bendersky 的网站：\href{https://eli.thegreenplace.net/2012/07/12/computed-goto-for-efficient-dispatch-tables}{https://eli.thegreenplace.net/2012/07/12/computed-goto-for-efficient-dispatch-tables}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书专属权益} 扫描此二维码或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始前请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

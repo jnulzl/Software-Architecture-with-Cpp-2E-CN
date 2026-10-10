@@ -1,0 +1,663 @@
+\section*{第 1 章}
+
+\begin{enumerate}
+\item 为什么要关注软件架构？
+
+\begin{itemize}
+\item 架构让你能够达成并维持软件所需的各种质量。用心关注架构，可以避免项目出现意外架构、进而丧失质量，也能防止软件退化。
+\end{itemize}
+\item 在敏捷团队中，架构师应该是最终决策者吗？
+
+\begin{itemize}
+\item 不应该。敏捷的核心是赋能整个团队。架构师会贡献自己的经验与知识，但如果一个决策需要整个团队接受，那么它就应该由团队来主导，而不是仅由架构师主导。在这里，考虑利益相关者的需求同样至关重要。
+\end{itemize}
+\item \textbf{单一职责原则}（\textbf{SRP}）与内聚有什么关系？
+
+\begin{itemize}
+\item 遵循 SRP 能带来更好的内聚。如果一个组件承担了多项职责，它通常会变得内聚性更差。遇到这种情况，最好把它重构成多个组件，每个组件只承担单一职责。这样我们就能提高内聚，代码也就更易于理解、开发和维护。
+\end{itemize}
+\item 在项目生命周期的哪些阶段，项目能从拥有架构师中获益？
+
+\begin{itemize}
+\item 从项目启动到进入维护期，架构师都能为项目创造价值。最大的价值往往在项目开发的早期阶段实现，因为关于项目应有的形态的关键决策正是在此阶段做出的。不过，这并不意味着架构师在开发过程中就没有价值。他们能让项目保持在正确的方向和轨道上。通过协助决策并监督项目，他们确保代码不会落入意外架构，也不会遭受软件退化。
+\end{itemize}
+\item 遵循 SRP 有什么好处？
+
+\begin{itemize}
+\item 遵循 SRP 的代码更易于理解和维护。这也意味着它的缺陷更少。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 2 章}
+
+\begin{enumerate}
+\item RESTful 服务有哪些特征？
+
+\begin{itemize}
+\item 显然，要使用 REST API。
+\item 无状态：每个请求都包含处理它所需的全部数据。记住，这并不意味着 RESTful 服务不能使用数据库——恰恰相反。
+\item 在客户端使用可选的 cookie 或令牌，而不是在服务端保存会话。
+\end{itemize}
+\item 你可以使用哪些工具集来帮助创建具有韧性的分布式架构？
+
+\begin{itemize}
+\item Chaos Mesh、Chaos Monkey、Gremlin、Harness Chaos Engineering、LitmusChaos。
+\end{itemize}
+\item 微服务应该使用集中式存储吗？为什么该/不该？
+
+\begin{itemize}
+\item 微服务应使用去中心化存储。每个微服务都应选择最适合自己的存储类型，因为这样能提升效率与可扩展性。
+\end{itemize}
+\item 什么时候应该编写有状态服务，而不是无状态服务？
+
+\begin{itemize}
+\item 只有当采用无状态服务不合理、而且你也不需要扩展时。例如，当客户端与服务必须保持状态同步，或者需要发送的状态非常庞大时。
+\end{itemize}
+\item broker 与 mediator 有什么区别？
+
+\begin{itemize}
+\item mediator 在服务之间进行“中介”，因此它需要知道如何处理每个请求。broker 只知道自己该把每个请求发往何处，所以它是一个轻量级组件。可以用它来构建\textbf{发布—订阅}（\textbf{pub–sub}）架构。
+\end{itemize}
+\item \emph{N} 层级（tier）架构与 \emph{N} 层（layer）架构有什么区别？
+
+\begin{itemize}
+\item 层（layer）是逻辑上的，规定你如何组织代码。层级（tier）是物理上的，规定你如何运行代码。每个层级都必须与其他层级分离，要么运行在不同的进程中，要么甚至运行在不同的机器上。
+\end{itemize}
+\item 应该以什么方式把单体替换为基于微服务的架构？
+
+\begin{itemize}
+\item 逐步进行。从单体中切分出小的微服务。你可以借助 \emph{第 4 章}《\emph{架构与系统设计模式}》中介绍的绞杀者模式来帮助完成这件事。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 3 章}
+
+\begin{enumerate}
+\item 什么是质量属性？
+
+\begin{itemize}
+\item 系统可能具有的特征或品质。常被称为 \emph{ilities}，因为其中许多在名称里都带有这个后缀——例如 portability（可移植性）。
+\end{itemize}
+\item 收集需求时应该使用哪些来源？
+
+\begin{itemize}
+\item 系统的上下文、现有文档，以及系统的利益相关者。
+\end{itemize}
+\item 如何判断一项需求是否具有架构重要性？
+
+\begin{itemize}
+\item \textbf{架构重要需求}（\textbf{ASR}）通常需要一个独立的软件组件，会影响系统的很大一部分，难以实现，并且/或者迫使你做出权衡。
+\end{itemize}
+\item 如何用图形方式记录各方对系统可能提出的功能性需求？
+
+\begin{itemize}
+\item 通过绘制用例图。
+\end{itemize}
+\item 开发视图文档在什么时候有用？
+
+\begin{itemize}
+\item 在你开发一个包含众多模块的大型系统，并且需要向所有软件团队传达全局约束和通用设计选择的情况下。
+\end{itemize}
+\item 如何自动检查代码的 API 文档是否过时？
+
+\begin{itemize}
+\item Doxygen 内置了检查功能，包括对函数签名与注释中参数不一致的情况发出警告。
+\end{itemize}
+\item 如何在图上表示某个流程是由系统的不同组件处理的？
+
+\begin{itemize}
+\item 为此可以使用 UML 交互图之一。序列图是个不错的选择，不过在有些场景下通信图也可以。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 4 章}
+
+\begin{enumerate}
+\item 什么是事件溯源？
+
+\begin{itemize}
+\item 这是一种架构模式，它依赖于跟踪改变系统状态的事件，而不是跟踪状态\textbf{本身}。它带来更低的延迟、免费的审计日志以及可调试性等好处。
+\end{itemize}
+\item CAP 定理与 PACELC 定理常见的实际推论是什么？
+
+\begin{itemize}
+\item 由于网络分区终会发生，如果你想要分布式系统，就必须在一致性、可用性和延迟之间做取舍。发生分区时，你可以返回过期数据、返回错误，或者承担超时的风险。
+\end{itemize}
+\item Netflix 的 Chaos Monkey 可以用来做什么？
+
+\begin{itemize}
+\item 它可以帮你为服务的意外停机做好准备。
+\end{itemize}
+\item 缓存可以用在哪些地方？
+
+\begin{itemize}
+\item 既可以放在客户端，放在 Web 服务器、数据库或应用的前面，也可以放在靠近潜在客户端的主机上，取决于你的需求。
+\end{itemize}
+\item 当整个数据中心宕机时，如何避免你的应用也跟着宕机？
+
+\begin{itemize}
+\item 通过在多个区域中把应用部署到多个\textbf{地理节点}（\textbf{geode}）上。
+\end{itemize}
+\item 为什么要用 API 网关？
+
+\begin{itemize}
+\item 为了简化客户端代码，因为客户端无需硬编码你的服务实例地址。
+\end{itemize}
+\item Envoy 如何帮助你实现各种架构目标？
+
+\begin{itemize}
+\item 它通过提供背压、断路器、自动重试和异常值检测来增强系统的容错能力
+\item 它通过支持金丝雀发布和蓝绿部署来增强可部署性
+\item 它还提供负载均衡、追踪、监控和指标
+\end{itemize}
+\end{enumerate}
+
+\section*{第 5 章}
+
+\begin{enumerate}
+\item 如何确保代码中每个被打开的文件在不再使用时都会被关闭？
+
+\begin{itemize}
+\item 通过使用 RAII 惯用法——例如使用 \texttt{std::\allowbreak{}fstream}（输入/输出文件流）类，它们在离开作用域时会自动关闭文件。
+\end{itemize}
+\item 什么时候应该在 C++ 代码中使用裸指针（未封装在智能指针中）？
+
+\begin{itemize}
+\item 使用智能指针与使用裸指针并不冲突，只要后者是\emph{使用}对象而不是\emph{拥有}对象即可。\emph{不要让多个智能指针拥有同一资源}。裸指针应使用在作用域有限的小块代码、辅助函数和循环中。这类情形也可能是第三方库或对性能至关重要的代码。
+\end{itemize}
+\item 什么是推导指引？
+
+\begin{itemize}
+\item 一种告诉编译器应该为模板推导哪些参数的方式。推导指引可以是隐式的，也可以是用户定义的。
+\end{itemize}
+\item 什么时候应该使用 \texttt{std::\allowbreak{}optional} 和 \texttt{gsl::\allowbreak{}not\_\allowbreak{}null}？
+
+\begin{itemize}
+\item 前者用于我们想把所包含的值传递出去的情形。后者只传递指向它的指针。此外，前者可以为空，而后者始终指向一个对象。
+\end{itemize}
+\item 什么时候应该使用 \texttt{std::\allowbreak{}optional} 和 \texttt{std::\allowbreak{}expected}？
+
+\begin{itemize}
+\item \texttt{std::\allowbreak{}expected} 允许根据详细的错误信息采取行动，相比 \texttt{std::\allowbreak{}optional} 能对执行过程提供更多的控制。
+\end{itemize}
+\item 什么时候应该使用 \texttt{const,\allowbreak{} constexpr,\allowbreak{} consteval,\allowbreak{} }以及 \texttt{constinit}？
+
+\begin{itemize}
+\item \texttt{const} 关键字把变量声明为常量。\texttt{constexpr} 关键字声明变量或函数是常量表达式，并尽可能在编译期求值。\texttt{Constexpr} 变量隐式地是 \texttt{const}。\texttt{consteval} 关键字强制进行常量求值，并标记必须在编译期求值的立即函数，对这类函数的任何调用都会产生编译期常量表达式。\texttt{constinit} 关键字强制进行常量初始化，保证静态变量或线程局部变量在任何动态初始化发生之前完成初始化，从而避免静态初始化顺序问题，但变量本身不一定是 \texttt{const}。
+\end{itemize}
+\item 范围算法与视图有什么不同？
+
+\begin{itemize}
+\item 算法是急切求值的，而视图是惰性求值的。算法还允许使用投影。
+\end{itemize}
+\item 在定义函数时，如何通过不只指定概念名称的方式来约束类型？
+
+\begin{itemize}
+\item 通过使用 \texttt{requires} 子句。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 6 章}
+
+\begin{enumerate}
+\item 三法则、五法则和零法则分别是什么？
+
+\begin{itemize}
+\item C++ 中的三法则、五法则和零法则是 C++ 类进行资源管理的指导原则。三法则（C++11 之前）指出，如果一个类实现了析构函数、拷贝构造函数或拷贝赋值运算符中的某一个，那么它很可能需要显式定义全部三个。当类直接管理某种资源时，这一点至关重要，因为如果不实现全部三个成员函数，拷贝操作可能导致重复释放错误或内存泄漏。五法则（自 C++11 起）在三法则的基础上增加了移动构造函数和移动赋值运算符。它让类能够通过避免不必要的拷贝来受益于移动语义。零法则则相反，它主张如果一个类不直接管理资源，那么它很可能根本不需要这些函数中的任何一个，也不应该实现它们。因此，这类类会把资源的所有权委托给其他类。
+\end{itemize}
+\item 何时使用 niebloids，何时使用 hidden friends？
+
+\begin{itemize}
+\item Niebloids 会“禁用” ADL，而 hidden friends 则依赖 ADL 才能被找到。因此前者可以加快编译速度（需要考虑的重载更少），而后者可以帮助你实现定制点。
+\end{itemize}
+\item 如何改进数组接口，使其更接近生产可用？
+
+\begin{itemize}
+\item 应添加 \texttt{begin} 和 \texttt{end}，以及它们对应的常量版本和反向版本，这样数组就能像正规容器一样使用。\texttt{value\_\allowbreak{}type}、\texttt{pointer} 和 \texttt{iterator} 之类的特性有助于在泛型代码中复用数组类型。给这些成员加上 \texttt{constexpr} 和 \texttt{noexcept} 可以提升安全性和性能。\texttt{operator[]} 的 \texttt{const} 重载也会有所帮助。
+\end{itemize}
+\item 什么是折叠表达式？
+
+\begin{itemize}
+\item 对参数包按二元函数对象进行折叠（或归约）的表达式。换句话说，就是把给定的操作应用于所有传入的可变参数模板实参，从而产生单个值（或 \texttt{void}）的语句。
+\end{itemize}
+\item 什么时候不应该使用静态多态？
+
+\begin{itemize}
+\item 当你需要为代码的使用者提供一种在运行时添加更多类型的方式时。
+\end{itemize}
+\item C++ 提供了哪些机制把对象放置到预先分配的缓冲区中？这样做有哪些理由？
+
+\begin{itemize}
+\item 内存竞技场（memory arena）与 placement new 运算符。内存竞技场有助于提升性能、改善内存局部性并简化内存管理。placement new 运算符作为一种优化手段，用于避免每次需要新实例时都重新分配内存。
+\end{itemize}
+\item 在 winking out 这个示例中，我们如何再省下一次分配？
+
+\begin{itemize}
+\item 通过在添加元素时避免 vector 的重新调整大小。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 7 章}
+
+\begin{enumerate}
+\item 在 CMake 中，安装（install）与导出（export）目标之间有什么区别？
+
+\begin{itemize}
+\item 导出意味着即便你的代码没有被安装，其他尝试查找你的包的项目也能使用这些目标。CMake 的包注册表（package registry）可用于存储导出目标的位置信息。二进制文件永远不会离开构建目录。安装则要求把目标复制到某个位置，而且如果不是系统目录，还要为配置文件或目标本身设置路径。
+\end{itemize}
+\item 如何让模板代码编译得更快？
+
+\begin{itemize}
+\item 遵循 Chiel 法则（Rule of Chiel）。
+\end{itemize}
+\item 在 CMake 中，我们如何强制使用特定的 C++ 标准？
+
+\begin{itemize}
+\item 通过调用 \texttt{set\_\allowbreak{}target\_\allowbreak{}properties(\allowbreak{}our\_\allowbreak{}target PROPERTIES CXX\_\allowbreak{}STANDARD our\_\allowbreak{}required\_\allowbreak{}cxx\_\allowbreak{}standard CXX\_\allowbreak{}STANDARD\_\allowbreak{}REQUIRED YES CXX\_\allowbreak{}EXTENSIONS NO)\allowbreak{}}。
+\end{itemize}
+\item 如何在 CMake 中构建文档，并随 DEB 和 RPM 包一起发布？
+
+\begin{itemize}
+\item 通过创建一个生成文档的目标（如 \emph{第 3 章}《功能性需求与非功能性需求》中所述），将其安装到 \texttt{CMAKE\_\allowbreak{}INSTALL\_\allowbreak{}DOCDIR}，然后确保该路径没有被指定在 \texttt{CPACK\_\allowbreak{}RPM\_\allowbreak{}EXCLUDE\_\allowbreak{}FROM\_\allowbreak{}AUTO\_\allowbreak{}FILELIST} 变量中。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 8 章}
+
+\begin{enumerate}
+\item 如何在 Conan 中使用多个编译器？
+
+\begin{itemize}
+\item 使用 Conan 配置文件（profiles）。
+\end{itemize}
+\item 如果你希望用 C++11 之前的 GCC ABI 来编译 Conan 依赖，该怎么做？
+
+\begin{itemize}
+\item 把 \texttt{compiler.\allowbreak{}libcxx} 设置为 \texttt{libstdc++}，而不是 \texttt{libstdc+\allowbreak{}+\allowbreak{}11}。
+\end{itemize}
+\item 使用 \texttt{conanfile.\allowbreak{}txt} 和 \texttt{conanfile.\allowbreak{}py} 的目的是什么？
+
+\begin{itemize}
+\item \texttt{conanfile.\allowbreak{}txt} 文件是更灵活的 \texttt{conanfile.\allowbreak{}py} 的简化版本。前者适合基本的依赖管理与依赖消费，后者则用于创建包以及表达条件性需求。
+\end{itemize}
+\item Conan 采用哪种方式测试包？
+
+\begin{itemize}
+\item Conan 使用专门的 \texttt{test\_\allowbreak{}package} 文件夹以及 \texttt{conanfile.\allowbreak{}py} 中的 \texttt{test()} 方法来测试包。
+\end{itemize}
+\item 为什么要在 \texttt{conanfile.\allowbreak{}py} 中声明 \texttt{exports\_\allowbreak{}sources} 属性或 \texttt{export\_\allowbreak{}sources} 方法？
+
+\begin{itemize}
+\item 它声明了应随 recipe 一起导出的文件集合，这些文件可用于生成该包。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 9 章}
+
+\begin{enumerate}
+\item 头文件有哪些缺陷，模块又是如何解决它们的？
+
+\begin{itemize}
+\item 头文件的缺陷包括：编译缓慢、ODR 违规、宏冲突，以及由于包含顺序相关而导致的名称冲突，此外它们的封装性较弱。模块改善了依赖管理与封装，提供了清晰定义的接口，缩短了编译时间，并使大型项目更易于管理。
+\end{itemize}
+\item 模块支持哪些代码组织方式？
+
+\begin{itemize}
+\item C++ 把模块组织为逻辑单元，它们由公开的模块接口单元（module interface unit）和私有的模块实现单元（module implementation unit）组成。模块分解通过模块分区（module partition）和子模块来实现。
+\end{itemize}
+\item \texttt{import X} 与 \texttt{import <X>} 有何不同？
+
+\begin{itemize}
+\item 后者允许被导入的 \texttt{<x>} 头文件中的宏可见。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 10 章}
+
+\begin{enumerate}
+\item 测试金字塔的底层是什么？
+
+\begin{itemize}
+\item 单元测试。
+\end{itemize}
+\item 有哪些类型的非功能性测试？
+
+\begin{itemize}
+\item 性能、耐久性、安全性、可用性、完整性和易用性。
+\end{itemize}
+\item 著名的根本原因分析方法叫什么名字？
+
+\begin{itemize}
+\item 5 whys（五问法）
+\end{itemize}
+\item 在 C++ 中能否测试编译期代码？
+
+\begin{itemize}
+\item 可以，例如使用 \texttt{static\_\allowbreak{}assert}。
+\end{itemize}
+\item 在为带有外部依赖的代码编写单元测试时，应当使用什么？
+
+\begin{itemize}
+\item 测试替身（test double），例如 mock、spy、dummy、fake 和 stub。
+\end{itemize}
+\item 单元测试在持续集成/持续部署中扮演什么角色？
+
+\begin{itemize}
+\item 它们是门控机制的基础，并起到早期预警的作用。
+\end{itemize}
+\item 有哪些工具可以用于测试基础设施代码？
+
+\begin{itemize}
+\item Serverspec、Testinfra、Goss。
+\end{itemize}
+\item 在单元测试中访问类的私有属性和方法是个好主意吗？
+
+\begin{itemize}
+\item 你应该这样设计类：使你永远不必直接访问它们的私有属性。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 11 章}
+
+\begin{enumerate}
+\item 持续集成在开发过程中通过哪些方式节省时间？
+
+\begin{itemize}
+\item 它让你能更早发现缺陷，并在它们进入生产环境之前修复。
+\end{itemize}
+\item 实现持续集成和持续部署需要不同的工具吗？
+
+\begin{itemize}
+\item 流水线通常使用单一工具编写；实际的测试与部署则会用到多种工具。
+\end{itemize}
+\item 什么时候适合在会议中进行代码评审？
+
+\begin{itemize}
+\item 当异步代码评审耗时过长时。
+\end{itemize}
+\item 在持续集成过程中，你可以用哪些工具来评估代码质量？
+
+\begin{itemize}
+\item 测试、静态分析。
+\end{itemize}
+\item 谁参与编写行为驱动开发（BDD）场景？
+
+\begin{itemize}
+\item 开发者、QA 和业务人员。
+\end{itemize}
+\item 什么情况下你会考虑使用不可变基础设施？什么情况下会排除它？
+
+\begin{itemize}
+\item 它最适合与无状态服务，或能把存储外包给数据库或网络存储的服务一起使用。它不适合有状态服务。
+\end{itemize}
+\item 你如何描述 Ansible、Packer 和 Terraform 之间的区别？
+
+\begin{itemize}
+\item Ansible 用于现有\textbf{虚拟机}（\textbf{VM}）的配置管理，Packer 用于构建云上 VM 镜像，而 Terraform 用于构建云基础设施（例如网络、VM 和负载均衡器）。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 12 章}
+
+\begin{enumerate}
+\item 为什么安全性在现代系统中很重要？
+
+\begin{itemize}
+\item 现代系统通常连接到网络，因此可能容易受到外部攻击。
+\end{itemize}
+\item 并发有哪些挑战？
+
+\begin{itemize}
+\item 代码更难以设计和调试。可能会出现更新问题。
+\end{itemize}
+\item 什么是 C++ 核心准则（C++ Core Guidelines）？
+
+\begin{itemize}
+\item 记录如何构建 C++ 系统的最佳实践。
+\end{itemize}
+\item 安全编码（secure coding）与防御性编码（defensive coding）有何区别？
+
+\begin{itemize}
+\item 安全编码为最终用户提供健壮性，而防御性编码则为接口的使用方提供健壮性。
+\end{itemize}
+\item 如何检查你的软件是否包含已知漏洞？
+
+\begin{itemize}
+\item 通过使用 CVE 数据库，或 OWASP Dependency-Check、Snyk 等自动化扫描器。
+\end{itemize}
+\item 静态分析与动态分析有何区别？
+
+\begin{itemize}
+\item 静态分析在不执行代码的情况下对源代码进行分析。动态分析则要求执行代码。
+\end{itemize}
+\item 静态链接与动态链接有何区别？
+
+\begin{itemize}
+\item 采用静态链接时，可执行文件包含运行应用程序所需的全部代码。采用动态链接时，部分代码（动态库）在不同可执行文件之间共享。
+\end{itemize}
+\item 如何借助编译器来修复安全问题？
+
+\begin{itemize}
+\item 现代编译器包含用于检查某些缺陷的 sanitizer。
+\end{itemize}
+\item 如何在持续集成流水线中实现安全意识？
+
+\begin{itemize}
+\item 通过使用能扫描漏洞并执行各类静态与动态分析的自动化工具。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 13 章}
+
+\begin{enumerate}
+\item 从本章的微基准测试（microbenchmark）和性能剖析（profiling）结果中，我们能学到什么？
+
+\begin{itemize}
+\item 我们能学到：即便要检查的元素数量不算多，二分查找也比线性查找快得多。这说明计算复杂度（也就是大 O）很重要。在你的机器上，很可能二分查找在最大数据集上最慢的一次，仍然比线性查找最快的一次还要快！
+\item 取决于你的缓存大小，你可能还注意到：当数据不再能放进特定级别的缓存时，所需内存的增加会导致性能下降。
+\end{itemize}
+\item 遍历多维数组的方式对性能重要吗？为什么？
+
+\begin{itemize}
+\item 至关重要，因为我们可能会按线性方式访问内存中的数据，CPU 预取器（prefetcher）会喜欢这种做法并回报我们更好的性能；或者我们可能在内存中跳跃访问，从而拖累性能。
+\end{itemize}
+\item 在我们的协程示例中，为什么不能在 libcoro 的 \texttt{do\_\allowbreak{}routine\_\allowbreak{}work} 函数内部创建线程池？
+
+\begin{itemize}
+\item 因为生命周期问题。
+\end{itemize}
+\item 我们如何改写协程示例，使其使用生成器（generator）而不只是任务（task）？
+
+\begin{itemize}
+\item 生成器的主体需要使用 \texttt{co\_yield}。此外，线程池中的线程需要进行同步，可能要用到原子变量。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 14 章}
+
+\begin{enumerate}
+\item 面向服务的架构中，服务有哪些特性？
+
+\begin{itemize}
+\item 它是对具有明确结果的业务活动的表示
+\item 它是自包含的
+\item 它对其使用者是不透明的
+\item 它可以由其他服务组合而成
+\end{itemize}
+\item Web 服务有哪些好处？
+
+\begin{itemize}
+\item 它们易于使用常见工具进行调试，能与防火墙良好协作，并且可以利用现有基础设施，例如负载均衡、缓存和 CDN。
+\end{itemize}
+\item 什么情况下微服务不是一个好选择？
+
+\begin{itemize}
+\item 当 RPC 和冗余的成本超过其带来的收益时。
+\end{itemize}
+\item 微服务如何帮助你更好地利用系统资源？
+
+\begin{itemize}
+\item 相比扩展整个系统，只扩展资源不足的部分更容易。
+\end{itemize}
+\item 微服务和单体（应用）如何（在演进的系统中）共存？
+
+\begin{itemize}
+\item 新功能可以作为微服务来开发，同时某些功能可以从单体中拆分出来并外置。
+\end{itemize}
+\item 哪种类型的团队从微服务中获益最多？
+
+\begin{itemize}
+\item 遵循 DevOps 原则的跨职能自治团队。
+\end{itemize}
+\item 为什么在引入微服务时，必须有一套成熟的 DevOps 方法？
+
+\begin{itemize}
+\item 要由各自的团队手动处理大量微服务的测试与部署，几乎是不可能的。
+\end{itemize}
+\item 微服务有哪些部署策略？每种策略各有什么好处？
+
+\begin{itemize}
+\item \textbf{每主机单个服务}：更容易针对工作负载调整机器
+\item \textbf{每主机多个服务}：资源利用率更高
+\end{itemize}
+\item 云平台与传统托管有何不同？
+
+\begin{itemize}
+\item 云平台提供易于使用的 API，这意味着可以通过编程方式管理资源。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 15 章}
+
+\begin{enumerate}
+\item 不同交互类型的适用范围是什么？
+
+\begin{itemize}
+\item 客户端—服务器关系可以按两个维度分类：通信类型（同步、异步）和交互模型（一对一、一对多、多对一、多对多）。
+\end{itemize}
+\item 消息队列有哪些用例？
+
+\begin{itemize}
+\item IPC、事务性服务和 IoT。
+\end{itemize}
+\item 相比 XML，选择 JSON 有哪些好处？
+
+\begin{itemize}
+\item JSON 的开销更低，相对 XML 越来越流行，而且通常更便于人类阅读。
+\end{itemize}
+\item REST 如何基于 Web 标准构建？
+
+\begin{itemize}
+\item 它把 HTTP 动词和 URL 作为其基本构建块。
+\end{itemize}
+\item 为什么 REST 可能不是连接微服务的最佳选择？
+
+\begin{itemize}
+\item 例如，相比 gRPC，它可能带来更大的开销。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 16 章}
+
+\begin{enumerate}
+\item 应用容器与操作系统容器有何不同？
+
+\begin{itemize}
+\item 应用容器设计用于承载单个进程，而操作系统容器通常运行 Unix 系统中典型可用的所有进程。
+\end{itemize}
+\item Unix 系统中有哪些早期的沙箱环境示例？
+
+\begin{itemize}
+\item chroot、BSD Jail 和 Solaris Zones。
+\end{itemize}
+\item 为什么容器很适合微服务？
+
+\begin{itemize}
+\item 无论底层技术如何，它们都提供统一的接口来运行应用程序。
+\end{itemize}
+\item 容器与 VM 的主要区别是什么？
+
+\begin{itemize}
+\item 容器更轻量，因为它们不需要 hypervisor、一份操作系统内核副本，也不需要像 init 系统或 syslog 这样的辅助进程。
+\end{itemize}
+\item 什么情况下应用容器是一个糟糕的选择？
+
+\begin{itemize}
+\item 当你想把多进程应用放进单个容器时。
+\end{itemize}
+\item 有哪些工具可以构建多平台容器镜像？
+
+\begin{itemize}
+\item \texttt{manifest-tool} 和 \texttt{docker buildx}。
+\end{itemize}
+\item 除了 Docker，还有哪些容器运行时？
+
+\begin{itemize}
+\item Podman、containerd、runc、Wasmtime、gVisor（runsc）、Kata Containers 和 CRI-O。
+\end{itemize}
+\item 有哪些流行的编排器？
+
+\begin{itemize}
+\item Kubernetes、OpenShift、Docker Swarm 和 Nomad。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 17 章}
+
+\begin{enumerate}
+\item 可观测性、监控、日志和追踪有何区别？
+
+\begin{itemize}
+\item 可观测性是指从系统的外部输出理解其内部状态的能力，它结合实时指标、日志和追踪来保证韧性。监控跟踪预定义的指标，以理解、管理和改进系统的健康状况与行为。日志记录系统中发生的特定事件，用于调试。追踪跟踪单个请求跨多个服务的完整历程，用于诊断性能瓶颈和依赖关系，也用于调试。
+\end{itemize}
+\item 什么是统一的日志层？
+
+\begin{itemize}
+\item 它是一个可配置的设施，用于收集、处理和存储日志。
+\end{itemize}
+\item 收集应用指标的拉取（pull）模型与推送（push）模型有何区别？
+
+\begin{itemize}
+\item 在推送模型中，应用主动把自身的指标发送（推送）到中央收集器。在拉取模型中，中央监控服务通过定期轮询应用端点来主动抓取（拉取）指标。推送模型面向短时批处理任务，而拉取模型面向长时运行的服务。
+\end{itemize}
+\end{enumerate}
+
+\section*{第 18 章}
+
+\begin{enumerate}
+\item 在云中运行应用程序与使应用程序云原生化之间有何区别？
+
+\begin{itemize}
+\item 云原生设计涵盖容器和无服务器函数等现代技术，它们打破了对 VM 的依赖。
+\end{itemize}
+\item 如何在本地部署云原生应用？
+
+\begin{itemize}
+\item 借助 OpenStack 等方案即可实现。
+\end{itemize}
+\item Kubernetes 的\textbf{高可用}（\textbf{HA}）集群最小规模是多少？
+
+\begin{itemize}
+\item 最小 HA 集群需要控制平面中的三个节点以及三个工作节点。
+\end{itemize}
+\item 哪个 Kubernetes 对象代表允许网络连接的微服务？
+
+\begin{itemize}
+\item Service。
+\end{itemize}
+\item 为什么日志在分布式系统中不够用？
+
+\begin{itemize}
+\item 在分布式系统中收集日志并在它们之间寻找关联是件麻烦事，因为每个服务都独立记录日志。因此，很难追踪一个请求的路径。分布式追踪更适合这一目的。
+\end{itemize}
+\item 服务网格如何帮助构建安全的系统？
+
+\begin{itemize}
+\item 服务网格抽象了不同系统之间的连接性，从而可以施加加密和审计。
+\end{itemize}
+\item GitOps 如何提升生产力？
+
+\begin{itemize}
+\item 它使用一个熟悉的工具 Git 来处理持续集成和持续部署，无需编写专门的流水线。
+\end{itemize}
+\end{enumerate}

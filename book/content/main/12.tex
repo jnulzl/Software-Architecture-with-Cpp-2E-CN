@@ -1,0 +1,1066 @@
+在上一章中，我们讨论了如何利用 \textbf{持续集成/持续部署}（\textbf{CI/CD}）高效地构建和部署应用。现在，我们把注意力转向安全性，确保代码、依赖项以及部署所涉及的环境都健壮且有韧性。本章介绍如何评估代码库的安全性，既包括内部开发的软件，也包括第三方模块。它还会展示如何在代码、依赖项和操作系统层面改进现有软件。不过要记住，仅仅遵循本章列出的每一个步骤，并不一定能让你抵御所有可能出现的问题。我们的目标是向你展示一些可能存在的危险以及应对它们的方法。因此，你应当始终关注系统的安全性，并把审计变成一项常规工作。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 具备安全意识的设计
+\item 检查依赖项是否安全
+\item 加固你的代码
+\item 加固你的环境
+\end{itemize}
+
+\section{技术要求}
+
+本章中使用的一些示例要求编译器至少满足以下版本：
+
+\begin{itemize}
+\item GCC 14+
+\item Clang 19+
+\end{itemize}
+
+本章中的代码已放在 GitHub 上：\href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter12}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter12}。
+
+\section{具备安全意识的设计}
+
+在互联网普及之前，软件作者并不太在意其设计的安全性。毕竟，如果用户提供了格式错误的数据，用户最多只能弄崩自己的电脑。攻击者要想利用软件漏洞访问受保护的数据，必须实际接触到存放这些数据的机器。
+
+\label{idx:988}
+\label{idx:989}
+即使在为网络内使用而设计的软件中，安全性也往往是事后才考虑的。以 \textbf{HyperText Transfer Protocol }（\textbf{HTTP}）为例。尽管它允许对某些资源进行密码保护，但所有数据都以明文传输。这意味着同一网络上的任何人都可以窃听正在传输的数据。
+
+然而在今天，我们应当从设计的最初阶段就拥抱安全性，并在软件开发、运维和维护的每一个阶段都牢记它。我们每天产生的大多数软件，都会以某种方式与其他现有系统相连。
+
+省略安全措施，不仅会让我们自己，也会让我们的合作伙伴面临潜在的攻击、数据泄露，乃至最终的法律诉讼。例如，未能保护好个人数据可能导致数百万美元的罚款。
+
+\label{idx:990}
+\label{idx:991}
+\label{idx:992}
+\label{idx:993}
+\label{idx:994}
+\label{idx:995}
+诸如欧盟和英国的 \textbf{General Data Protection Regulation}（\textbf{GDPR}）、加利福尼亚州的 \textbf{California Consumer Privacy Act}（\textbf{CCPA}）与 \textbf{California Privacy Rights Act}（\textbf{CPRA}）、中国的 \textbf{Personal Information Protection Law}（\textbf{PIPL}）以及日本的 \textbf{Act on the Protection of Personal Information}（\textbf{APPI}）等法规，都强制要求保护个人数据。一个良好的做法是对数据进行匿名化处理，并尽可能少地保留个人数据，以避免数据泄露。
+
+在本节中，我们将探讨几种设计安全系统的策略。我们先学习如何构建既直观又难以被误用的接口。接着，我们会看看 C++ 如何帮助你自动管理资源，并解决并发编程中常见的陷阱。我们还会简要提及 C++ Core Guidelines，探讨防御性编程原则，并回顾开发者应当了解的最常见的软件漏洞。
+
+\subsection{让接口易用且难以误用}
+
+我们该如何为安全性设计架构呢？最好的方式就是像潜在攻击者一样思考。把一个箱子弄开有很多种办法，但通常你会寻找不同部件连接处的薄弱点。就箱子而言，这可能是箱盖与箱底之间的接缝。
+
+\label{idx:996}
+\label{idx:997}
+在软件架构中，元素之间的连接称为 \textbf{接口}。由于接口的主要作用是与外部世界交互，它们也是整个系统中最脆弱的部分。确保接口受到保护、直观且健壮，就能解决软件最容易被攻破的那些明显途径。
+
+要想把接口设计得既易用又难以误用，不妨做一做下面这个练习。想象你自己是接口的使用者。你想实现一个使用你的支付网关的电商商店，或者想实现一个连接本书通篇使用的示例系统 Customer API 的 VR 应用。
+
+关于接口设计，有一条通用规则：避免以下特征：
+
+\begin{itemize}
+\item 函数/方法中参数过多
+\item 参数名称含义模糊
+\item 用输出参数来返回结果
+\item 参数之间相互依赖
+\end{itemize}
+
+为什么这些特征被认为是有问题的？
+
+\begin{itemize}
+\label{idx:998}
+\item 第一种特征不仅让人难以记住参数的含义，还难以记住它们的顺序。这会导致使用上的错误，进而可能引发崩溃和安全问题。
+\item 第二种特征与第一种有着相似的后果。接口越不直观，用户就越容易犯错。
+\item 第三种特征是第二种的一个变体，但更棘手。用户不仅要记住哪些参数是输入、哪些是输出，还必须记住该如何处理输出。谁负责管理资源的创建与销毁？这是如何实现的？背后的内存管理模型是怎样的？输出参数并不比复制消除（copy elision）更高效。
+\end{itemize}
+
+借助现代 C++，返回一个包含所有必要数据的值比以往任何时候都更容易。有了 pair、tuple 和 vector，就再也没有理由使用输出参数了。除此之外，返回值还有助于践行不修改对象状态的做法。这反过来又能减少与并发相关的问题。
+
+\begin{itemize}
+\item 最后，最后一种特征带来了不必要的认知负担，正如前面的例子那样，这会导致错误乃至最终失败。这类代码也更难测试和维护，因为每引入一处改动，都必须考虑到所有已有的可能组合。任何组合处理不当，都是对系统的潜在威胁。
+\end{itemize}
+
+让我们借助一个例子来理解这一点。回到第一条规则——避免参数过多——当两个参数类型相同时，即使只有两个也很容易混淆，更不用说参数过多的情况了。
+
+\label{idx:999}
+\label{idx:1000}
+\label{idx:1001}
+来看看 C 标准库中的 \texttt{qsort} 函数。它使用用户提供的比较函数，为任意对象的数组实现快速排序算法。这个排序函数在 C 中实现了泛型编程，因为该语言不支持泛型类型，也就是所谓的 \textbf{参数化多态}。相比之下，C++ 模板通过 \textbf{单态化}（monomorphization）实现泛型编程，即编译器把泛型（参数化）代码转换为程序中每种所用类型对应的具体版本。
+
+比较函数必须在其第一个参数小于第二个参数时返回负值，相等时返回零，大于时返回正值：
+
+\begin{codebox}[cpp]
+#include <iostream>
+//C 标准通用工具库
+#include <cstdlib>
+//C 风格强制转换
+int comp(const void* a, const void* b) {
+  return *(int*)a - *(int*)b;
+}
+\end{codebox}
+
+如果不小心把类型相同的第二个和第三个参数弄混，排序结果会显然让你一头雾水：
+
+\begin{codebox}[cpp]
+  int arr[] = {5, 4, 3, 2, 1};
+  int n = sizeof(arr) / sizeof(arr[0]);
+ 
+  //https://en.cppreference.com/w/c/algorithm/qsort
+  //void qsort(void* ptr, size_t number, size_t width,
+  //int (*comp)(const void*, const void*));
+  //正确顺序：1 2 3 4 5
+  //qsort(arr, n, sizeof(int), comp);
+  //糟糕，在 x86-64 上可能变成：5 65540 0 2 196608
+  //数组变得一团糟
+  qsort(arr, sizeof(int), n, comp);
+  for (int i = 0; i < n; ++i) {
+    std::cout << arr[i] << ' ';
+  }
+\end{codebox}
+
+\label{idx:1002}
+在这个例子中，把数组的元素个数与元素字节大小对调之后，\texttt{qsort} 函数排序的不再是 5 个各占 4 字节的元素（在 Intel 和 AMD 64 位处理器上 \texttt{sizeof(\allowbreak{}int)\allowbreak{}} 的值），而是 4 个各占 5 字节的元素。因此，\texttt{comp} 函数在比较两个值时，会先把 \texttt{const} \texttt{void*} 指针转换为 \texttt{int*} 类型再解引用，而由于内存区域发生重叠，这会导致更加混乱的结果。
+
+\myGraphic{0.652}{images/B18456_12_01.png}{图 12.1：一维数组的内存布局（小端字节序）}
+
+数组元素在内存中的位置通过指针算术计算得到（即对指针变量执行加法、减法、自增、自减等算术运算）：\texttt{pointer =\allowbreak{} array +\allowbreak{} index * size}，因为 \texttt{array[i]} 等价于 \texttt{*(\allowbreak{}array +\allowbreak{} i)\allowbreak{}}。
+
+\label{idx:1003}
+与 \texttt{qsort} 不同，C++ 标准库中模板化的 \texttt{std::sort} 函数类型安全性更高，因为它操作的是有类型的数组元素，而不是不安全的 \texttt{void*} 指针。在 \texttt{qsort} 中，指向待比较数组元素的指针会在比较函数里被转换成某个具体类型。这样一来，由于类型信息已经丢失，编译器无论如何都无法阻止类型转换错误。
+
+在这种情况下，强 typedef（strong typedef）可以派上用场，它能保证两个类型即便底层实现相同也彼此区分，因为普通 typedef 并不会创建新类型。C++ 原生并不支持这类类型，但可以用用户自定义的转换函数来模拟。
+
+在这个实现中，两个类都封装了 \texttt{size\_t} 类型的值，但这两个类本身并不兼容：
+
+\begin{codebox}[cpp]
+template <typename T> class strong_typedef {
+public:
+  explicit strong_typedef(T val) : value_(val) {}
+  explicit operator T() const noexcept { return value_; }
+private:
+  T value_;
+};
+class number : public strong_typedef<size_t> {
+public:
+  explicit number(size_t val) : strong_typedef(val) {}
+};
+class width : public strong_typedef<size_t> {
+public:
+  explicit width(size_t val) : strong_typedef(val) {}
+};
+void safe_qsort(void *ptr, const number& number, const width& width,
+                int (*comp)(const void *, const void *)) {
+  qsort(ptr, static_cast<size_t>(number), static_cast<size_t>(width), comp);
+}
+\end{codebox}
+
+\label{idx:1004}
+在这个安全的实现中，由于类型不兼容，\texttt{number} 和 \texttt{width} 两个参数无法互换，从而在编译期报出错误：
+
+\begin{codebox}[cpp]
+int arr[] = {5, 4, 3, 2, 1};
+constexpr int n = sizeof(arr) / sizeof(arr[0]);
+//编译错误：没有已知的从 'width' 到 'number' 的转换
+//safe_qsort(arr, width{sizeof(int)}, number{n}, comp);
+safe_qsort(arr, number{n}, width{sizeof(int)}, comp);
+for (int i : arr) {
+  std::cout << i << ' ';
+}
+\end{codebox}
+
+\label{idx:1005}
+强 typedef 的概念（也称为不透明 typedef（opaque typedef）和幻影类型（phantom type））增强了类型安全性。它们是服务于强接口的强类型。有一些 C++ 库实现了这一概念：\texttt{type\_\allowbreak{}safe}、\texttt{mp\_units}、\texttt{NamedType} 和 \texttt{strong\_\allowbreak{}type}。Boost 库也通过提供 \texttt{BOOST\_\allowbreak{}STRONG\_\allowbreak{}TYPEDEF} 宏实现了这一概念。
+
+\label{idx:1006}
+前面这些规则适用于接口中与使用方打交道的外部部分。不过，你也应当对内部部分采取类似措施：校验输入，确保取值正确且合理，并防止接口所提供的服务被不当使用。
+
+\subsection{启用自动资源管理}
+
+\label{idx:1007}
+系统不稳定也可能源于内存泄漏、竞态条件、数据竞争和死锁。这些症状都是资源管理不善的表现。尽管资源管理是一项复杂的任务，但有一种机制能帮你减少问题的数量——自动资源管理。
+
+\label{idx:1008}
+在本文语境中，\textbf{资源}指的是你通过操作系统获得访问权限的东西，例如动态分配的内存、打开的文件、套接字、进程或线程，你必须确保正确地使用它。所有这些资源在获取和释放时都需要执行特定的操作。其中一些在其生命周期内还需要执行特定操作。未能在恰当的时候释放这类资源会导致泄漏。由于资源通常是有限的，从长远来看，当无法再创建新资源时，泄漏就会演变为意料之外的行为。
+
+资源管理在 C++ 中之所以如此重要，是因为与许多其他高级语言不同，C++ 没有垃圾回收，软件开发者要对资源的生命周期负责。理解这一生命周期有助于构建安全、稳定的系统。
+
+\label{idx:1009}
+尽管如此，虽然 C++ 没有内置的垃圾回收器，但确实存在使用 C++ 库实现的方案，例如 \textbf{bdwgc }（即 \textbf{Boehm–Demers–Weiser Garbage Collector}），它也称为 \texttt{bdw-gc}、\texttt{boehm-gc} 或 \texttt{libgc}（用于替代 C 的 \texttt{malloc} 函数或 C++ 的 \texttt{new} 运算符），以及 C 和 C++ 的内存安全实现，例如实验性的 Fil-C 和 TrapC。
+
+\label{idx:1010}
+Fil-C 中的内存保护是通过 InvisiCap 指针实现的，这种指针会跟踪所指内存的边界和类型。它的垃圾回收由 \textbf{Fil's Unbelievable Garbage Collector }（\textbf{FUGC}）负责，后者控制所有内存分配和释放操作。这个实现的强大程度足以运行 CMake、CPython、Perl、Wayland 和 musl 等工具和库的内存安全版本。不过，Fil-C 目前即使在最理想的情况下也比普通 C 慢 1.5 倍，最差情况下则慢约 4 倍。
+
+\label{idx:1011}
+\label{idx:1012}
+\label{idx:1013}
+然而，垃圾回收是有代价的。其中一个会影响应用执行的缺点叫做 \textbf{垃圾回收暂停}（\textbf{GC pause}），即应用执行被暂时挂起，以便其垃圾回收器释放内存，这在多线程应用中会很快导致可扩展性问题。不可预测的停顿可能影响性能。这使得采用垃圾回收的系统不太适合某些 \textbf{实时应用}（\textbf{RTA}）、事务处理或交互式程序。因此，C++ 中的垃圾回收库并未被普遍采用。
+
+与这些垃圾回收系统不同，Qt 库提供了一种内置的自动内存管理方式。它为派生自 \texttt{QObject} 类的子类和父类模拟了垃圾回收。这个库提供了无需处理指针的自动内存管理。因此，当父对象（包括应用本身）被销毁时，其所有子对象也会被自动销毁。
+
+\label{idx:1014}
+回到资源管理，最常见的资源管理惯用法是 \textbf{资源获取即初始化 }（\textbf{RAII}）。尽管它起源于 C++，但也已被用于其他语言，例如 Ada、Rust 和 Vala。这种惯用法利用对象的构造函数和析构函数分别分配和释放资源。这样一来，我们就能保证当持有资源的对象离开作用域时，正在使用的资源会被确定性地释放。
+
+\label{idx:1015}
+C++ 提供的支持 RAII 的标准库工具，例如智能指针 \texttt{std::\allowbreak{}unique\_\allowbreak{}ptr} 和 \texttt{std::\allowbreak{}shared\_\allowbreak{}ptr}，\textbf{mutex}（\textbf{mutual exclusion} 的缩写）包装器 \texttt{std::\allowbreak{}lock\_\allowbreak{}guard}、\texttt{std::\allowbreak{}unique\_\allowbreak{}lock} 和 \texttt{std::\allowbreak{}shared\_\allowbreak{}lock}，以及文件 \texttt{std::\allowbreak{}ifstream }和 \texttt{std::\allowbreak{}ofstream}。智能指针自动管理内存，确保动态分配的对象在离开作用域时被妥善释放。这种行为遵循 RAII 原则。
+
+\label{idx:1016}
+\textbf{指南支持库}（Guidelines Support Library，\textbf{GSL}）——我们稍后会详细讨论它——还为实现自动化资源管理提供了一个特别有用的工具。在代码中使用 \texttt{gsl::\allowbreak{}finally(\allowbreak{})\allowbreak{}} 函数，我们可以创建一个 \texttt{gsl::\allowbreak{}final\_\allowbreak{}action(\allowbreak{})\allowbreak{}} 对象，并把一些代码附加到该对象上。当该对象的析构函数被调用时，这段代码就会执行。这意味着，无论是函数成功返回，还是在发生异常时进行栈展开，这段代码都会被执行。
+
+不应过多使用这种做法，因为设计类时通常更好的做法是始终考虑 RAII。但如果你要与一个不遵循 RAII 原则的第三方模块交互，又想确保包装器的安全性，那么 \texttt{finally()} 可以帮你做到这一点。
+
+\label{idx:1017}
+举个例子，假设我们有一家支付运营方，它只允许每个账户同时登录一次。如果我们不想阻止用户将来继续付款，就应该在处理完交易后立即登出。当一切顺利、完全按我们的设计走时，这没有问题。但一旦发生异常，我们也希望确保安全并释放资源。下面看看如何用 \texttt{gsl::\allowbreak{}finally(\allowbreak{})\allowbreak{}} 做到这一点：
+
+\begin{codebox}[text]
+TransactionStatus processTransaction(AccountName account, ServiceToken token, Amount amount)
+{
+  payment::login(account, token);
+  auto scope_guard = gsl::finally([] { payment::logout(); });
+  payment::process(amount); // We assume this can lead to exception
+  return TransactionStatus::TransactionSuccessful;
+}
+\end{codebox}
+
+\label{idx:1018}
+无论调用 \texttt{payment::\allowbreak{}process(\allowbreak{})\allowbreak{}} 期间发生什么，我们至少可以保证，一旦离开 \texttt{process\allowbreak{}Transaction(\allowbreak{})\allowbreak{}} 的作用域，就会把用户登出。
+
+总结本节：使用 RAII 会让你在类设计阶段——也就是你完全掌控代码的时候——更多地思考资源管理，而对之后你（或其他人）使用接口时的情况考虑得更少，因为那时你的意图可能已不再那么清晰。
+
+\subsection{应对并发的弊端}
+
+\label{idx:1019}
+并发（concurrency）是多个任务或进程交替执行，通过它们之间快速的切换来制造同时进行的假象，即便是在单个处理器核上也是如此。这适用于任务可以被中断和恢复的多任务操作系统。因此，并发是系统管理多个任务并确保它们协调运行的能力。
+
+此外，并发既可以是抢占式的（preemptive）——由外部调度器（通常是操作系统）中断当前任务并切换到另一个任务，以保证 CPU 资源的公平使用和响应性；也可以是协作式的（cooperative）——由各个任务主动让出 CPU 控制权给其他任务。
+
+值得注意的是，并发并不等同于并行（parallelism）。并行指的是多个任务在多个处理器核上真正同时执行。这适用于那些可以被拆分并同时执行以缩短执行时间的任务。
+
+\myGraphic{0.520}{images/B18456_12_02.png}{图 12.2：并发与并行}
+
+\label{idx:1020}
+虽然并发提升了性能和资源利用率，但也让代码的设计和调试变得困难得多。这是因为，与缺少并发的传统单线程流程不同，并发中操作的时序无法预先确定。在严格顺序执行的单线程代码中，你要么写入资源，要么读取资源，但你始终知道操作的顺序，因此可以预测对象的状态。
+
+在并发环境下，多个线程或进程可能同时读取或修改同一个对象。如果这些修改不是原子的，就会遇到常见的更新问题（update problem）的某种变体。考虑以下代码：
+
+\begin{codebox}[text]
+TransactionStatus chargeTheAccount(AccountNumber accountNumber, Amount amount)
+{
+  Amount accountBalance = getAccountBalance(accountNumber);
+  if (accountBalance > amount)
+  {
+    setAccountBalance(accountNumber, accountBalance - amount);
+    return TransactionStatus::TransactionSuccessful;
+  }
+  return TransactionStatus::InsufficientFunds;
+}
+\end{codebox}
+
+\label{idx:1021}
+从非并发代码中调用 \texttt{charge\allowbreak{}The\allowbreak{}Account} 函数时，一切都会正常。程序会检查账户余额，并在可能的情况下扣款。然而，并发执行可能导致余额变为负数。这是因为两个线程可能会先后调用 \texttt{get\allowbreak{}Account\allowbreak{}Balance(\allowbreak{})\allowbreak{}}，而它会返回相同的金额，例如 \texttt{20}。调用之后，两个线程都会检查当前余额是否高于所需金额。最后，在检查之后，它们会修改账户余额。假设两笔交易金额都是 \texttt{10}，那么每个线程都会把余额设为 \emph{20 – 10 = 10}。\emph{两次 }操作之后，账户余额为 \texttt{10}，而本应是 \texttt{0}！
+
+为缓解这类问题，我们可以采用互斥锁（mutex）和临界区（critical section）、CPU 提供的原子操作，或者并发安全的数据结构等方案。
+
+\label{idx:1022}
+\label{idx:1023}
+\label{idx:1024}
+互斥锁、临界区以及其他类似的并发设计模式可以防止多个线程修改（或读取）数据。这些编程对象充当锁定机制，确保在任何给定时刻只有一个线程能访问共享资源或临界区代码。尽管它们在设计并发应用时很有用，但也伴随着权衡。它们实际上会让代码的某些部分变成单线程的——因为由互斥锁保护的代码只允许单个线程执行，其他所有线程都必须等待互斥锁释放。而一旦引入了等待，即便我们本意是提升性能，代码的性能也可能不升反降。非阻塞算法允许线程访问共享状态（或以其他方式协作、通信），而不会阻塞参与的线程。这类算法通常依赖硬件提供的原子 \textbf{读–改–写}（\textbf{RMW}）原语，例如 \textbf{比较并交换}（\textbf{CAS}）。
+
+原子操作是指用一条不可分割的 CPU 指令来达到预期效果。这个术语可以指任何会被转换成单条 CPU 指令的高层操作。当这条单指令实现的效果\emph{超出}寻常可能时，它们就格外有趣。例如，CAS 是这样一条指令：它把某个内存位置的当前值与一个期望值进行比较，并且仅当当前值与期望值匹配时，才把该位置的内容修改为新值。自 C++11 起，有了 \texttt{<std::\allowbreak{}atomic>} 头文件，其中包含若干原子数据类型和操作。例如，CAS 就实现为一组 \texttt{compare\_\allowbreak{}and\_\allowbreak{}exchange\_\allowbreak{}*} 函数。
+
+从示意图上看，这条指令可以表示如下：
+
+\begin{codebox}[text]
+int compare_and_swap(int *lock, int expected, int new_value)
+{
+  int original_value = *lock;
+  if (*lock == expected)
+  {
+    *lock = new_value;
+  }
+  return original_value;
+}
+\end{codebox}
+
+\label{idx:1025}
+最后，并发安全的数据结构（也称为并发数据结构）提供了安全的抽象，用于管理共享数据状态，而无需在用户代码中进行某种同步。
+
+\label{idx:1026}
+例如，C++26 提出了危险指针（hazard pointer），作为一种内存回收技术，用于在无锁编程中安全地回收内存，而无需垃圾回收。Boost.Lockfree（\href{https://www.boost.org/doc/libs/1_86_0/doc/html/lockfree.html}{https://www.boost.org/doc/libs/1\_86\_0/doc/html/lockfree.html}）库提供了并发队列和并发栈，可供多生产者、多消费者使用。\texttt{libcds}（\href{https://github.com/khizmax/libcds}{https://github.com/khizmax/libcds}）也提供了有序链表、集合和映射，但截至本书写作时，它已有几年没有更新了。
+
+无锁数据结构用于多线程应用，在不使用锁的情况下提供线程安全，从而避免死锁并提升多核系统上的可扩展性。它们用于对极致性能和低延迟有要求的高负载系统，例如消息队列、缓存、数据库管理系统，以及用于进程间通信的实时系统。
+
+然而，无锁算法和数据结构会显著增加项目的复杂度，这已不是什么秘密。C++ Core Guidelines（一套关于用 C++ 编写代码的指南、规则和最佳实践）也印证了这一点：它指出，遵循无锁原则会让代码难以实现，更难调试。几乎不可能检测出所有缺陷，而这些缺陷通常只在生产环境中才暴露出来。Core Guidelines 还指出，依赖 CAS 等原子操作的无锁编程容易出错，需要具备语言特性、机器架构和数据结构方面的专家级知识。
+
+\begin{myTip}{提示}
+
+在设计并发处理时，有几条实用规则值得牢记：
+
+\begin{itemize}
+\item 首先考虑你是否真的需要并发。
+\item 按值传递数据，而不是按指针或引用传递。这样可以防止在其他线程读取该值时它被修改。
+\end{itemize}
+
+\label{idx:1027}
+如果数据的规模使得按值共享不切实际，就使用 \texttt{shared\_\allowbreak{}ptr}。这样可以更容易地避免资源泄漏。
+\end{myTip}
+
+\subsection{安全编码指南与 GSL}
+
+\label{idx:1028}
+标准 C++ 基金会（Standard C++ Foundation）发布了一套指南，用文档记录构建 C++ 系统的最佳实践——即 C++ Core Guidelines。它是一份发布在 GitHub 上的 Markdown 文档，地址为 \href{https://github.com/isocpp/CppCoreGuidelines}{https://github.com/isocpp/CppCoreGuidelines}。它是一份持续演进的文档，没有发布计划（与 C++ 标准本身不同）。这套指南面向现代 C++，基本上是指至少实现了 C++11 特性的代码库。
+
+\label{idx:1029}
+这套指南中的许多规则涵盖了本章所讨论的主题。例如，有关于接口设计、资源管理和并发的规则。这套指南的编者是 Bjarne Stroustrup 和 Herb Sutter，两人都是 C++ 社区中受人尊敬的人物。
+
+我们不会详细描述这些指南，建议你自行阅读。本书受到其中许多规则的启发，并在示例中遵循它们。你会在\emph{延伸阅读}一节中找到 Herb Sutter 关于 C++ 安全的一篇很有价值的文章。
+
+为便于在各种代码库中使用这些规则，微软发布了\textbf{指南支持库}（\textbf{GSL}），作为一个托管在 \href{https://github.com/microsoft/GSL}{https://github.com/microsoft/GSL} 上的开源项目。它是一个仅有头文件的库（header-only library），你可以将其包含到项目中以使用其中定义的类型。你既可以包含整个 GSL，也可以只选择性地使用你打算用的部分类型。
+
+这个库还有一个有趣之处：它用 CMake 构建、用 Travis 做持续集成、用 Catch2 做单元测试——这些工具我们分别已在 \emph{第 7 章}《\emph{构建与打包}》、\emph{第 11 章}《\emph{持续集成与持续部署}》、以及 \emph{第 10 章}《\emph{编写可测试的代码}》中介绍或提及过。Travis 是一种持续集成服务，用于测试和构建托管在 GitHub、Assembla、Bitbucket 和 GitLab 上的软件项目。
+
+\subsection{防御性编码与验证一切}
+
+\label{idx:1030}
+在 \emph{第 10 章}《\emph{编写可测试的代码}》中，我们提到过防御性编程（defensive programming）的方法。尽管这种方法严格来说并不是一项安全特性，但它恰好有助于创建健壮的接口。而这样的接口反过来又能提升系统的整体安全性。
+
+作为一个好的经验法则，你可以把所有外部数据都视为不安全的。我们所说的外部数据，是指通过某种接口（编程接口或用户界面）进入系统的每一项输入。为了标明这一点，你甚至可以在相应类型前加上 \texttt{Unsafe} 前缀，如下所示：
+
+\begin{codebox}[cpp]
+RegistrationResult registerUser(UnsafeUsername username, PasswordHash passwordHash)
+{
+  SafeUsername safeUsername = username.sanitize();
+  try
+  {
+    std::unique_ptr<User> user = std::make_unique<User>(safeUsername, passwordHash);
+    CommitResult result = user->commit();
+    if (result == CommitResult::CommitSuccessful)
+    {
+      return RegistrationResult::RegistrationSuccessful;
+    }
+    else
+    {
+      return RegistrationResult::RegistrationUnsuccessful;
+    }
+  }
+  catch (UserExistsException _)
+  {
+    return RegistrationResult::UserExists;
+  }
+}
+\end{codebox}
+
+使用 \texttt{sanitize(\allowbreak{})\allowbreak{}} 函数把 \texttt{Unsafe\allowbreak{}Username} 转换为 \texttt{Safe\allowbreak{}Username} 之后，该输入就变得可信，可以进一步处理了。净化（sanitizing）指的是从用户输入中移除任何不安全的字符，或对它们进行编码，以防止有害输入。
+
+另外，如果你已经读过 C++ Core Guidelines，就会知道通常应避免直接使用 C API。如果不以防御性的方式使用，C API 中的某些函数就可能不安全。更好的做法是改用 C++ 中相应的概念，它们能提供更好的类型安全以及保护（例如防止缓冲区溢出）。
+
+\label{idx:1031}
+防御性编程的另一个方面是智能地复用现有代码。每当你尝试实现某种技术时，都先检查是否已有可靠的解决方案。在学一门新编程语言时，自己写一个排序算法也许是个有趣的挑战，但对于生产代码，使用标准库中现成的排序算法要好得多。密码哈希也是如此。毫无疑问，你能找到某种巧妙的方法来计算密码哈希并把它们存进数据库，但通常更明智的做法是采用久经考验（而且别忘了要经过同行评审！）的 \texttt{bcrypt} 算法。请记住，智能地复用代码的前提是：你要像审计自己的代码一样，以同样的尽职程度去检查和审计第三方解决方案。我们将在下一节\emph{检查依赖项是否安全}中更深入地探讨这个话题。
+
+值得注意的是，防御性编程不应变成偏执编程。检查用户输入是合理的做法，但去检查一个刚初始化的变量是否仍等于原值就有些过头了。你的关注点应该是控制数据、算法和第三方解决方案的完整性，而不是去验证编译器或语言特性是否正确。
+
+在此背景下，无论从安全性还是可读性角度看，都宜采用 C++ Core Guidelines 中介绍的 \texttt{Expects()} 和 \texttt{Ensures()}，并通过类型和转换来区分不安全数据与安全数据。
+
+\label{idx:1032}
+\label{idx:1033}
+防御性编程有一个值得注意的案例出现在 Drogon 框架中，本书的示例就用到了它。该框架支持 \textbf{C++ 服务器页面}（\textbf{CSP}），这是一种服务器端脚本技术，类似于 ASP.NET Web Pages、\textbf{Java 服务器页面}（\textbf{JSP}）、PHP 以及 Python 中的 Jinja 模板等技术。CSP 旨在通过特殊的 CSP 标签把 C++ 代码直接嵌入 HTML 模板文件，从而在服务器端动态生成 HTML。这项技术并不新鲜，至少已经存在了 20 年。例如，POCO C++ 库早在 Drogon 之前就引入了 CSP 实现。
+
+\label{idx:1034}
+在 Drogon 的 CSP 中，用于把 C++ 代码嵌入 HTML 页面的特殊标记符号有：\texttt{<\%inc .\allowbreak{}.\allowbreak{}.\allowbreak{} \%>} 用于包含 C++ 文件，\texttt{<\%c+\allowbreak{}+\allowbreak{} .\allowbreak{}.\allowbreak{}.\allowbreak{} \%>} 用于放置任意 C++ 代码，\texttt{<\%view .\allowbreak{}.\allowbreak{}.\allowbreak{} \%>} 用于包含子视图，\texttt{<\%layout .\allowbreak{}.\allowbreak{}.\allowbreak{} \%>} 用于指定布局名，\texttt{\{\allowbreak{}\% .\allowbreak{}.\allowbreak{}.\allowbreak{} \%\}\allowbreak{}} 用于输出视图的内部变量值或 C++ 表达式，\texttt{[[ ... ]]} 用于输出由 Drogon 控制器传递给视图的外部变量值，以及用于视图数据渲染的 \texttt{@@} 和 \texttt{\$\$} 数据变量。
+
+\label{idx:1035}
+由于 CSP 允许把 C++ 代码直接嵌入服务器端的视图中，如果使用了 CSP，攻击者的潜在目标就包括系统调用、文件函数、页面模板中引入的文件以及动态视图目录，尤其是在使用\textbf{动态视图加载}（\textbf{DVL}）时——这是一种 Drogon 框架使用的编程技术，可在应用运行时把视图作为共享库动态地重新编译并重新加载。
+
+静态编译的视图天生更安全，因为无法把恶意的 C++ 代码动态注入其中，但不重新编译应用就无法更新它们。CSP 的一种替代方案可以是 Mustache 和 Inja 这类模板引擎，它们受到了 Python 的 Jinja 的启发。
+
+\label{idx:1036}
+\label{idx:1037}
+除客户端之外，攻击者还可以通过 CSP 攻击服务器端，因为 Drogon 支持在应用运行时编译视图，这意味着视图可以在应用运行期间被编译并作为共享库重新加载。这个 DVL 特性主要是为了方便开发，但如果在生产环境中启用，就会带来安全风险。当然，这取决于 CSP 页面的结构以及页面上的特殊标记符号。如果请求中的输入数据没有被正确过滤，攻击者就能借助这些标记符号执行他们的代码，从而把恶意代码——例如\textbf{服务器端包含}（\textbf{SSI}）注入和\textbf{远程代码执行}（\textbf{RCE}）——注入到动态 CSP 视图中。
+
+在渲染 HTML 页面之前，转义特殊 HTML 字符（例如 \texttt{<} 和 \texttt{>}），以避免注入恶意的客户端脚本（JavaScript）、HTML 标签和属性——如果你的 Web 服务器并不打算渲染这些 HTML 字符的话。
+
+\label{idx:1038}
+下面看一个简单的例子，以展示 CSP 在实践中是如何工作的。下面这个名为 \texttt{greet.csp} 的 CSP 视图会按名字向用户问好。Drogon 框架使用 \texttt{drogon\_\allowbreak{}ctl} 命令把这段代码转换成 C++ 类，该命令可自动创建视图、控制器、过滤器、模型和项目等各种对象。生成的、用于动态创建这个 HTML 文档的视图类位于构建目录中。CSP 源文件如下所示：
+
+\begin{codebox}[text]
+<!DOCTYPE html>
+<html>
+\end{codebox}
+
+下面这个代码块展示的是普通的 C++ 代码，只有 \texttt{@@} 标记符号例外，视图在这里获取从视图控制器传入的 \texttt{name} 参数：
+
+\begin{codebox}[cpp]
+<%c++
+    auto name=@@.get<std::string>("name");
+    bool isNameEmpty = name == "";
+    if (isNameEmpty) name = "anonymous";
+    auto message = "Hello, " + name + "!";
+%>
+\end{codebox}
+
+这段代码使用 C++ 的 \texttt{name} 变量来设置 HTML 页面的名称：
+
+\begin{codebox}[text]
+<head>
+    <meta charset="UTF-8">
+    <title>[[ name ]]</title>
+</head>
+\end{codebox}
+
+接着，它在 HTML 文档的正文中显示由 C++ 的 \texttt{message} 变量定义的问候消息：
+
+\begin{codebox}[text]
+<body>
+    <%c++ $$<<message; %>
+\end{codebox}
+
+\label{idx:1039}
+如果没有指定 \texttt{name} 参数，就会提示用户提供它：
+
+\begin{codebox}[text]
+    <%c++
+    if (isNameEmpty)
+    {
+       $$ << "<br>You can revisit the this page, but append ?name=<i>your_name</i> to change the name";
+    }
+    %>
+</body>
+</html>
+\end{codebox}
+
+视图控制器获取可选的 URL 查询参数 \texttt{name}，并把该参数传给前面定义的 \texttt{greet} 视图：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+void ViewController::asyncHandleHttpRequest(
+    const HttpRequestPtr &request,
+    std::function<void(const HttpResponsePtr &)> &&callback) {
+  auto name = request->getOptionalParameter<std::string>("name");
+  HttpViewData data;
+  if (name) {
+    data["name"] = HttpViewData::htmlTranslate (name.value());
+  }
+  const auto viewResponse = HttpResponse::newHttpViewResponse("greet", data);
+  callback(viewResponse);
+}
+\end{codebox}
+
+\label{idx:1040}
+\label{idx:1041}
+\texttt{drogon::\allowbreak{}Http\allowbreak{}View\allowbreak{}Data::\allowbreak{}html\allowbreak{}Translate} 函数会转义几个保留的 HTML 字符——小于号（\texttt{<}）、大于号（\texttt{>}）、和号以及引号——使用它们各自的实体名（依次为 \texttt{\&lt;}、\texttt{\&gt;}、\texttt{\&amp;} 和 \texttt{\&quot;}）来在 HTML 页面上显示这些字符。因此，它们会被当作纯文本而非 HTML 代码处理。这种转义对于防止\textbf{跨站脚本}（\textbf{XSS}）攻击是必要的——这类攻击会把恶意的客户端脚本注入用户浏览的网页；同时，它也能正确显示含有在 HTML 中可能具有特殊含义的字符的内容，例如显示“小于号”和“大于号”符号而不是 HTML 标签。
+
+如果不做 HTML 转义，使用前面介绍的 \texttt{greet} 视图的应用就会被黑，甚至遭到篡改。例如，如果视图控制器不转义 HTML 字符，那么执行这样一个包含“恶意”JavaScript 代码的请求，就会导致应用遭受 XSS 攻击：
+
+\begin{codebox}[text]
+http://localhost:8080/customer/v4?name=%3Cscript%3Edocument.body.innerHTML%20=%20%27Hey%20%3Cb%3EArnold%3C/b%3E,%20like%20a%20surgeon,%20Hey%27;%3C/script%3E
+\end{codebox}
+
+你看到的将不是预期的问候，而是这个 HTML 页面，因为 \texttt{document.\allowbreak{}body.\allowbreak{}inner\allowbreak{}HTML} 属性的内容已被完全替换。当然，在真实场景中，这类攻击可能要难以察觉得多：
+
+\begin{codebox}[text]
+Hey Arnold, like a surgeon, Hey!
+\end{codebox}
+
+如果请求中的字符已被转义，那么请求中的 JavaScript 代码就不会被执行，浏览器会改为把这些代码当作纯文本渲染：
+
+\begin{codebox}[text]
+Hello, <script>document.body.innerHTML = 'Hey <b>Arnold</b>, like a surgeon, Hey';</script>!
+\end{codebox}
+
+\label{idx:1042}
+在这种情况下，潜在危险的脚本会被显示出来，而页面不会发生任何非预期的改动。
+
+\subsection{最常见的漏洞}
+
+\label{idx:1043}
+\label{idx:1044}
+要检查你的代码是否能安全抵御最常见的漏洞，首先应该了解这些漏洞。毕竟，只有知道攻击长什么样，才谈得上防御。\textbf{开放 Web 应用安全项目}（\textbf{OWASP}）汇总了最常见的 10 种漏洞，并发布在 \href{https://owasp.org/www-project-top-ten/}{https://owasp.org/www-project-top-ten/}。在本书写作时，这些漏洞如下：
+
+\begin{itemize}
+\label{idx:1045}
+\item \textbf{注入}：通常称为 SQL 注入。它并不局限于 SQL；当不受信任的数据被直接传给解释器（例如 SQL 数据库、NoSQL 数据库、shell 或 \texttt{eval} 函数）时，就会出现这种漏洞。攻击者可能借此访问系统中本应受保护的部分。
+\item \textbf{失效的身份认证}：如果身份认证实现不当，攻击者可能利用缺陷来窃取机密数据或冒充其他用户。
+\item \textbf{敏感数据泄露}：缺少加密和恰当的访问权限，可能导致敏感数据被公开暴露。
+\label{idx:1046}
+\item \textbf{XML 外部实体 }（\textbf{XXE}）：某些 XML 处理器可能泄露服务器文件系统的内容，或允许远程代码执行。
+\item \textbf{失效的访问控制}：当访问控制执行不当时，攻击者可能获取对本应受限的文件或数据的访问权限。
+\item \textbf{安全配置错误}：使用不安全的默认设置以及对配置疏于管理，是最常见的漏洞来源。
+\item \textbf{XSS}：包含并执行不受信任的外部数据（尤其是借助 JavaScript），从而得以控制用户的 Web 浏览器。
+\item \textbf{不安全的反序列化：}一些有缺陷的解析器可能成为拒绝服务攻击或 RCE 的受害者。
+\label{idx:1047}
+\item \textbf{使用含有已知漏洞的组件}：现代应用中大量代码来自第三方组件。这些组件应定期接受审计和更新，因为单个依赖项中已知的安全缺陷就可能导致整个应用和数据被攻破。幸运的是，有一些工具可以帮助实现自动化。
+\item \textbf{日志与监控不足}：如果系统遭到攻击，而日志记录与监控又不够全面，攻击者就可能获得更深的访问权限，却始终不被发现。
+\end{itemize}
+
+我们不会逐一详述上面提到的每一种漏洞。在之前那个涉及 Drogon 中 CSP 的例子里，我们已经看到防御性编程技术如何防止一些最常见的 Web 漏洞——XSS、SSI 和 RCE。这里我们想强调的是，只要遵循前面提到的防御性编程技术，就能防止注入、XXE 以及不安全的反序列化。把所有外部数据都视为不安全，就能在开始实际处理之前先对数据进行净化，移除所有不安全的内容。
+
+关于日志记录与监控不足，我们会在 \emph{第 17 章}，\emph{可观测性} 中详细讨论日志记录与监控。
+
+在本节讨论注重安全的设计实践时，我们注意到审计第三方解决方案的重要性。下一节我们将更详细地探讨这个话题。
+
+\section{检查依赖是否安全}
+
+\label{idx:1048}
+在计算机发展的早期，所有程序都是不依赖任何外部组件的单体程序。然而，自从操作系统出现以来，任何有实际价值的软件都很难不依赖其他组件。这些依赖有两种形式——外部依赖和内部依赖：
+
+\begin{itemize}
+\label{idx:1049}
+\item \textbf{外部}依赖是指运行应用程序的环境中应当存在的组件。例如前面提到的操作系统、动态链接库，以及其他应用（如数据库）。
+\label{idx:1050}
+\item \textbf{内部}依赖是我们想要复用的模块，因此通常指静态库或仅头文件的库。
+\end{itemize}
+
+这两类依赖都带来潜在的安全风险。每一行代码都会增加出现漏洞的风险，因为它都可能成为漏洞的入口点。代码包含的依赖越多，系统就越可能遭到攻击。在下面几节中，我们将看到如何检查你的软件是否真的容易受到已知漏洞的影响。
+
+\subsection{使用 CVE 列表}
+
+\label{idx:1051}
+\label{idx:1052}
+\label{idx:1053}
+\label{idx:1054}
+检查第三方软件组件中已知安全问题的一个好去处，是 \textbf{通用漏洞与暴露}（\textbf{CVE}）列表，见 \href{https://cve.mitre.org/.}{https://cve.mitre.org/.}。该列表由若干被称为 \textbf{CVE 编号机构}（\textbf{CNAs}）的机构持续更新。这些机构包括厂商和项目、漏洞研究人员、国家和行业级 \textbf{计算机应急响应小组}（\textbf{CERTs}），以及漏洞赏金计划。
+
+该网站还提供一个搜索引擎。借助它，你可以用多种方式了解相关漏洞：
+
+\begin{itemize}
+\item 你可以输入漏洞编号。这些编号以 CVE 为前缀，例如臭名昭著的 ShellShock 对应 CVE-2014-6271，而 Spectre 对应 CVE-2017-5715。
+\item 你可以输入漏洞名称，例如前面提到的 ShellShock 或 Spectre。
+\item 你可以输入想要审计的软件名称，例如 Bash 或 Boost。
+\end{itemize}
+
+\label{idx:1055}
+对于每个搜索结果，你都能看到描述，以及指向其他缺陷跟踪系统和相关资源的引用列表。描述通常会列出受该漏洞影响的版本，这样你就能检查计划使用的版本是否已经打过补丁。
+
+\subsection{使用自动化扫描器}
+
+\label{idx:1056}
+\label{idx:1057}
+有一些工具可以帮你审计依赖列表。其中一个就是 OWASP Dependency-Check（\href{https://owasp.org/www-project-dependency-check/}{https://owasp.org/www-project-dependency-check/}）。虽然它官方只支持 Java 和 .NET，但对 Python、Ruby、Node.js 和 C++（搭配 CMake 或 \texttt{autoconf} 使用时）提供了实验性支持。除了作为独立工具使用，它还集成了 Jenkins、SonarQube 和 CircleCI 等 CI/CD 软件。
+
+另一个可以检查依赖中已知漏洞的工具是 Snyk。它是一款商业产品，提供多个级别的支持。它的功能也比 OWASP Dependency-Check 更多，因为 Snyk 还能审计容器镜像和许可证合规问题，并且提供了更多与第三方解决方案的集成。
+
+\subsection{自动化的依赖升级管理}
+
+\label{idx:1058}
+监控依赖中的漏洞，只是确保项目安全的第一步。接下来，你需要采取行动，更新那些受影响的依赖。这通常是手动完成的，但正如你可能预料到的，也有自动化解决方案可以处理这件事。
+
+Snyk 和 Renovate 之类的工具会扫描你的源代码仓库，只要有与安全相关的更新可用，就会提交拉取请求。除此之外，这些工具还支持不同的包管理器，并能扫描 Docker 镜像中的已知漏洞。
+
+\label{idx:1059}
+然而，自动化的依赖管理并非没有风险。它需要成熟的测试支持，因为在没有测试的情况下切换依赖版本，可能导致不稳定和缺陷。应对依赖升级相关问题的一种保护措施，是用包装器来对接第三方代码。这类包装器可以自带一套测试，在升级过程中一旦接口被破坏，就能立刻告诉我们。
+
+在接下来的几节中，我们将探讨如何强化代码和执行环境，以进一步降低风险。
+
+\section{加固代码}
+
+相对于较老的 C 等价实现，使用现代 C++ 构造可以减少你自己代码中常见安全漏洞的数量。然而，总有一些情况下，即便是更安全的抽象也会变得脆弱。仅仅选择更安全的实现并认为已经尽力，是不够的。大多数时候，还有办法进一步加固你的代码。
+
+\label{idx:1060}
+但什么是代码加固？它是减小系统脆弱面的过程。这通常意味着关掉你不会用到的功能，力求让系统更简单而不是更复杂。它也可能意味着借助工具来提升现有函数的健壮性。
+
+\label{idx:1061}
+\label{idx:1062}
+这类工具在操作系统层面可能包括内核补丁、防火墙和 \textbf{入侵检测系统}（\textbf{IDSs}）。在应用层面，则可能包括各种缓冲区溢出和下溢防护机制，使用容器和 \textbf{虚拟机}（\textbf{VMs}）实现权限分离和进程隔离，以及强制执行加密通信与加密存储。
+
+本节我们将重点介绍一些应用层面的例子，而下一节将聚焦操作系统层面。
+
+\subsection{面向安全的内存分配器}
+
+\label{idx:1063}
+为了保护应用程序免受堆相关攻击，例如堆溢出（\href{https://cwe.mitre.org/data/definitions/122.html}{https://cwe.mitre.org/data/definitions/122.html}）、释放后使用（use after free，\href{https://cwe.mitre.org/data/definitions/416.html}{https://cwe.mitre.org/data/definitions/416.html}）或双重释放（double free，\href{https://cwe.mitre.org/data/definitions/415.html}{https://cwe.mitre.org/data/definitions/415.html}），你可以考虑将标准内存分配器替换为面向安全的版本。以下三个项目可能值得关注：
+
+\begin{itemize}
+\label{idx:1064}
+\item \textbf{FreeGuard}，可从 \href{https://github.com/UTSASRG/FreeGuard}{https://github.com/UTSASRG/FreeGuard} 获取，相关论文见 \href{https://arxiv.org/abs/1709.02746}{https://arxiv.org/abs/1709.02746}。
+\label{idx:1065}
+\item GrapheneOS 项目提供的 \textbf{hardened\_malloc}，可从 \href{https://github.com/GrapheneOS/hardened_malloc}{https://github.com/GrapheneOS/hardened\_malloc} 获取。
+\label{idx:1066}
+\item \textbf{Scudo}，目前是 Fuchsia 和 Android 中的默认分配器，可从 \href{https://source.android.com/docs/security/test/scudo}{https://source.android.com/docs/security/test/scudo} 获取。\emph{Scudo} 在意大利语中意为 \emph{盾牌}（类似西班牙语中的 \emph{escudo}），这也体现了它面向安全的设计。
+\end{itemize}
+
+\label{idx:1067}
+FreeGuard 于 2017 年发布，此后除了零星的缺陷修复外没有太大变化。而 \texttt{hardened\_\allowbreak{}malloc} 则仍在积极开发。这两款分配器都被设计为标准 \texttt{malloc()} 函数的直接替代品。你无需修改应用程序就能使用它们，只需设置 \texttt{LD\_\allowbreak{}PRELOAD} 环境变量，或把该库添加到 \texttt{/\allowbreak{}etc/\allowbreak{}preload.\allowbreak{}so} 配置文件中即可。
+
+FreeGuard 面向的是 64 位 x86 系统上使用 Clang 编译器的 Linux，而 \texttt{hardened\_\allowbreak{}malloc} 则追求更广泛的兼容性，不过目前它主要支持 Android 的 Bionic、\texttt{musl} 和 \texttt{glibc}。\texttt{hardened\_\allowbreak{}malloc} 还基于 OpenBSD 的 \texttt{malloc} 实现，而 OpenBSD 本身就是一个以安全为核心的项目。
+
+Scudo 是 Google 开发的一款用户态分配器。它基于 LLVM Sanitizers 的 Combined 分配器，旨在保护程序免受基于堆的漏洞影响，例如基于堆的缓冲区溢出、释放后使用和双重释放，同时保持性能。这款分配器的代码量和内存占用都很小，因此适合在移动设备和嵌入式系统上使用。
+
+\label{idx:1068}
+\label{idx:1069}
+或者，你也可以不替换内存分配器，而是把所用的容器换成更安全的等价物。SaferCPlusPlus（\href{https://duneroadrunner.github.io/SaferCPlusPlus/}{https://duneroadrunner.github.io/SaferCPlusPlus/}）项目为 \texttt{std::\allowbreak{}vector<>}、\texttt{std::\allowbreak{}array<>} 和 \texttt{std::\allowbreak{}string} 提供了替代品，可以在现有代码中直接替换使用。该项目还包含基础类型的替代品，用于防范未初始化使用或符号不匹配等问题，此外还提供并发数据类型以及更安全的指针和引用。
+
+\subsection{自动化检查}
+
+\label{idx:1070}
+有一些自动化工具对确保你正在构建的系统的安全性特别有帮助。本节我们将介绍一些有用的选项，先从编译器警告开始，然后是静态分析和动态分析。
+
+\subsubsection{编译器警告}
+
+编译器警告本身未必是一个独立的工具，但可以对它加以利用和调整，从而让每位 C++ 开发者都使用的那个工具——C++ 编译器——产生更好的输出。
+
+\label{idx:1071}
+由于现代编译器可以执行一些比标准要求更深入的检查，因此建议善用这一能力。使用 GCC 或 Clang 这类编译器时，推荐的设置是启用 \texttt{-Wall} 和 \texttt{-Wextra} 标志，它们会开启一大批诊断，当代码不满足这些诊断要求时就会产生警告。如果你想要更严格，还可以启用 \texttt{-Werror}，它会把所有警告都当作错误，从而阻止编译那些未通过增强诊断的代码。如果你希望严格遵循标准，则有 \texttt{-pedantic} 和 \texttt{-pedantic-errors} 标志，它们会检查代码是否符合标准。对于 MSVC，常用的推荐开关是 \texttt{/W4}（启用较高级别的警告，适合在不产生过多冗余信息的前提下发现潜在错误）和 \texttt{/WX}（强制编译器把所有编译器警告都当作错误）。
+
+使用 CMake 进行构建时，可以用下面这个函数在编译期间启用这些标志：
+
+\begin{codebox}[cmake]
+add_library(customer ${SOURCES_GO_HERE})
+target_include_directories(customer PUBLIC include)
+target_compile_options(customer PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:-Wall;-Wextra;-pedantic;-Werror>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4;/WX>)
+\end{codebox}
+
+这样一来，除非你修复编译器报告的所有警告，否则编译就会失败。
+
+\label{idx:1072}
+\label{idx:1073}
+你还可以在 OWASP（\href{https://cheatsheetseries.owasp.org/cheatsheets/C-Based_Toolchain_Hardening_Cheat_Sheet.html}{https://cheatsheetseries.owasp.org/cheatsheets/C-Based\_Toolchain\_Hardening\_Cheat\_Sheet.html}）、Red Hat（\href{https://developers.redhat.com/blog/2018/03/21/compiler-and-linker-flags-gcc}{https://developers.redhat.com/blog/2018/03/21/compiler-and-linker-flags-gcc/}）和 OpenSSF（\href{https://openssf.org/blog/2023/11/29/strengthening-the-fort-openssf-releases-compiler-options-hardening-guide-for-c-and-c/}{https://openssf.org/blog/2023/11/29/strengthening-the-fort-openssf-releases-compiler-options-hardening-guide-for-c-and-c/}）的文章中找到工具链加固的建议设置。
+
+\subsubsection{静态分析}
+
+\label{idx:1074}
+本节我们将介绍在 C++ 中应用静态分析的两种方式：使用专门的工具，以及依赖编译器支持的检查。
+
+\paragraph{使用静态应用安全测试工具}
+
+\label{idx:1075}
+\label{idx:1076}
+\textbf{静态应用安全测试}（\textbf{SAST}）工具是一类能帮助你让代码更安全的工具。它们是静态分析工具的一个变种，只不过专注于安全方面。
+
+SAST 工具可以很好地集成到 CI/CD 流水线中，因为它们只是读取源代码而不执行它。其输出通常也很适合 CI/CD，因为它会标出在源代码中特定位置发现的问题。
+
+然而，静态分析可能会漏掉许多无法自动发现、或无法仅靠静态分析发现的问题。这些工具也无法察觉与配置相关的问题，因为配置文件并不体现在源代码本身之中。
+
+C++ SAST 工具的例子包括以下开源方案：
+
+\begin{itemize}
+\label{idx:1077}
+\item \textbf{Cppcheck}（\href{https://cppcheck.sourceforge.io/}{https://cppcheck.sourceforge.io/}），一款通用静态分析工具，专注于把误报数量保持在较低水平
+\label{idx:1078}
+\item \textbf{Flawfinder}（\href{https://dwheeler.com/flawfinder/}{https://dwheeler.com/flawfinder/}），似乎没有在积极维护
+\label{idx:1079}
+\item \textbf{LGTM}（\href{https://lgtm.com/help/lgtm/about-lgtm}{https://lgtm.com/help/lgtm/about-lgtm}），支持多种不同的语言和功能，并能自动分析拉取请求
+\label{idx:1080}
+\item \textbf{SonarQube}（\href{https://www.sonarqube.org/}{https://www.sonarqube.org/}），CI/CD 集成和语言覆盖都很出色，并且也提供商业版本
+\end{itemize}
+
+\label{idx:1081}
+也有商业解决方案可供选择：
+
+\begin{itemize}
+\label{idx:1082}
+\item \textbf{Checkmarx SAST}（\href{https://www.checkmarx.com/products/static-application-security-testing/}{https://www.checkmarx.com/products/static-application-security-testing/}），宣称零配置且语言覆盖广泛
+\label{idx:1083}
+\item \textbf{CodeSonar}（\href{https://codesecure.com/our-products/codesonar/}{https://codesecure.com/our-products/codesonar/}），专注于深度分析，尽可能发现更多缺陷
+\label{idx:1084}
+\item \textbf{Klocwork}（\href{https://www.perforce.com/products/klocwork}{https://www.perforce.com/products/klocwork}），专注于准确性
+\label{idx:1085}
+\item \textbf{OpenText Fortify}（\href{https://www.opentext.com/products/fortify-static-code-analyzer}{https://www.opentext.com/products/fortify-static-code-analyzer}），语言支持广泛，并集成了同一厂商的其他工具
+\label{idx:1086}
+\item \textbf{Parasoft C/C++test}（\href{https://www.parasoft.com/products/parasoft-c-ctest/}{https://www.parasoft.com/products/parasoft-c-ctest/}），一套集静态与动态分析、单元测试、追踪等功能于一体的集成解决方案
+\label{idx:1087}
+\item \textbf{MathWorks 的 Polyspace Bug Finder}（\texthref{https://www.mathworks.com/} \href{http://products/polyspace-bug-finder.html}{products/polyspace-bug-finder.html}），集成了 Simulink 模型
+\label{idx:1088}
+\item \textbf{Veracode Static Analysis}（\href{https://www.veracode.com/products/binary-static-analysis-sast}{https://www.veracode.com/products/binary-static-analysis-sast}），一款用于静态分析的 SaaS 解决方案
+\label{idx:1089}
+\item \textbf{Black Duck}（\href{https://www.blackduck.com/static-analysis-tools-sast.html}{https://www.blackduck.com/static-analysis-tools-sast.html}），同样专注于消除误报
+\end{itemize}
+
+\paragraph{利用生命周期边界消除 C++ 中的悬垂引用}
+
+\label{idx:1090}
+现代 C++ 编译器能够检测对已被销毁对象的悬垂引用。现代工具可以在运行时轻松检测出这类错误（例如使用 sanitizer），但如果编译器能立刻报告出来就更好了。
+
+少数 C++ 编译器（Clang 和 Visual Studio）支持生命周期边界标注，这是一种编译器扩展，可以在编译期检测悬垂引用。函数参数或隐式对象参数的 \texttt{[[lifetimebound]]} 属性表明，该参数所引用的对象，也可能被该标注函数的返回值所引用（如果是构造函数参数，则可能被构造出的对象的值所引用）。虽然这个属性无法阻止所有悬垂引用，但如果审慎地应用于合适的函数和构造函数，它就能显著降低此类问题的风险。
+
+C++11 引入的、用于特性测试的特殊运算符 \texttt{\_\allowbreak{}\_\allowbreak{}has\_\allowbreak{}cpp\_\allowbreak{}attribute}，可以检查某个给定的 C++ 属性是否受支持：
+
+\begin{codebox}[cpp]
+#ifndef __has_cpp_attribute
+#define lifetime_bound
+#elif __has_cpp_attribute(clang::lifetimebound)
+#define lifetime_bound [[clang::lifetimebound]]
+#elif __has_cpp_attribute(msvc::lifetimebound)
+#define lifetime_bound [[msvc::lifetimebound]]
+#elif __has_cpp_attribute(lifetimebound)
+#define lifetime_bound [[lifetimebound]]
+#else
+#define lifetime_bound
+#endif
+using namespace std::literals;
+\end{codebox}
+
+下面的例子定义了一个函数，它接收一个默认值的引用作为输入，并在键未在关联容器中找到时返回它：
+
+\begin{codebox}[cpp]
+template <typename T, typename U>
+const U &get_or_default(const std::map<T, U> &m lifetime_bound, const T &key,
+                        const U &default_value lifetime_bound) {
+  if (auto iter = m.find(key); iter != m.end())
+    return iter->second;
+  return default_value;
+}
+\end{codebox}
+
+\label{idx:1091}
+在下面的代码中，C++ 的 \texttt{""s} 用户定义字面量（从字符串字面量创建 \texttt{std::\allowbreak{}string} 实例）被用来创建临时字符串对象：
+
+\begin{codebox}[cpp]
+int main() {
+  const std::map<std::string, std::string> m;
+  //警告：绑定到局部引用 'val1' 的临时对象将在
+  //完整表达式结束时被销毁
+  const std::string &val1 = get_or_default(m, "vault"s, "11"s);
+  std::cout << val1 << std::endl;
+  //无警告
+  const auto def_val = "13"s;
+  const std::string &val2 = get_or_default(m, "vault"s, def_val);
+  std::cout << val2 << std::endl;
+  return 0;
+}
+\end{codebox}
+
+\label{idx:1092}
+支持生命周期边界的 C++ 编译器会在 \texttt{get\_\allowbreak{}or\_\allowbreak{}default} 函数返回对已销毁临时对象的引用时发出警告。在前面的代码中，对该函数的第一次调用会因为悬垂引用而导致未定义行为。
+
+\subsubsection{动态分析}
+
+\label{idx:1093}
+\label{idx:1094}
+正如静态分析作用于源代码，动态分析作用于生成的二进制文件。名称中的 \emph{动态} 指的是观察代码在运行中处理实际数据的过程。当聚焦于安全时，这类工具也可以称为 \textbf{动态应用安全测试}（\textbf{DAST}）。
+
+相比对应的 SAST 工具，它们的主要优势在于能够发现许多从源代码分析角度看不到的流程。当然，这也带来了一个缺点：必须运行应用程序才能进行分析。而众所周知，运行应用程序既耗时又耗内存。
+
+DAST 工具通常关注与 Web 相关的漏洞，例如 XSS、SQL（及其他）注入，或敏感信息泄露。在接下来的几个小节中，我们将探讨一个通用工具——Valgrind——以及另外两种动态方案——sanitizer 和模糊测试。
+
+\paragraph{Valgrind 与 Application Verifier}
+
+\label{idx:1095}
+\label{idx:1096}
+\label{idx:1097}
+Valgrind 最为人熟知的身份是内存泄漏调试工具。实际上，它是一个插桩框架，可用于构建不一定与内存问题相关的动态分析工具。除了检测内存错误外，Valgrind 的工具套件目前还包括线程错误检测器、缓存与分支预测分析器，以及堆分析器。它受到类 Unix 操作系统（包括 Android）上多种平台的支持。
+
+\label{idx:1098}
+本质上，Valgrind 充当一个虚拟机：它把二进制文件转换成一种更简单的形式，称为 \textbf{中间表示}。程序不在真实处理器上运行，而是在这个虚拟机下执行，因此每次调用都能被分析和验证。
+
+\label{idx:1099}
+如果你在 Windows 上开发，可以用 \textbf{Application Verifier}（\textbf{AppVerifier}）替代 Valgrind。AppVerifier 可以帮助你检测稳定性和安全性问题。它可以监控正在运行的应用程序和用户模式驱动，查找内存泄漏和堆损坏等内存问题、线程与锁问题、句柄的非法使用等。
+
+\paragraph{Sanitizer}
+
+\label{idx:1100}
+\label{idx:1101}
+Sanitizer 是基于编译期代码插桩的动态测试工具。它们有助于提升系统的整体稳定性和安全性，并避免未定义行为。在 \href{https://github.com/google/sanitizers}{https://github.com/google/sanitizers} 可以找到面向 LLVM（Clang 所基于的编译器框架）和 GCC 的实现。它们针对内存访问、内存泄漏、数据竞争与死锁、未初始化内存使用以及未定义行为等问题。
+
+以下是一些值得关注的 sanitizer：
+
+\begin{itemize}
+\label{idx:1102}
+\item \textbf{AddressSanitizer}（\textbf{ASan}）保护你的代码免受与内存寻址相关的问题，例如全局缓冲区溢出、释放后使用，或栈上的返回后使用（stack use after return）。尽管它是同类方案中最快的之一，仍可能让运行时翻倍。最好在运行测试和开发时使用它，而在生产构建中关闭它。你可以在 Clang 中通过添加 \texttt{-fsanitize=\allowbreak{}address} 标志来为构建启用它。
+\label{idx:1103}
+\item \textbf{AddressSanitizerLeakSanitizer}（\textbf{LSan}）与 ASan 集成，用于查找内存泄漏。它在 x86-64 Linux 和 x86-64 macOS 上默认启用。它需要设置一个环境变量 \texttt{ASAN\_\allowbreak{}OPTIONS=\allowbreak{}detect\_\allowbreak{}leaks=\allowbreak{}1}。LSan 在进程结束时执行泄漏检测。LSan 也可以作为独立库使用而不依赖 ASan，但该模式经过的测试要少得多。
+\label{idx:1104}
+\item \textbf{ThreadSanitizer}（\textbf{TSan}）检测并发相关的问题，例如数据竞争和死锁。你可以在 Clang 中用 \texttt{-fsanitize=\allowbreak{}thread} 标志启用它。
+\label{idx:1105}
+\label{idx:1106}
+\label{idx:1107}
+\label{idx:1108}
+\label{idx:1109}
+\label{idx:1110}
+\item \textbf{MemorySanitizer }（\textbf{MSan}）专注于访问未初始化内存相关的缺陷。与 Valgrind 类似，它以动态方式检查内存访问，但通过编译器插桩来实现。MSan 支持 64 位 x86、ARM、PowerPC 和 MIPS 平台。你可以通过 Clang 中的 \texttt{-fsanitize=\allowbreak{}memory -f\allowbreak{}PIE -pie }标志启用它。\texttt{-fPIE} 和 \texttt{-pie} 这两个标志还会启用\textbf{位置无关可执行文件 }（\textbf{PIE}），它们与\textbf{地址空间布局随机化 }（\textbf{ASLR}）相关。这样，编译器会生成\textbf{位置无关代码 }（\textbf{PIC}），这是一种可重定位的目标代码，可以放置在内存的任意区域。因此，每次执行应用程序时，PIE 二进制文件及其共享库都会被加载到任意地址上，使攻击者更难预测和利用内存地址。
+\label{idx:1111}
+\item \textbf{Hardware-assisted AddressSanitizer }（\textbf{HWASan}）与普通的 ASan 类似。主要区别在于尽可能利用硬件辅助。目前，该特性仅在 64 位 ARM 架构上可用。
+\label{idx:1112}
+\item \textbf{UndefinedBehaviorSanitizer }（\textbf{UBSan}）用于查找其他可能导致未定义行为的原因，例如整数溢出、除零或不当的位移操作。你可以通过 Clang 中的 \texttt{-fsanitize=\allowbreak{}undefined} 标志启用它。
+\end{itemize}
+
+尽管 sanitizer 能帮助你发现许多潜在问题，但它们的效果取决于你针对它们所运行的测试。使用 sanitizer 时，请记住保持测试的代码覆盖率高，否则你可能会产生一种虚假的安全感。
+
+\paragraph{模糊测试}
+
+\label{idx:1113}
+\label{idx:1114}
+模糊测试是 DAST 工具的一个子类，用于检查应用程序在面对无效、意外、随机或恶意构造的数据时的行为。当针对跨越信任边界的接口（例如最终用户的文件上传表单或输入）进行检查时，这类检查尤其有用。
+
+\label{idx:1115}
+\label{idx:1116}
+\label{idx:1117}
+\label{idx:1118}
+这一类中一些有意思的工具包括：
+
+\begin{itemize}
+\item \textbf{Peach Fuzzer}：\href{https://peachtech.gitlab.io/peach-fuzzer-community/}{https://peachtech.gitlab.io/peach-fuzzer-community/}
+\item \textbf{PortSwigger Burp}：\href{https://portswigger.net/burp}{https://portswigger.net/burp}
+\item \textbf{Zed Attack Proxy}（\textbf{ZAP}），由 Checkmarx 出品：\href{https://www.zaproxy.org/}{https://www.zaproxy.org/}
+\item \textbf{Google 的 ClusterFuzz}：\href{https://github.com/google/clusterfuzz}{https://github.com/google/clusterfuzz}（以及 OSS-Fuzz：\href{https://github.com/google/oss-fuzz}{https://github.com/google/oss-fuzz}）
+\end{itemize}
+
+\subsection{进程隔离与沙箱}
+
+\label{idx:1119}
+\label{idx:1120}
+\label{idx:1121}
+\label{idx:1122}
+\label{idx:1123}
+如果你想在自己的环境中运行未经核实的软件，可能需要将它与你系统的其余部分隔离开来。这可以通过 VM、操作系统和应用程序容器，或微 VM 来实现，例如 AWS Lambda 所使用的 Firecracker（\href{https://firecracker-microvm.github.io/}{https://firecracker-microvm.github.io/}）、ZeroVM（\href{https://www.zerovm.org/}{https://www.zerovm.org/}）、\texttt{crosvm}（\href{https://github.com/google/crosvm}{https://github.com/google/crosvm}，一种用于在 ChromeOS 设备上运行 Linux/Android 客户机的\textbf{虚拟机监视器}（\textbf{VMM}）），以及 Hyperlight（\href{https://github.com/hyperlight-dev/hyperlight}{https://github.com/hyperlight-dev/hyperlight}）。这样，某个应用程序的崩溃、泄漏和安全问题就不会蔓延到整个系统，导致系统要么无法使用，要么遭到入侵。由于每个进程都拥有自己的沙箱，最坏的情况也只会损失一个服务。
+
+\begin{myNotic}{注意}
+
+\label{idx:1124}
+\label{idx:1125}
+\textbf{Distrobox} 和 \textbf{Toolbx} 是用于将各种 Linux 发行版作为容器运行、同时与宿主系统保持紧密集成的工具。它们可用于在不同发行版下测试软件、隔离应用程序，或运行与宿主系统不兼容的软件。这些工具为运行图形应用程序提供了对用户主目录、Wayland 和 X11 socket 的无缝访问，并支持网络连接（包括 Avahi），因此是开发者和系统管理员手中的便捷工具。
+\end{myNotic}
+
+\label{idx:1126}
+\label{idx:1127}
+针对 C 和 C++ 代码，还有一些专用的沙箱框架，例如\textbf{Sandboxed API }（\textbf{SAPI}；\href{https://github.com/google/sandboxed-api}{https://github.com/google/sandboxed-api}），这是 Google 自家的 Chrome 和 Chromium 浏览器所使用的一个开源项目；以及 RLBox（\href{https://rlbox.dev/}{https://rlbox.dev/}），一个用于在同一进程内对第三方 C 库进行沙箱化的 C++ 框架。
+
+\begin{myNotic}{注意}
+
+尽管 VM 和容器可以作为进程隔离策略的一部分，但不要把它们与微服务混为一谈，微服务往往使用相似的构建块。微服务是一种架构设计模式，它们本身并不保证更好的安全性。
+\end{myNotic}
+
+\label{idx:1128}
+隔离代码的另一种方式是使用 \textbf{WebAssembly}（\textbf{Wasm}）。Wasm 模块在沙箱环境中执行，通过故障隔离技术与宿主运行时相分离。在 SaaS 应用程序中使用 Wasm 最著名的例子之一是 Figma，其渲染器就是用 C++ 编写的。
+
+Wasm 是一种二进制指令格式和 VM，它为 Web 浏览器应用程序提供接近原生的性能，并允许开发者用任意语言创建高性能的 Web 应用程序。
+
+\label{idx:1129}
+\label{idx:1130}
+基于这项技术，WebVM（\href{https://webvm.io/}{https://webvm.io/}）是一个完全在 Web 浏览器中运行的无服务器虚拟 Linux 环境。它由 CheerpX（\href{https://cheerpx.io/}{https://cheerpx.io/}）驱动，后者是一个实现 Linux 系统调用的虚拟化引擎。
+
+\label{idx:1131}
+\label{idx:1132}
+\label{idx:1133}
+Cheerp（\href{https://cheerp.io/}{https://cheerp.io/}）是一个 C++ 和 C 编译器，可将 C/C++ 编译成高效的 Wasm 和 JavaScript。它基于 LLVM/Clang 平台并与该平台集成。此外，Learning Technologies 公司（\href{https://labs.leaningtech.com/}{https://labs.leaningtech.com/}）还开发了 CheerpJ（\href{https://cheerpj.com}{https://cheerpj.com}），这是一个\textbf{Java 虚拟机}（\textbf{JVM}），通过将 Java 应用程序和小程序编译成 Wasm，使其能直接在 Web 浏览器中运行。
+
+\label{idx:1134}
+Cheerp 支持诸如\textbf{文档对象模型}（\textbf{DOM}）操作和 WebGL（一种基于 OpenGL ES 的底层 3D 图形 API）之类的浏览器 API。由于该工具链包含 \texttt{clang}（C 编译器）和 \texttt{clang++}（C++ 编译器），这个编译器在 Linux、macOS 和 Windows 上可以相当轻松地与 Make、Autoconf 和 CMake 等构建系统集成。在撰写本书时，该项目仍在开发中，但自 2023 年以来一直没有发布新版本。
+
+尽管 Clang 编译器也支持将 C++ 编译为 Wasm，但这条路可能颇为棘手，需要对 Wasm 的底层特性（如内存模型、与 JavaScript 的集成以及浏览器 API）有更深入的了解。
+
+\label{idx:1135}
+Cheerp 简化了这一过程。它旨在补充或替代 JavaScript 作为 Web 编程语言，同时提供 C++ 与任何外部 JavaScript/DOM 之间轻量级的双向互操作性。在运行时，Cheerp 使用与常规 JavaScript 相同的 JavaScript API 来操作 DOM。
+
+Wasm 中的内存是一个线性的、无类型的、以零起始的字节数组，用于与 JavaScript 交换数据。Wasm（目前）并不提供自动内存管理机制，因此必须自行实现内存分配器和垃圾回收。
+
+在 Cheerp 中，编译为 Wasm 的 C++ 函数会用 \texttt{[[cheerp::\allowbreak{}wasm]]} 属性加以标记。该属性位于线性内存中，并作用于常规的 C++ 类型（例如整数、浮点数、结构体以及指向结构体的指针）：
+
+\begin{codebox}[cpp]
+#include <algorithm>
+#include <string>
+#include <cheerp/client.h>
+#include <cheerp/clientlib.h>
+[[cheerp::wasm]]
+std::string transformStr(std::string str) {
+  std::reverse(str.begin(), str.end());
+  return str;
+}
+\end{codebox}
+
+\label{idx:1136}
+下面的函数创建两个 DOM 元素，并使用浏览器暴露的 DOM API 设置事件处理：
+
+\begin{codebox}[cpp]
+[[cheerp::genericjs]]
+void configureUI() {
+  using namespace client;
+  console.log("configure UI");
+  HTMLElement *body = document.get_body();
+  auto inputBox =
+      static_cast<HTMLInputElement *>(document.createElement("input"));
+  inputBox->setAttribute("type", "text");
+  inputBox->setAttribute("value", "Input anything in here");
+  inputBox->setAttribute("style", "width:200px");
+  HTMLElement *textDisplay = document.createElement("h1");
+\end{codebox}
+
+\label{idx:1137}
+只要输入字段的值发生变化，DOM 中的 \texttt{input} 事件就会触发。在事件处理程序中，来自 \texttt{inputBox} HTML 元素的文本会立即复制到 \texttt{text\allowbreak{}Display} 这个 HTML 节标题元素中。
+
+\texttt{client::\allowbreak{}String} 是 \texttt{DOMString}/\texttt{JSString} 的包装器，只能存在于 \texttt{[[cheerp::\allowbreak{}genericjs]]} 代码中。因此，这样的对象不能直接作为参数传给 Wasm 函数，也不能从 Wasm 函数返回。Cheerp 禁止按值使用这类包装器对象，因为它们是存活于 JavaScript 堆中的对象的“句柄”。如果违反这条规则，就会得到以下错误：
+
+\begin{codebox}[text]
+Types defined in the client namespace can only be used through pointers and references.
+\end{codebox}
+
+因此，\texttt{client::\allowbreak{}String} 在传给 Wasm 函数之前会被转换为 C++ 字符串，随后再将结果转换回 \texttt{client::\allowbreak{}String}：
+
+\begin{codebox}[cpp]
+auto mirrorText = [textDisplay, inputBox]() -> void {
+    const String *text = inputBox->get_value();
+    //不支持 Unicode
+    const auto &jsStr =
+        String(transformStr(static_cast<std::string>(*text)).c_str());
+    textDisplay->set_textContent(jsStr);
+  };
+  mirrorText();
+  inputBox->addEventListener("input", cheerp::Callback(mirrorText));
+  body->appendChild(textDisplay);
+  body->appendChild(inputBox);
+}
+\end{codebox}
+
+\label{idx:1138}
+以浏览器为目标平台时，应避免使用 \texttt{main}，改用 \texttt{webMain}，因为这个函数是专门为从浏览器运行程序而设计的。该函数必须尽快初始化程序、设置事件处理程序并将控制权交还给浏览器。否则，主线程会被占用，浏览器标签页可能卡死，因为浏览器正是在主线程中处理用户事件并绘制界面的。JavaScript 作为一种 Web 脚本语言，其特性要求事件循环绝不能被阻塞。函数返回后，浏览器会通知该函数注册了处理程序的那些事件。程序在 \texttt{webMain} 返回后仍继续存活，而普通的 C++ 程序则会在 \texttt{main} 函数返回时终止：
+
+\begin{codebox}[cpp]
+[[cheerp::genericjs]]
+void webMain() {
+  using namespace client;
+  console.log("web main");
+  configureUI();
+}
+\end{codebox}
+
+\label{idx:1139}
+以下 Cheerp 属性可应用于 C++ 函数、类或结构体，以指定它们的编译目标：\texttt{[[cheerp::\allowbreak{}genericjs]]} 表示编译为 JavaScript，\texttt{[[cheerp::\allowbreak{}wasm]]} 表示编译为 Wasm，\texttt{[[cheerp::\allowbreak{}jsexport]]} 表示向 JavaScript 暴露。
+
+Cheerp 不支持 POSIX 线程，因此多线程是通过 Web Worker（在后台运行、不影响页面性能的 JavaScript 脚本）实现的。
+
+现在，我们需要一个 HTML 文件来运行程序：
+
+\begin{codebox}[text]
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Modifying the DOM</title>
+    <script src="app.js" defer></script>
+</head>
+<body></body>
+</html>
+\end{codebox}
+
+在 Web 浏览器中，运行中的应用程序看起来像这样：
+
+\myGraphic{0.450}{images/B18456_12_03.png}{图 12.3：一个用 Cheerp 编译的原生 C++ 应用程序正在浏览器中运行}
+
+\label{idx:1140}
+作为对比，Emscripten 让并非为 Web 编写的代码也能在 Web 上运行。为实现这一点，Emscripten 模拟了一整套 POSIX 操作系统。举例来说，这使得使用 SDL 库的应用程序可以被移植到 Emscripten 上。该库提供对音频、键盘、鼠标、游戏杆和图形硬件的底层访问，还包括旨在取代 WebGL 的 WebGPU 扩展。Emscripten 和 Cheerp 都是面向 Wasm 的完整编译器工具链。
+
+\label{idx:1141}
+此类部署中没有服务器端逻辑，好处是可以把整个应用程序作为静态内容部署到静态站点托管平台上（如 Netlify、Vercel、DigitalOcean、Cloudflare Pages、Surge、Heroku、GitLab Pages 和 GitHub Pages）或你自己的硬件上，从而免费获得快速的下载速度和高可用性。不过，要让系统正常工作，可能仍然需要服务器。
+
+\label{idx:1142}
+\label{idx:1143}
+在内核层面，沙箱概念出现在诸如\textbf{扩展伯克利包过滤器}（\textbf{eBPF}）这样的技术中。eBPF 运行在内核空间，而 Wasm 运行在用户空间。eBPF 是一项 Linux 内核特性，用于在特权上下文（例如操作系统内核）中运行沙箱化的程序。与 Wasm 程序一样，eBPF 程序会被编译成字节码，因为 eBPF 也是一种 VM。在 C 和 C++ 中，eBPF 程序使用 \texttt{libbpf} 库来实现，该库作为上游 Linux 内核的一部分进行维护。
+
+与普遍看法相反，eBPF 并不总能提升性能。有时，它甚至会让应用程序及其邻近组件变慢。
+
+\section{加固你的环境}
+
+\label{idx:1144}
+即使你采取了必要的预防措施来确保依赖项和代码不含已知漏洞，仍存在一个可能危及你安全策略的领域：执行环境。所有应用程序都需要一个执行环境，它可能是容器、VM 或操作系统。有时，它也可能指底层基础设施。
+
+如果应用程序所运行的操作系统门户洞开，那么把应用程序加固到极致也远远不够。这样一来，攻击者无需针对你的应用程序，就能直接从系统或基础设施层面未经授权地访问数据。
+
+本节将重点介绍一些你可以在最低执行层面应用的加固技术。我们首先来理解链接策略在安全方面的影响。这些策略本身并不是环境加固技术，但它们在界定执行环境的攻击面方面起着关键作用，并能显著影响整体系统的安全性。
+
+\subsection{链接策略及其安全影响}
+
+\label{idx:1145}
+\label{idx:1146}
+链接（linking）是编译之后发生的过程，此时你编写的代码会与其各种依赖项（例如标准库）汇集到一起。链接可以发生在构建时（静态链接）、加载时（操作系统执行二进制文件时）或运行时，比如插件和其他动态依赖项的情形。后两种用例只有通过动态链接才能实现。
+
+\label{idx:1147}
+那么，动态链接与静态链接有什么区别呢？使用静态链接时，所有依赖项的内容都会被复制到生成的二进制文件中。程序加载时，操作系统会将这一个二进制文件放入内存并执行它。静态链接由称为\textbf{链接器}的程序完成，是构建过程的最后一步。
+
+\emph{图 12.4} 展示了静态链接与动态链接的区别：
+
+\myGraphic{0.920}{images/B18456_12_04.png}{图 12.4：静态链接与动态链接}
+
+\label{idx:1148}
+\label{idx:1149}
+由于每个可执行文件都必须包含所有依赖项，静态链接的程序往往体积较大。这也有其好处：由于执行程序所需的一切都已经集中在同一个地方，执行速度可以更快，而且将程序加载到内存所需的时间总是相同的。不过，依赖项一旦发生变化，就需要重新编译和重新链接；无法在不改动生成的二进制文件的情况下升级某个依赖项。
+
+在动态链接中，生成的二进制文件包含你编写的代码，但其中没有依赖项的内容，只有对需要单独加载的实际库的引用。在加载时，动态加载器负责找到相应的库，并将它们与你的二进制文件一起加载到内存中。当多个应用程序同时运行，且每个应用都使用类似的依赖项（例如 JSON 解析库或 JPEG 处理库）时，动态链接的二进制文件会带来更低的内存占用。这是因为一个给定库在内存中只会加载一份副本。相比之下，对于静态链接的二进制文件，同样的库会作为生成的二进制文件的一部分被反复加载。当你需要升级某个依赖项时，无需触碰系统里的任何其他组件就能完成。下次应用程序加载到内存时，它会自动引用新升级的组件。
+
+\label{idx:1150}
+然而，动态链接也存在安全隐患。对动态链接的应用程序进行未经授权的访问更为容易。可以通过用遭到篡改的动态库替换正常的动态库，或向每个新执行的进程预加载未经授权的库来实现。
+
+\label{idx:1151}
+一种安全的部署策略是将静态链接与容器结合起来（详见\emph{第 16 章}，《容器》），从而创建小型、安全、沙箱化的执行环境。你甚至可以更进一步，将这类容器与基于微内核的 VM 搭配使用，从而大幅减小攻击面。
+
+\subsection{地址空间布局随机化}
+
+\label{idx:1152}
+ASLR是一种用于防范基于内存的攻击的技术。它的原理是将程序和数据原本标准的内存布局替换为随机化的布局。这意味着，攻击者无法可靠地跳转到某个特定函数——而在没有 ASLR 的系统上，该函数本会是存在的。
+
+\myGraphic{0.567}{images/B18456_12_05.png}{图 12.5：ASLR}
+
+\label{idx:1153}
+当与\textbf{不可执行 }（\textbf{NX}）位支持相结合时，这项技术可以变得更加有效。NX 位会把内存中的某些页面（例如堆和栈）标记为只包含不可执行的数据。这确保了即使恶意代码进入这些页面，也无法被执行。大多数主流操作系统都已实现 NX 位支持，只要硬件支持就可以使用。
+
+\subsection{DevSecOps}
+
+\label{idx:1154}
+为了可预测地交付软件增量，最好拥抱 DevOps 理念。简而言之，DevOps 意味着打破传统模式，鼓励业务方、软件开发、软件运维、质量保证和客户之间的沟通。DevSecOps 是 DevOps 的一种形式，它还强调在流程的每一步都要将安全纳入设计考量。
+
+这意味着你正在构建的应用程序从一开始就内建了可观测性，借助 CI/CD 流水线，并且会定期扫描漏洞。DevSecOps 让开发者对底层基础设施的设计拥有发言权，也让运维专家对构成应用程序的软件包的设计拥有发言权。由于每个增量都代表一个可运行的系统（尽管功能尚不完整），安全审计会定期进行，因此每次花费的时间比通常更少。这会带来更快、更安全的发布，并让人们能更迅速地应对安全事件。
+
+\begin{myNotic}{注意}
+
+\label{idx:1155}
+在本书中，我们多次用到 \emph{DevOps}（以及 \emph{DevSecOps}）这个术语。我们认为，这个话题值得再多花些篇幅。DevOps 是一种构建软件产品的方法，它打破了传统的筒仓式（silo-based）开发模式。
+
+在瀑布模型中，各团队各自独立地处理工作中的单个环节。开发团队编写代码，QA 测试并验证代码，之后才是安全和合规。最后，运维团队负责维护。团队之间很少沟通，即便沟通，通常也是非常正式的过程。
+
+关于特定专业领域的知识，只有负责工作流相应环节的团队才掌握。开发者对 QA 知之甚少，对运维更是几乎一无所知。虽然这种安排非常省事，但现代格局所需要的敏捷性，是瀑布模型无法提供的。
+
+正因如此，人们提出了一种新的工作模式，它鼓励软件产品的不同利益相关者之间更多地协作、更好地沟通以及大量的知识共享。虽然 DevOps 指的是把开发者和运维结合在一起，但它真正的含义是让所有人走得更近。
+
+\label{idx:1156}
+开发者甚至在写下第一行代码之前就开始与 QA 和安全团队合作。运维工程师对代码库更加熟悉。业务方可以轻松跟踪某个工单的进展，在某些情况下，甚至可以自助进行部署预览。
+
+DevOps 已经成了使用 Terraform、OpenTofu 或 Kubernetes 之类工具的代名词。但 DevOps 绝不等于使用任何特定的工具。你的组织可以在不使用这些工具的情况下遵循 DevOps 原则，也可以在使用这些工具的同时并不践行 DevOps。
+
+\label{idx:1157}
+DevOps 的原则之一是鼓励改善产品利益相关者之间的信息流动。由此，就可以实现另一条原则：减少那些不会为最终产品带来价值的浪费性活动。
+
+在构建现代系统时，值得采用现代方法论来做。将现有组织迁移到 DevOps 可能需要巨大的观念转变，因此并不总是可行。当你启动一个自己能够掌控的全新（greenfield）项目时，这值得一试。
+\end{myNotic}
+
+\section{小结}
+
+在本章中，我们讨论了一个安全系统的不同方面。由于安全是一个复杂的主题，不能只从应用程序的角度来着手。如今所有应用程序都在某种环境中运行，因此重要的是：要么控制这一环境并按你的需求来塑造它，要么通过沙箱化和隔离代码来让自己与这一环境隔绝。
+
+读完本章后，你现在已经准备好去查找自己的依赖项和代码中存在的漏洞。你知道了如何为提升安全性而设计系统，以及该使用哪些工具来发现可能的缺陷。维护安全性是一个持续的过程，但良好的设计可以减轻日后的工作。
+
+下一章将讨论可扩展性，以及我们在扩展系统时可能面临的各种挑战。
+
+\section{问题}
+
+\begin{enumerate}
+\item 为什么安全性在现代系统中很重要？
+\item 并发有哪些挑战？
+\item 什么是 C++ Core Guidelines？
+\item 安全编码与防御性编码有什么区别？
+\item 如何检查你的软件是否包含已知漏洞？
+\item 静态分析与动态分析有什么区别？
+\item 静态链接与动态链接有什么区别？
+\item 如何利用编译器来修复安全问题？
+\item 如何在 CI 流水线中落实安全意识？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Lester Nichols，\emph{Cybersecurity Architect’s Handbook: An End-to-End Guide to Implementing and Maintaining Robust Security Architecture}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/cybersecurity-architects-handbook-9781803239897}{https://www.packtpub.com/en-us/product/cybersecurity-architects-handbook-9781803239897}
+\item Diana Kelley 与 Ed Moyle，\emph{Practical Cybersecurity Architecture: A Guide to Creating and Implementing Robust Designs for Cybersecurity Architects}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/practical-cybersecurity-architecture-9781837630288}{https://www.packtpub.com/en-us/product/practical-cybersecurity-architecture-9781837630288}
+\item Donald A. Tevault，\emph{Mastering Linux Security and Hardening: A Practical Guide to Protecting Your Linux System from Cyber Attacks}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/mastering-linux-security-and-hardening-9781837632626}{https://www.packtpub.com/en-us/product/mastering-linux-security-and-hardening-9781837632626}
+\item Mark Dunkerley 与 Matt Tumbarello，\emph{Mastering Windows Security and Hardening: Secure and Protect Your Windows Environment from Cyber Threats Using Zero-Trust Security Principles}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/mastering-windows-security-and-hardening-9781803248745}{https://www.packtpub.com/en-us/product/mastering-windows-security-and-hardening-9781803248745}
+\item Ivan Murashko，\emph{Clang Compiler Frontend: Get to Grips with the Internals of a C/C++ Compiler Frontend and Create Your Own Tools}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/clang-compiler-frontend-9781837635238}{https://www.packtpub.com/en-us/product/clang-compiler-frontend-9781837635238}
+\item libc++ 文档，\emph{Hardening Modes}：\href{https://libcxx.llvm.org/Hardening.html}{https://libcxx.llvm.org/Hardening.html}
+\item Microsoft，\emph{Security Best Practices for C++}：\href{https://learn.microsoft.com/en-us/cpp/security/security-best-practices-for-cpp }{https://learn.microsoft.com/en-us/cpp/security/security-best-practices-for-cpp}
+\item Google，\emph{Code Sandboxing}：\href{https://developers.google.com/code-sandboxing}{https://developers.google.com/code-sandboxing}
+\item Cheerp.io，\emph{WebAssembly Memory Model}：\href{https://cheerp.io/docs/reference/sections/wasm/memory-model}{https://cheerp.io/docs/reference/sections/wasm/memory-model}
+\item Pixel Free Studio 博客，\emph{How to Compile C/C++ to WebAssembly for the Web}（博客）：\href{https://blog.pixelfreestudio.com/how-to-compile-c-c-to-webassembly-for-the-web/ }{https://blog.pixelfreestudio.com/how-to-compile-c-c-to-webassembly-for-the-web/}
+\item Rick Battagline，\emph{Hands-On Game Development with WebAssembly: Learn WebAssembly C++ Programming by Building a Retro Space Game}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/hands-on-game-development-with-webassembly-9781838646837}{https://www.packtpub.com/en-us/product/hands-on-game-development-with-webassembly-9781838646837}
+\item Mohammed Billoo，\emph{Embedded Linux Essentials Handbook: Build Embedded Linux Systems and Real-World Apps with Yocto, Buildroot, and RPi}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/embedded-linux-essentials-handbook-9781835461563}{https://www.packtpub.com/en-us/product/embedded-linux-essentials-handbook-9781835461563}
+\item Herb Sutter，\emph{C++ Safety, in Context}（博客），Sutter’s Mill：\href{https://herbsutter.com/2024/03/11/safety-in-context/ }{https://herbsutter.com/2024/03/11/safety-in-context/}
+\item ISO C++ Foundation，\emph{C++ Core Guidelines: Pro: Profiles}：\href{https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines\#pro-profiles }{https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines\#pro-profiles}
+\item ISO C++ Foundation，\emph{C++ Core Guidelines: CP.free: Lock-Free Programming}：\href{https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines\#SScp-free }{https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines\#SScp-free}
+\item Drogon Framework，\emph{ENG-06 View: Drogon’s CSP}，GitHub wiki：\href{https://github.com/drogonframework/drogon/wiki/ENG-06-View\#drogons-csp }{https://github.com/drogonframework/drogon/wiki/ENG-06-View\#drogons-csp}
+\item Drogon Framework，\emph{ENG-12 drog on\_ctl Command}，GitHub wiki：\href{https://github.com/drogonframework/drogon/wiki/ENG-12-drogon_ctl-Command}{https://github.com/drogonframework/drogon/wiki/ENG-12-drogon\_ctl-Command}
+\item Dan Trebledj，\emph{Abusing Server-Side Rendering in Drogon}（博客），TrebledJ’s Pages：\href{https://trebledj.me/posts/abusing-server-side-rendering-in-drogon/}{https://trebledj.me/posts/abusing-server-side-rendering-in-drogon/}
+\item Fil-C Project，\emph{Fil’s Unbelievable Garbage Collector}（FUGC）：\href{https://fil-c.org/fugc }{https://fil-c.org/fugc}
+\item Hans-J. Boehm、Alan J. Demers 与 Mark Weiser，\emph{A Garbage Collector for C and C++}（Boehm–Demers–Weiser 垃圾回收器）：\href{https://www.hboehm.info/gc/}{https://www.hboehm.info/gc/} 立即解锁本书专属权益 扫描此二维码或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 \emph{注意：开始之前请准备好您的购买发票。}
+\end{itemize}

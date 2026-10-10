@@ -1,0 +1,132 @@
+现代 C++ 让你能够用一门高级语言编写高性能应用，而不必牺牲可读性与可维护性。不过，软件架构远不止语言本身。我们将会向你展示如何设计和构建健壮、可扩展且性能优异的应用。
+
+本书配有对核心概念的分步讲解、实用示例以及自测题，你将首先理解架构的重要性，并通过示例来领会其中的关键思想。
+
+你将学会在单个应用的层面运用成熟的设计模式，探索如何让应用变得健壮、安全、高性能且易于维护。随后，你将学会如何使用面向服务的架构、微服务、容器和无服务器技术等模式，设计和构建连接多个应用的更高层服务。
+
+读完本书，你将懂得如何使用现代 C++ 及相关工具构建分布式服务，交付让客户乐于推荐的解决方案。
+
+你有兴趣成为一名软件架构师，或者想进一步了解当今架构的发展趋势吗？如果是，那么本书应该能帮到你！
+
+\section*{本书的目标读者}
+
+使用现代 C++ 的开发者可以借助这本软件架构实用指南，把所学知识付诸实践。本书对实现及相关方法论采取动手实践的方式，能让你迅速上手并高效产出。
+
+\section*{本书内容}
+
+\emph{第 1 章}，\emph{软件架构的重要性与优秀设计的原则}，探讨我们为什么要在最初就设计软件。
+
+\emph{第 2 章}，\emph{架构风格}，介绍在架构方面可以采取的不同方法。
+
+\emph{第 3 章}，\emph{功能性需求与非功能性需求}，探讨如何理解客户的需求。
+
+\emph{第 4 章}，\emph{架构与系统设计模式}，讲述如何创建有效的软件解决方案。
+
+\emph{第 5 章}，\emph{利用 C++ 语言特性}，让你会说原生的 C++。
+
+\emph{第 6 章}，\emph{设计模式与 C++ 惯用法}，聚焦现代 C++ 惯用法与实用的代码构造。
+
+\emph{第 7 章}，\emph{构建与打包}，讲述如何把代码交付到生产环境。
+
+\emph{第 8 章}，\emph{包管理器}，讲述 Conan，这是一个面向 C 和 C++ 的去中心化多平台包管理器。
+
+\emph{第 9 章}，\emph{C++ 代码复用的未来：使用模块}，解释什么是 C++ 模块。
+
+\emph{第 10 章}，\emph{编写可测试的代码}，教你如何在客户之前发现缺陷。
+
+\emph{第 11 章}，\emph{持续集成与持续部署}，介绍自动化软件发布的现代方式。
+
+\emph{第 12 章}，\emph{代码与部署中的安全}，在这里你将学会如何确保自己的系统难以被攻破。
+
+\emph{第 13 章}，\emph{性能}，探讨性能（当然是性能！）。C++ 本来就应该很快——它还能更快吗？
+
+\emph{第 14 章}，\emph{分布式系统的架构}，深入探讨分布式系统的各个方面。
+
+\emph{第 15 章}，\emph{服务间通信}，指服务用于通信和共享数据的机制与技术。
+
+\emph{第 16 章}，\emph{容器}，为你提供构建、打包和运行应用的统一接口。
+
+\emph{第 17 章}，\emph{可观测性}，借助日志、监控和追踪工具，为服务和系统提供强大的洞察力。
+
+\emph{第 18 章}，\emph{云原生设计}，超越传统基础设施，探索云原生设计。
+
+\section*{如何充分利用本书}
+
+本书中的代码示例大多针对 GCC 14+ 编写。它们也应该能在 Clang 19+ 或 Microsoft Visual C++ 19.40+ 上运行，不过在较旧版本的编译器中，C++20 和 C++23 的某些特性可能并不支持。
+
+这些示例已在 Linux（GCC、Clang/Ubuntu、Manjaro）、macOS（Clang）和 Windows（MSVC）上编译并运行过，不过关于 Docker、Podman 和 Kubernetes 的章节需要借助 Linux 交叉编译来构建和运行容器。关于如何准备开发环境的建议见 GitHub 仓库 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/devenv_readme}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/devenv\_readme}。
+
+本版的示例基于 Drogon 框架，这是一个高速 Web 框架，也被用于游戏开发和嵌入式编程。本书第一版使用的是微软的 C++ REST SDK，但该项目已进入维护模式，因此不再推荐在新项目中使用。
+
+根据 TechEmpower 的基准测试（\href{https://www.techempower.com/benchmarks}{https://www.techempower.com/benchmarks}），该框架的高速替代方案包括 Lithium、userver、Cutelyst、ffead-cpp 和 cinatra。如果高速不是主要标准，那么考虑 cpp-httplib、Poco、Seastar、Oat+、Boost、Crow、Pistache、Qt、Restbed、Wt、TreeFrog 和 Restinio 也是合理的。你也可以了解一下 CppMicroServices、Nui、webpp 或 cppcms。
+
+Drogon 提供完全异步的编程模式和灵活的路由。它支持 cookie 与内置会话、过滤器链、中间件、插件、文件下载与上传、流水线、Gzip 和 Brotli 压缩传输、JSON 请求与响应、\textbf{面向切面编程}（\textbf{AOP}）以及 C++ 协程。主程序、控制器和视图可以完全解耦。
+
+Drogon 还包含一个内置的数据库读写引擎，兼容 PostgreSQL、MySQL/MariaDB、SQLite 和 Redis，以及一个\textbf{对象关系映射}（\textbf{ORM}）层。\texttt{drogon\_\allowbreak{}ctl} 命令会读取数据库表以生成相应的模型，还可以选择性地创建项目、控制器、过滤器、视图、模型和压力测试脚手架。
+
+Drogon 的服务端渲染由 \textbf{C++ 服务器页面}（\textbf{CSP}）负责，类似于 JSP、ASP、PHP、Jinja 或 Go 模板。该框架基于非阻塞 I/O 网络库 Trantor，并支持 HTTPS（OpenSSL）以及 WebSocket 通信（服务端和客户端）。
+
+Drogon 跨平台，可在 Linux、macOS、FreeBSD、OpenBSD、HaikuOS 和 Windows 上编译，同时支持 x86-64 和 ARM 处理器架构。
+
+\textbf{如果你使用的是本书的电子版，我们建议你自己输入代码，或者通过 GitHub 仓库（链接见下一节）获取代码。这样做有助于你避免因复制粘贴代码而引入的潜在错误。}
+
+\subsection*{下载示例代码文件}
+
+本书的代码包托管在 GitHub 上：\href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E}。我们还有来自丰富图书与视频目录的其他代码包，见 \href{https://github.com/PacktPublishing}{https://github.com/PacktPublishing}。快去看看！
+
+\subsection*{下载彩色图片}
+
+我们还提供了一个 PDF 文件，内含本书所用截图/图表的彩色图像。你可以在这里下载：\href{https://packt.link/gbp/9781803243016}{https://packt.link/gbp/9781803243016}。
+
+\subsection*{本书使用的约定}
+
+本书通篇使用若干排版约定。
+
+\texttt{Code\allowbreak{}In\allowbreak{}Text}：表示正文中的代码词、数据库表名、文件夹名、文件名、文件扩展名、路径名、示例 URL、用户输入以及 Twitter 账号。例如：“隐式创建的临时 \texttt{Array} 对象将被浅拷贝。”
+
+代码块的格式如下：
+
+\begin{codebox}[text]
+Array<int> array{};
+array = {1, 2, 3, 4, 5};
+Array copy_array{array};
+\end{codebox}
+
+任何命令行输入或输出都写成如下形式：
+
+\begin{codebox}[text]
+Resource acquired
+the door into summer
+ABCDEFGHIJKLMNOPQRST
+abcdefghijklmnopqrst
+Resource released
+\end{codebox}
+
+\textbf{加粗}：表示新术语、重要词汇或你在屏幕上看到的文字。例如，菜单或对话框中的文字在正文中就像这样呈现。例如：“\textbf{企业架构}关注整个公司，甚至是一组公司。”
+
+\begin{myNotic}{注意}
+
+警告或重要说明会像这样出现。
+\end{myNotic}
+
+\begin{myTip}{提示}
+
+提示与技巧会像这样出现。
+\end{myTip}
+
+\begin{myQuote}
+引用会像这样出现。
+
+\end{myQuote}
+
+\section*{联系我们}
+
+我们始终欢迎读者的反馈。
+
+\textbf{一般反馈}：如果你对本书的任何方面有疑问，或有任何一般性反馈，请发送邮件至 \texttt{customercare@packt.\allowbreak{}com }，并在邮件主题中注明书名。
+
+\textbf{勘误}：尽管我们已尽力确保内容的准确性，但错误仍在所难免。如果你在本书中发现了错误，恳请告知我们，我们将不胜感激。请访问 \href{http://www.packt.com/submit-errata}{http://www.packt.com/submit-errata}，点击 \textbf{Submit Errata}，然后填写表单。
+
+\textbf{盗版}：如果你在互联网上发现我们作品以任何形式的非法副本，恳请向我们提供相关地址或网站名称，我们将不胜感激。请通过 \texttt{copyright@packt.\allowbreak{}com} 联系我们，并附上相关材料的链接。
+
+\textbf{如果你有兴趣成为作者}：如果你在某个主题上有专长，并且有兴趣撰写或参与编写一本书，请访问 \href{http://authors.packt.com/}{http://authors.packt.com/}。

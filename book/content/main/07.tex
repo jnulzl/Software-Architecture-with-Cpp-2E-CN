@@ -1,0 +1,1222 @@
+既然我们已经探讨了如何使用现代 C++ 和成熟模式来设计健壮的系统及其组件，本章便将聚焦于如何为生产环境构建并打包这些系统。
+
+本章将解释构成构建过程的全部要素。从编译器标志到自动化脚本，再到更多内容，我们将引导你走到这样一个境界：每一个可能的模块、服务和构件都被纳入版本控制，并为部署做好准备。我们将主要聚焦于 CMake。
+
+你将学会如何基于 Modern CMake 创建构建系统、在 CMake 中使用外部代码、构建可复用的组件，以及使用 CPack 创建 DEB、RPM 和 AppImage 软件包。
+
+在本章中，你将了解以下内容：
+
+\begin{itemize}
+\item 充分利用编译器
+\item 抽象构建过程
+\item 使用外部模块
+\item 复用高质量的代码
+\end{itemize}
+
+读完本章后，你将懂得如何编写最先进的代码来构建和打包你的项目。
+
+\section{技术要求}
+
+要复现本章的示例，你应安装较新版本的 \textbf{GCC} 和 \textbf{Clang}、CMake 3.28 或更高版本、Conan 以及 Ninja。
+
+本章的源代码片段可以在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter07}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter07} 找到。
+
+\section{充分利用编译器}
+
+\label{idx:633}
+编译器是每位程序员工具箱中最重要的工具之一。因此，深入了解它们，能让你在数不清的场合、以多种不同的方式受益。本节将介绍几条有效使用编译器的技巧。
+
+这不过是冰山一角，因为关于这些工具及其种类繁多的可用标志、优化、功能和其他细节，足以写出整本整本的书。GCC 甚至有一个列出编译器相关书籍的 wiki 页面！你可以在本章末尾的 \emph{延伸阅读} 一节找到它。
+
+在接下来的几节中，我们将探讨几种实用的方法，帮助你更充分地利用编译器和构建过程。我们先来看看，使用多个编译器如何能提升可移植性、发现更多问题并帮助优化性能。然后，我们将讨论缩短构建时间的策略。接着，我们会介绍如何通过启用恰当的警告并有效使用诊断选项，尽早发现代码中的潜在问题。最后，我们将考察一些以编译器为中心的工具，它们能够自动完成格式化、执行静态分析，并帮助你在细微缺陷进入生产环境之前将其检出。
+
+\subsection{使用多个编译器}
+
+\label{idx:634}
+\label{idx:635}
+在构建过程中，你应考虑的一件事是使用多个编译器，而不是只用一个，因为这样做会带来诸多好处。例如，它们能发现代码中不同的问题。举例来说，\textbf{Microsoft Visual C++}（\textbf{MSVC}）默认启用了符号性（signedness）检查。此外，使用多个编译器还有助于应对你未来可能遇到的可移植性问题，尤其是当决定还要在另一个 \textbf{操作系统}（\textbf{OS}）上编译你的代码时，比如从 Linux 迁移到 Windows，或反过来。要以零成本实现这些努力，你应当努力编写可移植、符合 ISO C++ 标准的代码。
+
+\label{idx:636}
+每个编译器在符合标准方面都各有优势。例如，\textbf{Clang} 比 GCC 更致力于符合 C++ 标准。如果你使用的是 \textbf{MSVC}，可以尝试加上 \texttt{/\allowbreak{}permissive-} 选项（自 Visual Studio 2017 15.5 版起可用；对于用 15.5+ 版创建的项目默认启用），以确保符合标准。使用 \textbf{GCC} 时，在为代码选择 C++ 标准时尽量不要使用 GNU 变体；例如，优先使用 \texttt{-std=\allowbreak{}c+\allowbreak{}+\allowbreak{}17} 而非 \texttt{-std=\allowbreak{}gnu+\allowbreak{}+\allowbreak{}17}，以避免依赖 GNU 特有的扩展，确保代码保持完全可移植。
+
+如果性能是你的目标，能够用种类广泛的编译器构建软件，也将让你可以挑选出针对你特定用例生成最快二进制文件的那个编译器。
+
+\begin{myTip}{提示}
+
+无论在发布构建中选择哪个编译器，都可以考虑在开发时使用 Clang。它可运行在 macOS、Linux 和 Windows 上，支持与 GCC 相同的标志集，并致力于提供最快的构建时间和简洁的编译错误。
+\end{myTip}
+
+\label{idx:637}
+使用多个编译器还有助于实施一种名为交叉编译（cross-compilation）的宝贵策略，即为编译所在的平台之外的另一个平台生成可执行文件。这有助于捕获隐式的类型错误，因为同一个库在不同操作系统上可能使用不同的数据类型。例如，C++ REST SDK 定义了 \texttt{utility::\allowbreak{}string\_\allowbreak{}t} 类型，它会随操作系统解析为两种互不兼容的字符串类型：在 Windows 上解析为使用 UTF-16 的 \texttt{std::\allowbreak{}wstring}，而在 \textbf{可移植操作系统接口}（\textbf{POSIX}）平台——尤其是 Linux、macOS、Solaris、FreeBSD、Android 和 iOS——上，解析为使用 UTF-8 的 \texttt{std::\allowbreak{}string}。“它在我机器上能跑”并不是一个论据。这种差异往往源于环境的不同。
+
+要充分利用多编译器构建和交叉编译，你需要一个灵活的构建系统。这正是 CMake 的用武之地——它是一款软件开发工具，可通过与编译器无关的指令来构建、测试、打包和分发跨平台软件。如果你使用 CMake，有两种常见方式来添加另一个编译器。一种是在调用 CMake 时传入相应的编译器，如下所示：
+
+\begin{codebox}[text]
+cmake -S . -B ./build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=/usr/bin/gcc -DCMAKE_CXX_COMPILER=/usr/bin/g++
+\end{codebox}
+
+你也可以在调用 CMake 之前直接设置 CC 和 CXX，但并非所有构建生成器都会遵循这些变量（例如 Windows 上的 Visual Studio），而且必须在新的构建目录中运行 CMake 之前就设置好它们：
+
+\begin{codebox}[text]
+export CC=/usr/bin/clang
+export CXX=/usr/bin/clang++
+cmake -S . -B ./build -DCMAKE_BUILD_TYPE=Release
+\end{codebox}
+
+\label{idx:638}
+另一种方法是使用工具链文件（toolchain file）。如果你只是想换一个编译器，这或许有点大材小用，但当你要进行交叉编译时，它就是首选方案。要使用工具链文件，应将其作为 CMake 参数传入：\texttt{-DCMAKE\_\allowbreak{}TOOLCHAIN\_\allowbreak{}FILE=\allowbreak{}toolchain.\allowbreak{}cmake}。
+
+工具链文件描述目标平台，因此包含必选和可选的设置，如 \texttt{CMAKE\_\allowbreak{}SYSTEM\_\allowbreak{}NAME}、\texttt{CMAKE\_\allowbreak{}SYSTEM\_\allowbreak{}VERSION}、\texttt{CMAKE\_\allowbreak{}SYSTEM\_\allowbreak{}PROCESSOR}、\texttt{CMAKE\_\allowbreak{}C\_\allowbreak{}COMPILER} 和 \texttt{CMAKE\_\allowbreak{}CXX\_\allowbreak{}COMPILER}。下面是一个示例：
+
+\begin{codebox}[text]
+SET(CMAKE_SYSTEM_NAME Linux)
+SET(CMAKE_SYSTEM_PROCESSOR x86_64)
+SET(CMAKE_CROSSCOMPILING FALSE
+SET(CMAKE_C_COMPILER gcc
+SET(CMAKE_CXX_COMPILER g++)
+if(CMAKE_BUILD_TYPE MATCHES "Debug")
+  ADD_DEFINITIONS(-rdynamic)
+endif()
+\end{codebox}
+
+\label{idx:639}
+既然我们已经探讨了使用多个编译器如何改善可移植性和性能，接下来就转向与编译器打交道时另一个同样重要的方面——缩短构建时间。
+
+\subsection{缩短构建时间}
+
+\label{idx:640}
+\label{idx:641}
+每年，程序员都要花费无数小时等待构建完成。缩短构建时间是提升整个团队生产力的一个简单途径，所以下面讨论几种与编译器和工具链相关的做法。
+
+\subsubsection{使用快速的编译器}
+
+\label{idx:642}
+要让构建更快，最简单的办法之一有时就是升级编译器。例如，Clang 7.0.0 引入了 \textbf{预编译头文件}（\textbf{PCH}），它可以显著缩短构建时间，其原理是把常用的头文件编译一次并反复复用，而不是为每个源文件都反复编译。从 Clang 9 起，新增了 \texttt{-ftime-trace} 选项，它能提供它所处理的所有文件的编译耗时信息；其他编译器也提供类似能力：可以看看 GCC 的 \texttt{-ftime-report}，或 MSVC 的 \texttt{/Bt} 和 \texttt{/\allowbreak{}d2cgsummary}。这些工具能揭示编译时间花在了哪里，因此可以帮助你确定哪种编译器和配置最适合你的工作流程。有时，换一个编译器就能获得更快的编译，这在开发机上尤其有用，但影响会因项目和环境而异。
+
+有了快速的编译器之后，我们来看看它需要编译什么。
+
+\subsubsection{重新审视模板}
+
+编译过程的不同环节完成所需的时间各不相同。这对编译期构造和模板尤为重要。例如，C 的 \texttt{qsort} 函数比 C++ 的 \texttt{std::sort} 编译得更快，因为后者是一个模板，而几乎每次使用 \texttt{std::sort}，都会在编译单元中解析时创建该模板的一个不同实例。
+
+\label{idx:643}
+Odin Holmes 的一名实习生 Chiel Douwes 对各种模板操作的编译期开销进行了基准测试，据此提出了所谓的 \textbf{Chiel 法则}（Rule of Chiel）。这条法则描述了哪些 C++ 构造对编译器来说最难处理。因此，只要有可能，就应避免使用这些构造，以缩短编译时间。这一点，以及其他基于类型的模板元编程技巧，都可以在 Odin Holmes 的 \emph{Type Based Template Metaprogramming is Not Dead} 演讲中看到，其中附有性能图表。在 C++20 中，人们也很想开始使用概念（concept）和 \texttt{requires} 子句来取代 SFINAE。
+
+\label{idx:644}
+根据这条法则，各项操作按编译期开销从最快到最慢的排序如下：
+
+\begin{itemize}
+\item 查找一个已记忆（memoized）的类型（从缓存中取回，而不是反复进行重复计算）
+\item 给别名调用（alias call）添加一个参数
+\item 给类型添加一个参数
+\item 调用一个别名
+\item 实例化一个类型
+\label{idx:645}
+\item 实例化一个函数模板
+\item \textbf{替换失败并非错误}（\textbf{SFINAE}）
+\end{itemize}
+
+为了演示这条法则，请看下面的代码，其中编译器只需要通过别名查找一个已记忆的类型（这是列表中速度最快的操作）：
+
+\begin{codebox}[cpp]
+template<bool>
+struct conditional {
+  template<typename T, typename F>
+  using type = F;
+};
+template<>
+struct conditional<true> {
+  template<typename T, typename F>
+  using type = T;
+};
+template<bool B, typename T, typename F>
+using conditional_t = conditional<B>::template type<T, F>;
+\end{codebox}
+
+它定义了一个 \texttt{conditional} 模板别名，该别名存储的类型会在条件 \texttt{B} 为真时解析为 \texttt{T}，否则解析为 \texttt{F}。
+
+\label{idx:646}
+编写这样一个工具的常规方式如下：
+
+\begin{codebox}[cpp]
+template<bool B, class T, class F>
+struct conditional {
+  using type = T;
+};
+template<class T, class F>
+struct conditional<false, T, F> {
+  using type = F;
+};
+template<bool B, class T, class F>
+using conditional_t = conditional<B,T,F>::type;
+\end{codebox}
+
+然而，第二种方式比第一种编译得更慢，因为它依赖创建模板实例，而不是类型别名，这就要求编译器生成新的特化，而不是复用已有的类型。
+
+现在来看看你可以使用哪些工具及其特性来让编译时间保持较低。
+
+\subsubsection{善用工具}
+
+\label{idx:647}
+\label{idx:648}
+\label{idx:649}
+一种能让构建更快的常见技术是使用\textbf{单一编译单元构建}（single compilation unit build），也就是\textbf{联合构建}（unity build）。它并不能加速每个项目，但如果头文件里有大量代码，倒是值得一试。联合构建的做法就是把所有 \texttt{.cpp} 文件都包含进一个编译单元。
+
+但以这种方式把头文件和源文件融合在一起，就消除了接口与实现的分离，而且由于已定义符号冲突和预处理器标识符泄漏，并非所有合法的 C++ 代码都能继续编译。此外，根据所包含文件的数量，编译一个编译单元可能需要大量内存。
+
+\texttt{static} 关键字也没有意义了，因为所有 C++ 文件都被包含在同一个编译单元中。在联合构建中，每次都是把所有内容一次性编译，而不是并行编译。因此，包含顺序和联合构建的组成方式非常重要。
+
+另一个类似的想法是使用 PCH（预编译头）。CMake 3.16 为联合构建和 PCH 都加入了原生支持。你既可以针对单个目标启用联合构建，\texttt{set\_\allowbreak{}target\_\allowbreak{}properties(\allowbreak{}<target> PROPERTIES UNITY\_\allowbreak{}BUILD ON)\allowbreak{}}，也可以把 \texttt{CMAKE\_\allowbreak{}UNITY\_\allowbreak{}BUILD} 设为 \texttt{true} 来全局启用。对于 PCH，你或许想看看 CMake 3.16 的 \texttt{target\_\allowbreak{}precompile\_\allowbreak{}headers}。在这种情况下，构建目标时会先创建一个包含所有必要头文件的头文件，再据此生成预编译头文件产物，以加速后续的编译。
+
+\begin{myTip}{提示}
+
+如果你觉得 C++ 文件里包含的内容太多，可以考虑使用一个叫 \textbf{include-what-you-use} 的工具来整理它们。与包含头文件相比，优先使用类型和函数的前向声明也能大大缩短编译时间。
+\end{myTip}
+
+C++20 提供了 C++ 模块，作为 PCH 的现代替代方案。模块是自包含、可复用的代码单元，用结构化的二进制接口取代了源文件的包含。在这些模块之外，只有被导出的名字才可见，宏、预处理指令或内部声明都不可见，这通常能显著缩短编译时间。据阿里巴巴介绍，相比传统头文件，使用 C++ 模块把他们的 Alibaba Hologres 项目（一个统一的实时数据仓库服务）的编译时间缩短了 42\%（\href{https://www.alibabacloud.com/blog/601974}{https://www.alibabacloud.com/blog/601974}）。C++ 模块将在\emph{第 9 章}《C++ 代码复用的未来：使用模块》中介绍。
+
+如果你的项目链接起来慢得没完没了，也有一些办法可以应对。换用不同的链接器，比如 LLVM 的 LLD 或 GNU 的 Gold，会大有帮助，尤其是它们支持多线程链接。如果实在用不了别的链接器，你总可以试着用 \texttt{-fvisibility-hidden} 或 \texttt{-fvisibility-inlines-hidden} 这类标志，并在源代码中只给那些你想在共享库中可见的函数加上相应的标注。这样链接器要做的工作就更少。如果你在使用链接时优化，请尽量只对性能关键的构建启用它：也就是你打算做性能剖析的构建和用于生产的构建。否则，多半只是在浪费开发人员的时间。
+
+如果你在使用 CMake，且不绑定某个特定的生成器，可以把默认的 Make 生成器换成更快的生成器。\textbf{Ninja} 就是个很好的起点，它正是为了缩短构建时间而创建的。要使用它，只需在调用 CMake 时传入 \texttt{-G Ninja}。
+
+\label{idx:650}
+还有两个很棒的工具，肯定能让你更进一步。其中之一是 \textbf{Ccache}。它是一个缓存 C 和 C++ 编译输出的工具。如果你要把同样的东西构建两次，它会直接从缓存中取结果，而不是重新执行编译。它记录缓存命中和未命中等统计数据，能记住编译特定文件时应该发出的警告，还有许多可以保存在 \texttt{\textasciitilde{}/\allowbreak{}.\allowbreak{}ccache/\allowbreak{}ccache.\allowbreak{}conf} 文件中的配置选项。要查看它的统计数据，只需运行 \texttt{ccache --show-stats}。
+
+第二个工具是 \textbf{IceCC}（或称 \textbf{Icecream}）。它是 distcc 的一个分支，本质上是一个把构建分发到多台主机的工具。有了 IceCC，使用自定义工具链会更容易。它在每台主机上运行 \texttt{iceccd} 守护进程，并运行一个管理整个集群的 \texttt{icecc-scheduler} 服务。与 distcc 不同，这个调度器会确保只使用每台机器的空闲周期，因此你不会把别人的工作站压垮。
+
+要在 CMake 构建中同时使用 IceCC 和 Ccache，只需在调用 CMake 时加入以下内容：
+
+\begin{codebox}[text]
+-DCMAKE_C_COMPILER_LAUNCHER="ccache;icecc"  
+-DCMAKE_CXX_COMPILER_LAUNCHER="ccache;icecc" 
+\end{codebox}
+
+\label{idx:651}
+如果你在 Windows 上编译，可以不用上面那两个工具，改用 clcache 和 Incredibuild，或者寻找其他替代方案，比如 sccache、homcc 或 FASTBuild。
+
+现在你已经知道如何快速构建了，下面我们进入另一个重要话题。
+
+\subsection{发现潜在的代码问题}
+
+\label{idx:652}
+如果你的代码有 bug，再快的构建也没什么价值。有几十个编译器标志可以警告代码中的潜在问题。本节将尝试回答你应该考虑启用哪些标志。
+
+首先，我们从一件稍有不同的事情说起：如何避免因其他库的代码问题而收到警告。为那些你根本无法修复的问题收到警告是没有用的。幸运的是，有一些编译器开关可以禁用这类警告。例如在 GCC 中，\texttt{include} 文件有两种类型：普通包含（通过 \texttt{-I} 传入）和系统包含（通过 \texttt{-isystem} 传入）。如果你用后者指定目录，就不会收到其中头文件产生的警告。MSVC 用 \texttt{-isystem}：\texttt{/\allowbreak{}external:I} 提供同样的功能。此外，它还有其他处理外部包含的标志，比如 \texttt{/\allowbreak{}external:anglebrackets}，它告诉编译器把所有用尖括号包含的文件都当作外部文件，从而禁用对它们的警告。你可以为外部文件指定警告级别。你还可以用 \texttt{/\allowbreak{}external:templates-} 保留由你代码引起的模板实例化所产生的警告。如果你想要一种可移植的方式把 \texttt{include} 路径标记为系统/外部路径，而且你正在使用 CMake，可以在 \texttt{target\_\allowbreak{}include\_\allowbreak{}directories} 指令中加入 \texttt{SYSTEM} 关键字。
+
+说到可移植性，如果你想要符合某个 C++ 标准（你确实应该如此），可以考虑在 GCC 或 Clang 的编译选项中加上 \texttt{-pedantic}，或为 MSVC 加上 \texttt{/\allowbreak{}permissive-} 选项。这样，你就能知道自己在使用的每一处非标准扩展。如果你在使用 CMake，可以为每个目标加上下面这一行：\texttt{set\_\allowbreak{}target\_\allowbreak{}properties(\allowbreak{}<target> PROPERTIES CXX\_\allowbreak{}EXTENSIONS OFF)\allowbreak{}}，以禁用编译器特有的扩展。最方便的做法是用 \texttt{set(\allowbreak{}CMAKE\_\allowbreak{}CXX\_\allowbreak{}EXTENSIONS OFF)\allowbreak{}} 设置全局行为。不过，如果你的 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 被某个更高层级的项目包含，这样做可能不可行。另外两个通常设置的选项是 \texttt{CMAKE\_\allowbreak{}CXX\_\allowbreak{}STANDARD} 和 \texttt{CMAKE\_\allowbreak{}CXX\_\allowbreak{}STANDARD\_\allowbreak{}REQUIRED}。
+
+\label{idx:653}
+如果你在使用 MSVC，尽量用 \texttt{/W4/WX} 编译代码，因为它会启用大多数重要的警告。对于 GCC 和 Clang，可以试试 \texttt{-Wall -Wextra -Wpedantic -Werror}。第一个尽管名字如此，只启用了一些常见警告。第二个则又加上了一堆警告。第三个基于 Scott Meyers 的一本很棒的书《Effective C++》中的建议（它是一组不错的警告，但要确认它对你的需求来说不会太吵）。最后两个分别关于类型转换和有符号性转换。这些标志合在一起构成了一张合理的安全网，当然，你还可以寻找更多可启用的标志。Clang 有一个 \texttt{-Weverything} 标志。试着定期用它构建一次，以发现那些可能值得在你的代码库中启用的新潜在警告。你可能会惊讶于用这个标志会收到多少消息，尽管启用其中某些警告标志可能并不划算。MSVC 的对应物叫做 \texttt{/Wall}。请看下面的表格，了解前面这些标志未启用的其他一些有意思的选项：
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{标志} & \textbf{含义} \\
+\midrule
+\texttt{-Wduplicated-cond} & 当 \texttt{if} 和 \texttt{else-if} 块中使用了相同的条件时发出警告。 \\
+\texttt{-Wduplicated-branches} & 如果两个分支包含相同的源代码，则发出警告。 \\
+\texttt{-Wlogical-op} & 当逻辑运算的操作数相同时，以及本应改用位运算符时，发出警告。 \\
+\texttt{-Wnon-virtual-dtor} & 当一个类有虚函数却没有虚析构函数时发出警告。 \\
+\texttt{-Wnull-dereference} & 对空指针解引用发出警告。在未优化的构建中，这项检查可能不会生效。 \\
+\texttt{-Wuseless-cast} & 当转换为相同类型时发出警告。 \\
+\texttt{-Wshadow} & 一整族警告，针对那些遮蔽了先前其他声明的声明。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+表 5.1：额外的 GCC/Clang 警告标志
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{标志} & \textbf{含义} \\
+\midrule
+\texttt{/w44640} & 对非线程安全的静态成员初始化发出警告。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+表 5.2：额外的 MSVC 警告标志
+
+\label{idx:654}
+最后还有一点值得一提：是否要使用 \texttt{-Werror}（在 MSVC 上是 \texttt{/WX}）。这真的取决于个人偏好，因为用错误代替警告有利也有弊。好的一面是，你不会放过任何已启用的警告。你的 CI 构建会失败，你的代码将无法编译。在运行多线程构建时，你也不会在快速滚过的编译消息中漏掉任何警告。
+
+然而，也有一些弊端。如果升级编译器会引入任何新警告，或者只是检测出更多问题，你就无法升级编译器。依赖项也是如此，它们可能会弃用自己提供的一些函数。如果你的代码被项目的其他部分使用，你就无法在其中弃用任何东西。
+
+幸运的是，你总可以采用一种折中方案：尽量用 \texttt{-Werror} 编译，但在需要做它所阻碍的事情时，就取消这个选项（例如从编译标志中把它去掉）。这需要自律，因为一旦混入任何新警告，你可能就很难把它们清除掉。
+
+\label{idx:655}
+下一节将介绍以编译器为中心的强大工具生态。
+
+\subsection{使用以编译器为中心的工具}
+
+\label{idx:656}
+如今，编译器能让你做的事情比几年前多得多。这要归功于 LLVM 和 Clang 的引入。通过提供 API 和易于复用的模块化架构，LLVM 和 Clang 让 sanitizer、自动重构工具和代码补全引擎等工具蓬勃发展。你应该考虑利用这套编译器基础设施所提供的功能。
+
+使用 \texttt{clang-format} 这个格式化 C/C++ 代码的工具，来确保代码库中的所有代码都符合给定的编码风格，从而得到一个一致且可读的代码库。可以考虑用 \texttt{pre-commit} 工具添加提交前钩子，在提交新代码前先重新格式化。你还可以把 Python 和 CMake 的格式化工具也加进来。使用 Clang 诊断、Clang 静态分析器和 \texttt{clang-tidy} 对源代码进行静态分析——\texttt{clang-tidy} 是一款 linter 工具，用于诊断和修复诸如风格违规、接口误用以及通过静态分析推断出的错误等典型编程错误。这个工具能为你执行的检查种类繁多，所以务必根据你的具体需求定制检查列表和选项。你还可以让软件在启用 sanitizer 的情况下进行每晚或每周测试。这样，你就能检测线程问题、未定义行为、内存访问与管理问题等等。如果你的发布构建禁用了断言，那么用调试构建来运行测试也会有价值。
+
+如果你觉得还能做更多，可以考虑用 Clang 的基础设施编写自己的代码重构。如果你想了解如何创建自己的基于 LLVM 的工具，已经有一个 \texttt{clang-rename} 工具可供参考。为 clang-tidy 创建额外的检查和修复也并不太难，它们能帮你省下数小时的手工劳动。
+
+\begin{myNotic}{注意}
+
+除了基于 Clang 的工具，还有许多其他工具可以集成到你的构建过程中。Clang 工具的替代品包括静态分析器，如 cppheck、PVS-Studio、Coverity Scan 和 OCLint；动态分析器，如 Valgrind、CHAP 和 Google sanitizer；以及 linter，如 cpplint 和 SonarLint。
+\end{myNotic}
+
+\label{idx:657}
+由于构建系统是管理这类集成的核心，下面我们就转向这个话题。
+
+\section{抽象构建过程}
+
+\label{idx:658}
+在现代 C++ 开发中，你很少直接与底层构建工具打交道，因为为每种环境维护单独的构建脚本既耗时又容易出错。因此，你会通过一个抽象层来工作，它隐藏了平台相关的细节，让你描述要构建什么，而不是如何去构建。
+
+本节我们将讨论 CMake，它是这一角色的事实标准。它是一个被全世界的 C++ 项目使用的构建系统生成器。说 CMake 是构建系统生成器而不是构建系统本身，是什么意思？简单来说，CMake 可以用来生成各种类型的构建系统。你可以用它为广泛的环境生成构建文件，包括 Visual Studio 项目、Makefile 项目、基于 Ninja 的项目、Sublime、Eclipse 和 Xcode。
+
+\begin{myNotic}{注意}
+
+CMake 还附带了一组其他工具，比如用于执行测试的 CTest、用于汇总、分析和显示测试结果的 CDash，以及用于打包和创建安装程序的 CPack。CMake 本身也支持导出和安装目标。
+
+许多流行的 IDE 都支持 CMake，比如 CLion、C++ Builder、Qt Creator、KDevelop、Visual Studio 以及 VSCode（通过插件）。与之竞争的构建系统生成器和元构建工具包括 Ninja、Meson 和 Bazel，以及 Xmake、Pixi、Mamba、Premake、SCons 和 BitBake。
+\end{myNotic}
+
+\subsection{CMake 入门}
+
+\label{idx:659}
+CMake 的生成器可以是单配置的，比如 Make 或 NMAKE，也可以是多配置的，比如 Visual Studio 或 Ninja Multi-Config。对于单配置的生成器，在某个文件夹中首次运行生成时，你应该传入 \texttt{CMAKE\_\allowbreak{}BUILD\_\allowbreak{}TYPE} 标志。例如，要配置一个调试构建，可以运行下面的命令：
+
+\begin{codebox}[text]
+cmake <project_directory> -DCMAKE_BUILD_TYPE=Debug
+\end{codebox}
+
+随后 CMake 会生成一份配置日志，记录配置步骤中发生的某些事件。其他预定义的配置有 \texttt{Release}、\texttt{Rel\allowbreak{}With\allowbreak{}Deb\allowbreak{}Info}（带调试符号的发布版）和 \texttt{Min\allowbreak{}Size\allowbreak{}Rel}（针对最小二进制体积优化的发布版）。为了保持源代码目录整洁，始终要创建一个单独的构建文件夹，并从那里运行 CMake 生成。
+
+尽管可以添加自己的构建类型，但你真的应该尽量避免这样做，因为这会让某些 IDE 的使用变得复杂，而且不易扩展。更好的做法是使用，嗯，\texttt{option}。
+
+\label{idx:660}
+CMake 文件可以用两种风格编写：一种是过时的、基于变量的风格，另一种是基于目标的现代 CMake 风格。这里我们只关注后者。尽量避免通过全局变量来设置东西，因为当你想复用目标时，这会引发问题。
+
+\begin{myNotic}{注意}
+
+从 CMake 3.27 开始，你可以使用 GDB、LLDB 和 Visual Studio Debugger 等调试器，以及支持\textbf{调试适配器协议}（\textbf{DAP}）的 CLion、Qt Creator、Visual Studio 和 VS Code 等 IDE 来调试 CMake 脚本，这让开发变得更简单。在此之前，CMake 脚本只能通过输出执行信息来调试。
+\end{myNotic}
+
+\subsubsection{创建 CMake 项目}
+
+\label{idx:661}
+每个 CMake 项目都应该在其顶层 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件中包含以下几行：
+
+\begin{codebox}[cmake]
+cmake_minimum_required(VERSION 3.28...3.31)
+project(
+  Customer
+  VERSION 0.0.1
+  LANGUAGES CXX)
+\end{codebox}
+
+设置支持的最低和最高版本很重要，因为它会通过设置策略来影响 CMake 的行为方式，但通常只设置最低版本就够了。如果需要，你也可以用 \texttt{cmake\_\allowbreak{}policy(\allowbreak{})\allowbreak{}} 命令手动设置它们。
+
+项目的定义指定了它的名称、版本（将用于填充若干变量），以及 CMake 构建该项目所使用的编程语言（这会填充更多变量并找到所需的工具）。
+
+一个典型的 C++ 项目有以下目录：
+
+\begin{codebox}[yaml]
+cmake: For CMake scripts
+include: For public headers, usually with a subfolder named after the project
+src: For source files and private headers
+test: For tests
+\end{codebox}
+
+\label{idx:662}
+有些项目通过 Git 子模块或简单地复制来添加第三方库的目录，但这种方式会让维护和更新变得复杂。因此，推荐通过包管理器把外部库链接到项目中。
+
+你可以使用 CMake 目录来存放自定义的 CMake 模块。为了方便访问该目录中的脚本，可以把它加入 CMake 的 \texttt{include()} 搜索路径，像这样：
+
+\begin{codebox}[cmake]
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake"
+\end{codebox}
+
+在包含 CMake 模块时，可以省略 \texttt{.cmake} 后缀。这意味着 \texttt{include(\allowbreak{}Common\allowbreak{}Compile\allowbreak{}Flags.\allowbreak{}cmake)\allowbreak{}} 等同于 \texttt{include(\allowbreak{}Common\allowbreak{}Compile\allowbreak{}Flags)\allowbreak{}}。
+
+\label{idx:663}
+在 CMake 中浏览目录有一个常见的陷阱：并非人人都了解其内置目录变量之间微妙的差异。下一节将解释这些变量以及如何区分它们。
+
+\subsubsection{区分 CMake 目录变量}
+
+\label{idx:664}
+在编写 CMake 脚本时，要注意区分以下内置变量：
+
+\begin{codebox}[yaml]
+PROJECT_SOURCE_DIR: The directory where the project command was last called from a CMake script.
+PROJECT_BINARY_DIR: Like the preceding one, but for the build directory tree.
+CMAKE_SOURCE_DIR: Top-level source directory (this may be in another project that just adds ours as a dependency/subdirectory).
+CMAKE_BINARY_DIR: Like CMAKE_SOURCE_DIR, but for the build directory tree.
+CMAKE_CURRENT_SOURCE_DIR: The source directory corresponding to the currently processed CMakeLists.txt file.
+CMAKE_CURRENT_BINARY_DIR: The binary (build) directory matching CMAKE_CURRENT_SOURCE_DIR.
+CMAKE_CURRENT_LIST_DIR: The directory of CMAKE_CURRENT_LIST_FILE. It can be different from the current source directory if the current CMake script was included from another one (common for CMake modules that are included).
+\end{codebox}
+
+把这些弄清楚之后，下面我们就开始浏览那些目录。
+
+在你的顶层 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件中，你很可能想要调用 \texttt{add\_\allowbreak{}subdirectory(\allowbreak{}src)\allowbreak{}}，好让 CMake 处理该目录。
+
+在了解了 CMake 如何组织和引用它的各种目录之后，下一步就是运用这些知识来定义实际的构建产物。
+
+\subsubsection{指定 CMake 目标}
+
+\label{idx:665}
+在 \texttt{src} 目录中，你应该还有一个 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件，这次可能会定义一个或两个目标。下面我们为书中前面提到的展会系统的客户微服务添加一个可执行文件：
+
+\begin{codebox}[cmake]
+add_executable(customer main.cpp)
+\end{codebox}
+
+源文件既可以像上面那行代码那样指定，也可以在之后用 \texttt{target\_\allowbreak{}sources} 添加。
+
+使用通配符（glob）来指定源文件是一种常见的 CMake 反模式。它的一个很大缺点是，在重新运行生成之前，CMake 无法知道是否新增了文件。由此产生的一个常见后果是，如果你从仓库拉取改动后直接构建，可能会漏掉编译和运行新增的单元测试或其他代码。即使你用了带 \texttt{CONFIGURE\_\allowbreak{}DEPENDS} 的通配符，构建时间也会变长，因为构建系统遍历依赖图时，每次构建都必须检查通配符。此外，这个标志可能无法在所有生成器上都可靠工作。就连 CMake 的作者也不鼓励使用它，主张直接明确列出源文件。
+
+好了，我们已经定义了源文件。现在，我们指定目标需要编译器提供 C++17 支持：
+
+\begin{codebox}[cmake]
+target_compile_features(customer PRIVATE cxx_std_17)
+\end{codebox}
+
+\texttt{PRIVATE} 关键字表明这是一项内部需求，也就是说，它只对这个特定目标可见，对任何依赖它的目标都不可见。无论如何，都无法在不同目标之间混用 C++ 语言方言。如果你在编写一个向用户提供 C++ API 的纯头文件库，可以使用 \texttt{INTERFACE} 关键字。要同时指定接口需求和内部需求，可以使用 \texttt{PUBLIC} 关键字。当使用方链接到我们的目标时，CMake 随后会自动要求它同样具备 C++17 支持。如果你在编写一个不参与构建的目标（也就是纯头文件库或导入目标），通常使用 \texttt{INTERFACE} 关键字就足够了。
+
+你还应该注意，指定我们的目标想使用 C++17 特性，并不会强制使用该 C++ 标准，也不会禁用目标的编译器扩展。要做到这一点，你应该改为调用以下内容：
+
+\begin{codebox}[text]
+set_target_properties(customer PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED YES
+  CXX_EXTENSIONS NO)
+\end{codebox}
+
+如果你想拥有一组传递给每个目标的编译器标志，可以把它们存进一个变量；如果你想创建一个把这些标志设为 \texttt{INTERFACE}、不带任何源文件、并在 \texttt{target\_\allowbreak{}link\_\allowbreak{}libraries} 中使用这个目标的目标，就调用以下命令：
+
+\begin{codebox}[cmake]
+target_compile_options(customer PRIVATE ${BASE_COMPILE_FLAGS})
+\end{codebox}
+
+\label{idx:666}
+除了添加一个链接器标志之外，该命令还会自动传播包含目录、选项、宏和其他属性。说到链接，下面我们来创建一个将要链接的库：
+
+\begin{codebox}[cmake]
+add_library(libcustomer responder.cpp controller.cpp)
+add_library(tradefair::libcustomer ALIAS libcustomer)
+set_target_properties(libcustomer PROPERTIES OUTPUT_NAME customer)
+# ...
+target_link_libraries(customer PRIVATE libcustomer)
+\end{codebox}
+
+\texttt{add\_\allowbreak{}library} 命令可用于创建静态库、共享库、目标库和接口库（即纯头文件库），也可以定义任何导入库。
+
+它的 \texttt{ALIAS} 版本会创建一个带命名空间的目标，这有助于调试许多 CMake 问题，也是推荐的现代 CMake 实践。
+
+因为我们已经给目标加了 \texttt{lib} 前缀，所以把输出名设为 \texttt{libcustomer.\allowbreak{}a}，而不是 \texttt{liblibcustomer.\allowbreak{}a}。
+
+最后，我们把可执行文件与新增的库链接起来。请尽量始终为 \texttt{target\_\allowbreak{}link\_\allowbreak{}libraries} 命令指定 \texttt{PUBLIC}、\texttt{PRIVATE} 或 \texttt{INTERFACE} 关键字，因为这对 CMake 有效管理目标依赖的传递性至关重要。
+
+\label{idx:667}
+目标定义好之后，下一步就是决定 CMake 应该把构建产物放在哪里。
+
+\subsubsection{指定输出目录}
+
+\label{idx:668}
+使用 \texttt{cmake --build .\allowbreak{}} 之类的命令构建代码之后，你可能想知道在哪里能找到构建产物。默认情况下，CMake 会把它们创建在与定义它们时所用的源目录相匹配的目录中。例如，如果你有一个 \texttt{src/\allowbreak{}CMake\allowbreak{}Lists.\allowbreak{}txt} 文件，其中包含一条 \texttt{add\_\allowbreak{}executable} 指令，那么默认情况下，二进制文件会落在构建目录的 \texttt{src} 子目录中。我们可以使用如下代码覆盖这一行为：
+
+\begin{codebox}[cmake]
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+\end{codebox}
+
+\label{idx:669}
+这样一来，二进制文件和\textbf{动态链接库}（\textbf{DLL}）文件会落在项目构建目录的 \texttt{bin} 子目录中，而 Linux 的静态库和共享库则会被放入 \texttt{lib} 子目录。
+
+打好基础之后，我们就可以利用 CMake 最强大的特性之一——生成器表达式。
+
+\subsection{使用生成器表达式}
+
+\label{idx:670}
+要想以同时支持单配置生成器和多配置生成器的方式设置编译标志并非易事，因为 CMake 在配置阶段而非构建/安装阶段执行 \texttt{if} 语句以及许多其他结构。
+
+这意味着下面这种做法是一种 CMake 反模式：
+
+\begin{codebox}[cmake]
+if(CMAKE_BUILD_TYPE STREQUAL Release)
+  target_compile_definitions(libcustomer PRIVATE RUN_FAST)
+endif()
+\end{codebox}
+
+相反，生成器表达式才是实现同一目标的正确方式，因为它们会在更晚的阶段被处理。下面来看一个实际用法的例子。假设你只想为 \texttt{Release} 配置添加一个预处理器定义，可以这样写：
+
+\begin{codebox}[cmake]
+target_compile_definitions(libcustomer PRIVATE "$<$<CONFIG:Release>:RUN_FAST>")
+\end{codebox}
+
+只有在构建那个选定的配置时，它才会解析为 \texttt{RUN\_FAST}。对于其他配置，它会解析为空值。它对单配置和多配置生成器都适用。不过，这并不是生成器表达式唯一的用例。
+
+\label{idx:671}
+当我们的项目在构建期间使用目标，以及其他项目在目标被安装后使用目标时，目标的某些方面可能会有所不同。\textbf{包含目录}就是一个很好的例子。在 CMake 中处理这一问题的一种常见方式如下：
+
+\begin{codebox}[cmake]
+target_include_directories(libcustomer PUBLIC $<INSTALL_INTERFACE:include>
+                         $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+\end{codebox}
+
+\label{idx:672}
+在这个例子中，我们有两个生成器表达式。第一个告诉我们，在安装之后，可以在 \texttt{include} 目录（相对于安装前缀，即安装树的根目录）中找到头文件。如果不是在安装，这个表达式会变成空表达式。这正是我们需要另一个用于构建的表达式的原因。后者会解析为最后一次调用的 \texttt{project()} 所在目录下的 \texttt{include} 子目录。
+
+\begin{myTip}{提示}
+
+不要把 \texttt{target\_\allowbreak{}include\_\allowbreak{}directories} 用于指向模块之外的路径。如果这么做，你就是在\emph{窃取}别人的头文件。这是一种 CMake 反模式。正确的做法是显式声明库/目标依赖。
+\end{myTip}
+
+CMake 定义了许多生成器表达式，你可以用它们来查询编译器、平台以及目标（例如完整名称、目标文件列表、任意属性值，等等）。除此之外，还有一些表达式可以执行布尔运算、条件语句、字符串比较等操作。
+
+现在来看一个更复杂的例子。假设你希望有一组在各个目标间通用的编译标志，并且这组标志取决于所用的编译器，可以这样定义：
+
+\begin{codebox}[cmake]
+list(
+  APPEND
+  BASE_COMPILE_FLAGS
+  "$<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:-Wall;-Wextra;-pedantic;-Werror>"
+  "$<$<CXX_COMPILER_ID:MSVC>:/W4;/WX>")
+\end{codebox}
+
+\label{idx:673}
+如果编译器是 Clang 或 AppleClang，或者是 GCC，它会追加一组标志；如果使用的是 MSVC，则追加另一组。注意，我们用分号分隔标志，因为 CMake 正是用分号分隔列表中的元素。
+
+下面来看看如何把外部代码加入我们的项目。
+
+\section{使用外部模块}
+
+\label{idx:674}
+获取所依赖的外部项目有几种方式。例如，你可以把它们添加为 Conan 依赖，使用 CMake 的 \texttt{find\_\allowbreak{}package} 查找由操作系统提供或以其他方式安装的某个版本，或者自行获取并编译该依赖。Conan 包管理器将在下一章介绍。
+
+本节的核心观点是：只要有可能，就应该使用包管理器。这样，你最终使用的会是满足你的项目及其依赖要求的那一个版本的依赖。其他知名的 C++ 包管理器还有 vcpkg、Hunter、CPM、xrepo、Spack，以及较为冷门的 Buckaroo、Biicode、CGet、Teaport 和 C++ Archive Network。
+
+\label{idx:675}
+如果你的目标是要支持多个平台，甚至是同一发行版的多个版本，那么使用诸如 Conan 这样的包管理器，或者自行编译所有内容，才是可行之道。这样，无论你在哪个操作系统上编译，使用的都会是同一个依赖版本。
+
+\subsection{获取依赖}
+
+\label{idx:676}
+\label{idx:677}
+从源代码准备依赖的一种可行方式是使用 CMake 内置的 \texttt{Fetch\allowbreak{}Content} 模块。它会下载你的依赖，然后将其作为普通目标为你构建。
+
+该特性从 CMake 3.11 开始提供。它取代了缺陷众多的 \texttt{External\allowbreak{}Project} 模块。其中一个缺陷是它在构建阶段克隆外部仓库，因此 CMake 无法推断外部项目所定义的目标及其依赖。这迫使许多项目转而手动定义这类外部目标的 \texttt{include} 目录和库路径，并完全忽略它们所需的接口编译标志和依赖。唉。\texttt{Fetch\allowbreak{}Content} 没有这类问题，因此推荐你改用前者。
+
+\begin{myNotic}{注意}
+
+在演示如何使用它之前，你必须知道，\texttt{Fetch\allowbreak{}Content} 和 \texttt{External\allowbreak{}Project}（以及使用 Git 子模块和类似方法）都有一个重要的缺陷。如果你有许多依赖都使用了同一个第三方库，你最终可能会得到同一个项目的多个版本，例如好几个版本的 Boost。使用诸如 Conan 这样的包管理器有助于避免这类问题。
+\end{myNotic}
+
+举个例子，下面演示如何使用前面提到的 \texttt{Fetch\allowbreak{}Content} 特性把 \textbf{GTest} 集成到你的项目中。首先，创建一个 \texttt{Fetch\allowbreak{}GTest.\allowbreak{}cmake} 文件，把它放到源码树中的 \texttt{cmake} 目录里。我们的 \texttt{Fetch\allowbreak{}GTest} 脚本定义如下：
+
+\begin{codebox}[cmake]
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  GIT_REPOSITORY https://github.com/google/googletest.git
+  GIT_TAG v1.15.2
+  EXCLUDE_FROM_ALL)
+# Windows 平台：防止覆盖父项目的编译器/链接器设置
+set(gtest_force_shared_crt
+    ON
+    CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+message(STATUS "GTest binaries are present at ${googletest_BINARY_DIR}")
+\end{codebox}
+
+首先，我们包含内置的 \texttt{Fetch\allowbreak{}Content} 模块。模块加载后，我们用 \texttt{Fetch\allowbreak{}Content\_\allowbreak{}Declare} 声明依赖。接着，我们为依赖命名，并指定 CMake 将要克隆的仓库以及要检出的修订版本。\texttt{EXCLUDE\_\allowbreak{}FROM\_\allowbreak{}ALL} 选项会告诉 CMake，在我们运行诸如 \texttt{make all} 这样的命令时，不要构建其他目标不需要的目标。
+
+\label{idx:678}
+\label{idx:679}
+现在，如果此前尚未把外部库提供给项目，我们可以完成这一步。成功处理该库后，我们的脚本会打印一条消息，指出 GTests 库在构建完成后将落在哪个目录。
+
+那一串命令可以用 \texttt{CPM.cmake} 替代，它是一个可配置的 CMake 脚本，封装了 \texttt{Fetch\allowbreak{}Content} 模块，为 CMake 增添了依赖管理能力：版本检查、依赖缓存、包锁文件。要使用这个包管理器，你需要把 \texttt{CPM.cmake} 添加到项目中。详细说明的链接见\emph{延伸阅读}一节。这个脚本所做的工作与前面的脚本相同，只是额外调用了 \texttt{find\_\allowbreak{}package(\allowbreak{})\allowbreak{}} 命令：
+
+\begin{codebox}[cmake]
+include(CPM)
+CPMAddPackage(
+  NAME googletest
+  GITHUB_REPOSITORY google/googletest
+  GIT_TAG v1.17.0
+  VERSION 1.17.0
+  EXCLUDE_FROM_ALL
+  OPTIONS "BUILD_GMOCK OFF" "INSTALL_GTEST OFF" "gtest_force_shared_crt")
+\end{codebox}
+
+CMake 3.24 引入了依赖提供者（dependency provider），把集成又向前推进了一步。依赖提供者控制依赖如何被提供给项目。这种方式会连接第三方包管理器，把它们的库、包含目录和其他细节直接提供给 CMake。此类提供者的一个例子是 CMake-Conan 依赖提供者，它是 Conan C 与 C++ 包管理器的包装器。诸如 CLion、Qt Creator、Visual Studio 和 Visual Studio Code 这样的 IDE 允许我们以这种方式配置 CMake。你可以把该提供者的路径作为 CMake 参数传入：-\texttt{DCMAKE\_\allowbreak{}PROJECT\_\allowbreak{}TOP\_\allowbreak{}LEVEL\_\allowbreak{}INCLUDES=\allowbreak{}conan\_\allowbreak{}provider.\allowbreak{}cmake}。如果你的项目依赖 Conan，这个提供者会完全负责用 Conan 包管理器下载并安装项目依赖：
+
+\begin{codebox}[text]
+cmake -S . -B build -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+\end{codebox}
+
+\label{idx:680}
+\label{idx:681}
+如果你不喜欢把依赖与项目一起构建，那么下一种集成依赖的方式可能更适合你。
+
+\subsection{使用查找脚本}
+
+\label{idx:682}
+\label{idx:683}
+假设你的依赖已经存在于主机上的某个位置，你只需调用 \texttt{find\_\allowbreak{}package} 来尝试搜索它即可。如果你的依赖提供了 config 文件或 targets 文件（稍后会详细说明），那么只需写下这一条简单的命令就够了。当然，前提是这些依赖已经存在于你的机器上。如果没有，那么在为项目运行 CMake 之前，安装它们就是你的责任。
+
+要创建前面这些文件，你的依赖需要使用 CMake，但情况并非总是如此。那么该如何处理那些不使用 CMake 的库呢？如果这个库很流行，那么很可能已经有人为你创建好了一个可以直接使用的查找脚本。1.70 之前的 Boost 库就是这种做法的一个常见例子。CMake 自带一个 \texttt{FindBoost} 模块，你只需运行 \texttt{find\_\allowbreak{}package(\allowbreak{}Boost)\allowbreak{}} 就能执行它。
+
+要使用前面那个模块查找 Boost，你需要先在系统上安装它。之后，在你的 CMake 列表文件中，应该设置任何你认为合理的选项。例如，若要使用动态且多线程的 Boost 库，并且不与 C++ 运行时静态链接，可指定如下内容：
+
+\begin{codebox}[cmake]
+set(Boost_USE_STATIC_LIBS OFF)
+set(Boost_USE_MULTITHREADED ON)
+set(Boost_USE_STATIC_RUNTIME OFF)
+\end{codebox}
+
+然后，你需要搜索该库，如下所示：
+
+\begin{codebox}[cmake]
+find_package(Boost 1.69 EXACT REQUIRED COMPONENTS Beast)
+\end{codebox}
+
+这里，我们指定只想使用 Beast，它是 Boost 附带的一个出色的网络库。找到之后，你可以像下面这样把它链接到你的目标：
+
+\begin{codebox}[cmake]
+target_link_libraries(MyTarget PUBLIC Boost::Beast)
+\end{codebox}
+
+既然你已经知道如何正确使用查找脚本，下面来学习如何自己编写一个。
+
+\subsection{编写查找脚本}
+
+\label{idx:684}
+\label{idx:685}
+如果你的依赖既不提供 config 文件和 target 文件，也没有人为它编写过查找模块，你总是可以自己编写这样一个模块。
+
+这不是你经常要做的事，所以这里只打算粗略地介绍这个主题。若要深入了解，你还应该阅读官方 CMake 文档中的指南（链接见\emph{延伸阅读}一节），或者直接翻阅随 CMake 一起安装的一些查找模块（在 Unix 系统上通常位于诸如 \texttt{/\allowbreak{}usr/\allowbreak{}share/\allowbreak{}cmake-3.\allowbreak{}17/\allowbreak{}Modules} 这样的目录中）。为简单起见，我们假设你只想查找依赖的某一种配置，但也可以分别查找 \texttt{Release} 和 \texttt{Debug} 二进制文件。这会带来不同的目标，并设置不同的关联变量。
+
+脚本名称决定了你将传给 \texttt{find\_\allowbreak{}package} 的参数；例如，如果你希望最终能写成 \texttt{find\_\allowbreak{}package(\allowbreak{}Foo)\allowbreak{}}，那么你的脚本应该命名如下：
+
+\begin{codebox}[text]
+FindFoo.cmake
+\end{codebox}
+
+\texttt{find\_\allowbreak{}package(\allowbreak{})\allowbreak{}} 有几种搜索模式：
+
+\begin{itemize}
+\item MODULE 会查找 \texttt{Find<Package\allowbreak{}Name>.\allowbreak{}cmake}
+\item CONFIG 会查找以下其中之一：\texttt{<lowercase\allowbreak{}Package\allowbreak{}Name>-config.\allowbreak{}cmake}、\texttt{<Package\allowbreak{}Name>Config.\allowbreak{}cmake}、\texttt{<lowercase\allowbreak{}Package\allowbreak{}Name>-config-version.\allowbreak{}cmake} 或 \texttt{<Package\allowbreak{}Name>Config\allowbreak{}Version.\allowbreak{}cmake}
+\item 另外，对 \texttt{find\_\allowbreak{}package(\allowbreak{})\allowbreak{}} 的调用可以在内部重定向到由 \texttt{Fetch\allowbreak{}Content} 模块提供的包
+\end{itemize}
+
+一个好的做法是用一段 \texttt{re\allowbreak{}Structured\allowbreak{}Text} 内容来开头，描述脚本将做什么、会设置哪些变量，等等。这类描述的一个例子如下：
+
+\begin{codebox}[text]
+ #.rst:
+ # FindMyDep
+ # ----------
+ #
+ # Find my favorite external dependency (MyDep).
+ #
+ # Imported targets
+ # ^^^^^^^^^^^^^^^^
+ #
+ # This module defines the following :prop_tgt:`IMPORTED` target:
+ #
+ # ``MyDep::MyDep``
+ #   The MyDep library, if found.
+ #
+\end{codebox}
+
+\label{idx:686}
+\label{idx:687}
+通常，你还希望描述脚本将会设置的变量：
+
+\begin{codebox}[text]
+ # Result variables
+ # ^^^^^^^^^^^^^^^^
+ #
+ # This module will set the following variables in your project:
+ #
+ # ``MyDep_FOUND``
+ #   whether MyDep was found or not
+ # ``MyDep_VERSION_STRING``
+ #   the found version of MyDep
+\end{codebox}
+
+如果 \texttt{MyDep} 本身有任何依赖，现在是查找它们的时候了：
+
+\begin{codebox}[cmake]
+find_package(Boost REQUIRED)
+\end{codebox}
+
+现在我们就可以开始搜索这个库了。一种常见的做法是使用 \texttt{pkg-config}：
+
+\begin{codebox}[cmake]
+find_package(PkgConfig)
+pkg_check_modules(PC_MyDep QUIET MyDep)
+\end{codebox}
+
+如果 \texttt{pkg-config} 掌握我们依赖的信息，它会设置一些可供我们用来查找该依赖的变量。
+
+一个不错的主意是提供一个变量，让我们脚本的使用者可以设置它，从而指向库所在的位置。按照 CMake 的惯例，它的名称应该是 \texttt{My\allowbreak{}Dep\_\allowbreak{}ROOT\_\allowbreak{}DIR}。要把这个变量提供给 CMake，使用者可以用 \texttt{-DMy\allowbreak{}Dep\_\allowbreak{}ROOT\_\allowbreak{}DIR=\allowbreak{}some/\allowbreak{}path} 调用 CMake，也可以在其构建目录中的 \texttt{CMake\allowbreak{}Cache.\allowbreak{}txt} 里修改该变量，或者使用 \texttt{ccmake}（TUI）或 \texttt{cmake-gui} 程序。
+
+\label{idx:688}
+\label{idx:689}
+现在，我们可以使用前面提到的路径来搜索依赖的头文件和库：
+
+\begin{codebox}[text]
+find_path(
+  MyDep_INCLUDE_DIR
+  NAMES MyDep.h
+  PATHS "${MyDep_ROOT_DIR}/include" "${PC_MyDep_INCLUDE_DIRS}"
+  PATH_SUFFIXES MyDep)
+find_library(
+  MyDep_LIBRARY
+  NAMES mydep
+  PATHS "${MyDep_ROOT_DIR}/lib" "${PC_MyDep_LIBRARY_DIRS}"
+\end{codebox}
+
+然后，我们还需要设置找到的版本，正如我们在脚本开头所承诺的那样。要使用从 \texttt{pkg-config} 中得到的版本，可以这样写：
+
+\begin{codebox}[cmake]
+set(MyDep_VERSION ${PC_MyDep_VERSION})
+\end{codebox}
+
+或者，我们也可以手动从头文件的内容中、从库路径的各个组成部分中，或者使用任何其他方式提取版本。完成这一步之后，下面利用 CMake 的内置脚本，在处理传给 \texttt{find\_\allowbreak{}package} 调用的所有可能参数的同时，判断该库是否被成功找到：
+
+\begin{codebox}[cmake]
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(
+  MyDep
+  FOUND_VAR MyDep_FOUND
+  REQUIRED_VARS MyDep_LIBRARY MyDep_INCLUDE_DIR
+  VERSION_VAR MyDep_VERSION)
+\end{codebox}
+
+\label{idx:690}
+\label{idx:691}
+既然我们决定提供一个目标，而不仅仅是一堆变量，那么现在是定义该目标的时候了：
+
+\begin{codebox}[cmake]
+if(MyDep_FOUND AND NOT TARGET MyDep::MyDep)
+  add_library(MyDep::MyDep UNKNOWN IMPORTED)
+  set_target_properties(
+    MyDep::MyDep
+    PROPERTIES IMPORTED_LOCATION "${MyDep_LIBRARY}"
+               INTERFACE_COMPILE_OPTIONS "${PC_MyDep_CFLAGS_OTHER}"
+               INTERFACE_INCLUDE_DIRECTORIES "${MyDep_INCLUDE_DIR}")
+endif()
+\end{codebox}
+
+最后，为那些不想操心内部变量的使用者，我们把这些内部使用的变量隐藏起来：
+
+\begin{codebox}[text]
+mark_as_advanced(MyDep_INCLUDE_DIR MyDep_LIBRARY)
+\end{codebox}
+
+现在，我们有了一个完整的查找模块，可以像下面这样使用它：
+
+\begin{codebox}[cmake]
+find_package(MyDep REQUIRED)
+target_link_libraries(MyTarget PRIVATE MyDep::MyDep)
+\end{codebox}
+
+这就是自己编写查找模块的方法。
+
+\begin{myTip}{提示}
+
+不要为你自己的包编写 \texttt{Find\textbackslash{}*.\allowbreak{}cmake} 模块。那些模块是为不支持 CMake 的包准备的。相反，应该编写 \texttt{Config\textbackslash{}*.\allowbreak{}cmake} 模块（本章后面会介绍）。
+\end{myTip}
+
+\label{idx:692}
+\label{idx:693}
+依赖配置好之后，我们就可以专注于测试代码了。
+
+\subsection{添加测试}
+
+\label{idx:694}
+CMake 有自己的测试驱动程序，名为 \texttt{CTest}。你可以从 \texttt{CMake\allowbreak{}Lists} 中轻松地为它添加新的测试套件，既可以自己动手，也可以借助测试框架提供的众多集成。我们会在\emph{第 10 章}《编写可测试代码》中深入讨论测试，不过这里先演示如何快速、干净地添加基于 GoogleTest（即 GTest）测试框架的单元测试。
+
+通常，要在 CMake 中定义测试，你会想这样写：
+
+\begin{codebox}[cmake]
+if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
+  include(CTest)
+  if(BUILD_TESTING)
+    add_subdirectory(test)
+  endif()
+endif()
+\end{codebox}
+
+前面这段代码会先检查当前项目是否正在构建的主项目。通常，你只想为自己的项目运行测试，甚至不想为所使用的任何第三方组件构建测试。这就是要检查项目名称的原因。从 3.21 版开始，CMake 为此提供了 \texttt{PROJECT\_\allowbreak{}IS\_\allowbreak{}TOP\_\allowbreak{}LEVEL} 变量，简化了这一检查：
+
+\begin{codebox}[cmake]
+if(PROJECT_IS_TOP_LEVEL)
+  include(CTest)
+  if(BUILD_TESTING)
+    add_subdirectory(test)
+  endif()
+endif()
+\end{codebox}
+
+如果要运行我们的测试，就包含 \texttt{CTest} 模块。它会加载 CTest 提供的整套测试基础设施，定义其额外的目标，并调用一个名为 \texttt{enable\_\allowbreak{}testing} 的 CMake 函数，该函数会（除其他事项外）启用 \texttt{BUILD\_\allowbreak{}TESTING} 标志。这个标志会被缓存，因此在生成构建系统时，只要给 CMake 传入一个 \texttt{-DBUILD\_\allowbreak{}TESTING=\allowbreak{}OFF} 参数，就能在构建项目时禁用所有测试。
+
+所有这类缓存变量都存储在你构建目录中一个名为 \texttt{CMake\allowbreak{}Cache.\allowbreak{}txt} 的文本文件里。你可以随意修改其中的变量来改变 CMake 的行为；在你删除该文件之前，它不会覆盖那里的设置。你可以使用 \texttt{ccmake}、\texttt{cmake-gui} 或手动方式来修改。
+
+如果 \texttt{BUILD\_\allowbreak{}TESTING} 为真，我们只需处理测试目录中的 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件。它可能看起来像这样：
+
+\begin{codebox}[cmake]
+include(FetchGTest)
+include(GoogleTest)
+add_subdirectory(customer)
+\end{codebox}
+
+\label{idx:695}
+第一个 \texttt{include} 调用的是我们前面描述过的、用于提供 GTest 的脚本。获取 GTest 之后，当前的 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 通过调用 \texttt{include(\allowbreak{}Google\allowbreak{}Test)\allowbreak{}} 加载 GoogleTest CMake 模块中定义的辅助函数。这让我们能更轻松地把测试集成到 \texttt{CTest} 中。最后，我们调用 \texttt{add\_\allowbreak{}subdirectory(\allowbreak{}customer)\allowbreak{} }，告诉 CMake 进入一个包含一些测试的目录。
+
+\texttt{test/\allowbreak{}customer/\allowbreak{}CMake\allowbreak{}Lists.\allowbreak{}txt} 文件只是添加一个带测试的可执行文件，它使用我们预定义的标志集进行编译，并链接到被测试的模块和 GTest。然后，我们调用 CTest 的辅助函数来发现已定义的测试。这一切不过是四行 CMake 代码：
+
+\begin{codebox}[cmake]
+add_executable(unittests unit.cpp)
+target_compile_options(unittests PRIVATE ${BASE_COMPILE_FLAGS})
+target_link_libraries(unittests PRIVATE tradefair::libcustomer gtest_main)
+gtest_discover_tests(unittests)
+\end{codebox}
+
+瞧！CMake 3.10 引入的 \texttt{gtest\_\allowbreak{}discover\_\allowbreak{}tests(\allowbreak{})\allowbreak{}} 会动态发现测试。或者，你也可以使用 \texttt{gtest\_\allowbreak{}add\_\allowbreak{}tests(\allowbreak{})\allowbreak{}}，或者配合 \texttt{add\_\allowbreak{}test(\allowbreak{})\allowbreak{}} 使用 \texttt{enable\_\allowbreak{}testing(\allowbreak{})\allowbreak{}} 命令：
+
+\begin{codebox}[text]
+enable_testing()
+add_test(NAME unittests COMMAND $<TARGET_FILE:unittests>)
+\end{codebox}
+
+\label{idx:696}
+现在，你只需进入 \texttt{build} 目录并调用以下命令，即可构建并执行测试：
+
+\begin{codebox}[text]
+cmake --build . --target unittests
+ctest # or cmake --build . --target test
+\end{codebox}
+
+你可以给 \texttt{CTest} 传入一个 \texttt{-j} 标志来并行执行测试。它的工作方式与调用 Make 或 Ninja 时完全相同。
+
+如果你想要更短的构建命令，直接运行你的构建系统即可，也就是调用 \texttt{make}。
+
+\begin{myNotic}{注意}
+
+在脚本中，通常最好使用命令的较长形式；这会让你的脚本更易于理解和维护。
+\end{myNotic}
+
+运行 \texttt{cmake --build .\allowbreak{} --target help} 命令，可以获得一份\emph{文本形式}的目标列表。
+
+此外，CMake 会为 C、C++ 和 Fortran 生成 Graphviz 目标依赖图，\emph{直观地}展示项目中各目标之间的依赖关系（参见\emph{图 7.1}）：
+
+\begin{codebox}[text]
+cmake --graphviz=project.dot .. # point to a source directory
+dot -T svg project.dot -o project.svg # or dotty project.dot
+\end{codebox}
+
+\myGraphic{0.920}{images/B18456_07_01.png}{图 7.1：使用 CMake 和 Graphviz 可视化模块依赖关系}
+
+\begin{myTip}{提示}
+需要查看这张图片的高分辨率版本吗？请在下一代 Packt Reader 中打开本书，或在 PDF/ePub 版本中查看。
+
+购买本书即可获得\textbf{下一代 Packt Reader}以及本书的\textbf{免费 PDF/ePub 版本}。扫描二维码，或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按书名查找本书。请仔细核对所显示的版本，以确保你拿到的是正确的版本。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/01.png}\end{center}
+\end{myTip}
+
+\label{idx:697}
+测试通过之后，我们就可以考虑把它们分享给更广泛的受众。
+
+\section{复用高质量代码}
+
+\label{idx:698}
+CMake 内置了一些实用工具，在分发构建结果方面大有用武之地。本节将介绍安装（install）和导出（export）这两类实用工具，说明它们之间的区别，并展示如何使用 CPack 打包你的代码。
+
+就微服务本身而言，安装和导出并没有那么重要，但如果你要把库交付给他人复用，它们就非常有用。
+
+\subsection{安装}
+
+\label{idx:699}
+如果你编写或使用过 Makefile，那么你很可能在某个时候调用过 \texttt{make install}，并看到项目的交付物要么被安装到操作系统目录中，要么被安装到你选择的另一个目录中。如果你把 \texttt{make} 与 CMake 一起使用，采用本节的步骤就能以同样的方式安装交付物。即使不是这样，你当然也仍然可以调用 install 目标。除此之外，无论哪种情况，你都将拥有一种简便的方式来利用 CPack，根据你的安装命令创建软件包。
+
+如果你在 Linux 上，按照操作系统的惯例预设一些安装目录很可能是个好主意，可以像下面这样调用：
+
+\begin{codebox}[cmake]
+include(GNUInstallDirs) # set CMAKE_INSTALL_PREFIX to change the destination
+\end{codebox}
+
+这会让安装程序使用由 \texttt{bin}、\texttt{lib} 以及类似的其他目录构成的目录结构。这些目录也可以用几个 CMake 变量手动设置。
+
+创建 install 目标还需要几个步骤。首先，定义我们想要安装的目标，在我们的例子中将如下所示：
+
+\begin{codebox}[cmake]
+install(
+  TARGETS libcustomer customer
+  EXPORT CustomerTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+\end{codebox}
+
+\label{idx:700}
+这会告诉 CMake，使用我们先前设置的目录，把本章前面定义的库和可执行文件作为 \texttt{Customer\allowbreak{}Targets} 公开出来。
+
+如果你打算把库的不同配置安装到不同的文件夹中，可以像下面这样多次调用前面的命令：
+
+\begin{codebox}[cmake]
+install(
+  TARGETS libcustomer customer
+  CONFIGURATIONS Debug
+  # 其他组件的目的地写在这里……
+  RUNTIME DESTINATION Debug/bin)
+install(
+  TARGETS libcustomer customer
+  CONFIGURATIONS Release
+  # 其他组件的目的地写在这里……
+  RUNTIME DESTINATION Release/bin)
+\end{codebox}
+
+你会注意到，我们指定了可执行文件和库的目录，但没有指定头文件的目录。我们需要在另一条命令中提供它们，如下所示：
+
+\begin{codebox}[cmake]
+install(
+  DIRECTORY ${PROJECT_SOURCE_DIR}/include/ # the last slash is important here
+  DESTINATION include)
+\end{codebox}
+
+这意味着顶层 \texttt{include} 目录的内容会被安装到安装根目录下的 \texttt{include} 目录中。第一个路径后面的斜杠可以修复一些路径问题，所以请注意要使用它。
+
+\label{idx:701}
+这样，我们就有了一组目标；现在需要生成一个文件，让另一个 CMake 项目能够读取它来了解我们的目标。可以按以下方式完成：
+
+\begin{codebox}[cmake]
+install(
+  EXPORT CustomerTargets
+  FILE CustomerTargets.cmake
+  NAMESPACE tradefair::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Customer)
+\end{codebox}
+
+这条命令会接收我们的目标集，并创建一个 \texttt{Customer\allowbreak{}Targets.\allowbreak{}cmake} 文件，其中包含有关我们的目标及其需求的全部信息。我们的每个目标都会加上命名空间前缀；例如，\texttt{customer} 会变成 \texttt{tradefair::\allowbreak{}customer}。生成的文件会被安装到安装树中库文件夹的一个子目录里。
+
+为了让依赖项目能够使用 CMake 的 \texttt{find\_\allowbreak{}package} 命令找到我们的目标，我们需要提供一个 \texttt{Customer\allowbreak{}Config.\allowbreak{}cmake} 文件。如果你的目标没有任何依赖，可以直接把前面这些目标导出到该文件，而不必导出到 \texttt{targets} 文件。否则，你应该编写自己的 config 文件，在其中包含前面的 \texttt{targets} 文件。
+
+在我们的例子中，我们想要复用一些 CMake 变量，因此需要创建一个模板，并使用 \texttt{configure\_\allowbreak{}file} 命令来填充它：
+
+\begin{codebox}[text]
+configure_file(${PROJECT_SOURCE_DIR}/cmake/CustomerConfig.cmake.in
+               CustomerConfig.cmake @ONLY)
+\end{codebox}
+
+我们的 \texttt{Customer\allowbreak{}Config.\allowbreak{}cmake.\allowbreak{}in} 文件会从处理依赖开始：
+
+\begin{codebox}[cmake]
+include(CMakeFindDependencyMacro)
+find_dependency(drogon 1.9.10)
+\end{codebox}
+
+\label{idx:702}
+\texttt{find\_\allowbreak{}dependency} 宏是 \texttt{find\_\allowbreak{}package} 的包装器，用于在配置文件中使用。尽管在开发过程中我们依赖 Conan 包管理器按照 \texttt{conanfile.\allowbreak{}txt} 中的定义提供了 Drogon Framework 1.9.10，但在这里需要再次指定该依赖。这个包管理器将在下一章介绍，之所以在此提及，是因为保证 Drogon 的版本一致很重要。我们的包可能会在另一台机器上使用，因此要求那台机器上也安装这一依赖。如果想在目标机器上使用 Conan，可以按如下方式安装 Drogon 框架：
+
+\begin{codebox}[text]
+conan install drogon/1.9.10
+\end{codebox}
+
+处理完依赖之后，我们的配置文件模板将包含之前创建的 \texttt{targets} 文件：
+
+\begin{codebox}[cmake]
+if(NOT TARGET tradefair::@PROJECT_NAME@)
+  include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@Targets.cmake")
+endif()
+\end{codebox}
+
+当 \texttt{configure\_\allowbreak{}file} 执行时，它会用项目中定义的对应 \texttt{\$\{\allowbreak{}VARIABLES\}\allowbreak{}} 的内容替换所有 \texttt{@VARIABLES@}。这样，CMake 会基于我们的 \texttt{Customer\allowbreak{}Config.\allowbreak{}cmake.\allowbreak{}in} 文件模板，生成一个 \texttt{Customer\allowbreak{}Config.\allowbreak{}cmake} 文件。
+
+使用 \texttt{find\_\allowbreak{}package} 查找依赖时，你通常希望指定要查找的包的版本。为了让我们的包支持这一点，必须创建一个 \texttt{Customer\allowbreak{}Config\allowbreak{}Version.\allowbreak{}cmake} 文件。CMake 提供了一个辅助函数来为我们创建这个文件。下面来看看如何使用它：
+
+\begin{codebox}[cmake]
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(CustomerConfigVersion.cmake
+                                 VERSION ${PACKAGE_VERSION}
+                                 COMPATIBILITY AnyNewerVersion)
+\end{codebox}
+
+\texttt{PACKAGE\_\allowbreak{}VERSION} 变量将根据我们在顶层 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件开头调用 \texttt{project} 时传入的 \texttt{VERSION} 参数来填充。
+
+\label{idx:703}
+\texttt{Any\allowbreak{}Newer\allowbreak{}Version COMPATIBILITY} 表示只要我们的包比请求的版本更新或与之相同，任何包查找都会接受它。其他兼容性模式还有 \texttt{Same\allowbreak{}Major\allowbreak{}Version}、\texttt{Same\allowbreak{}Minor\allowbreak{}Version} 和 \texttt{Exact\allowbreak{}Version}。语义化版本使用四个数字：主版本号用于不兼容的 API 变更，次版本号用于向后兼容的变更，修订号用于向后兼容的缺陷修复，还有构建号。当处理版本范围时，\texttt{find\_\allowbreak{}package(\allowbreak{})\allowbreak{}} 命令会考虑这些兼容性模式，并由它们决定选择哪个 CMake 包。
+
+创建好配置文件和配置版本文件之后，下面告诉 CMake 它们应随二进制文件和我们的目标文件一起安装：
+
+\begin{codebox}[cmake]
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/CustomerConfig.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/CustomerConfigVersion.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Customer)
+\end{codebox}
+
+最后需要安装的是项目的许可证。我们将利用 CMake 安装文件的命令把它放进文档目录：
+
+\begin{codebox}[cmake]
+install(FILES ${PROJECT_SOURCE_DIR}/LICENSE
+        DESTINATION ${CMAKE_INSTALL_DOCDIR})
+\end{codebox}
+
+以上就是在操作系统根目录下成功创建安装目标所需的全部知识。你可能会问，如何把包安装到另一个目录，比如仅供当前用户使用。要做到这一点，你需要在生成构建系统时设置 \texttt{CMAKE\_\allowbreak{}INSTALL\_\allowbreak{}PREFIX} 变量。
+
+\label{idx:704}
+请注意，如果不安装到 Unix 目录树的根目录，我们就必须向依赖项目提供安装目录的路径，例如通过设置 \texttt{CMAKE\_\allowbreak{}PREFIX\_\allowbreak{}PATH}。
+
+下面再来看看另一种复用刚刚构建内容的方式。
+
+\subsection{导出}
+
+\label{idx:705}
+导出是一种把本地构建的包的信息添加到 CMake 包注册表中的技术。当你希望目标无需安装就能直接从其构建目录中可见时，这种方式很有用。导出的一个常见用途是：你在开发机器上签出了多个项目，并在本地构建它们。
+
+从 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件为这一机制添加支持相当容易。在我们的例子中，可以这样做：
+
+\begin{codebox}[cmake]
+export(
+  TARGETS libcustomer customer
+  NAMESPACE tradefair::
+  FILE CustomerTargets.cmake)
+set(CMAKE_EXPORT_PACKAGE_REGISTRY ON)
+export(PACKAGE tradefair)
+\end{codebox}
+
+这样，CMake 会创建一个与 \emph{安装} 一节类似的目标文件，在我们提供的命名空间中定义库目标和可执行目标。从 CMake 3.15 起，包注册表默认被禁用，因此我们需要通过设置前面相应的变量来启用它。然后，通过导出我们的包，就能把目标的信息直接写入注册表。
+
+请注意，现在我们的 \texttt{targets} 文件没有对应的配置文件。这意味着，如果我们的目标依赖任何外部库，那么在找到我们的包之前，必须先找到这些库。在我们的例子中，各调用的顺序必须如下：
+
+\begin{codebox}[cmake]
+find_package(drogon 1.9.10)
+find_package(tradefair)
+\end{codebox}
+
+\label{idx:706}
+首先找到 Drogon 框架，之后才查找依赖它的我们的包。以上就是开始导出目标所需的全部知识。比安装它们容易多了，不是吗？
+
+下面来看看向外部世界暴露目标的第三种方式。
+
+\subsection{使用 CPack}
+
+\label{idx:707}
+\label{idx:708}
+本节我们将介绍如何使用 CPack——CMake 自带的打包工具。
+
+CPack 让你可以轻松创建各种格式的包，从 ZIP 和 TGZ 归档文件，到 DEB 和 RPM 包，甚至 NSIS 之类的安装向导以及一些 macOS 专用的向导。只要安装逻辑已就绪，集成这个工具并不困难。下面来演示如何使用 CPack 打包我们的项目。
+
+首先，我们需要指定 CPack 在创建包时会用到的变量：
+
+\begin{codebox}[cmake]
+set(CPACK_PACKAGE_VENDOR "Authors")
+set(CPACK_PACKAGE_CONTACT "author@example.com")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "Library and app for the Customer microservice")
+set(CPACK_PACKAGE_DIRECTORY packages)
+\end{codebox}
+
+有些信息需要我们手动提供，但有些变量可以基于定义项目时指定的项目版本来自动填充。CPack 变量还有很多，你可以在本章末尾 \emph{延伸阅读} 一节中的 CPack 链接里了解全部。其中一些是所有包生成器通用的，另一些则只针对少数生成器。例如，如果打算使用安装程序，可以设置以下两个变量：
+
+\begin{codebox}[cmake]
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
+set(CPACK_RESOURCE_FILE_README "${PROJECT_SOURCE_DIR}/README.md")
+\end{codebox}
+
+设置好所有需要的变量之后，就该选择 CPack 使用的生成器了。先从把一些基本的生成器放进 \texttt{CPACK\_\allowbreak{}GENERATOR} 开始，CPack 依靠这个变量来执行选定的 CPack 生成器：
+
+\begin{codebox}[cmake]
+list(APPEND CPACK_GENERATOR TGZ ZIP)
+\end{codebox}
+
+这会让 CPack 根据本章前面定义的安装步骤生成那些 TGZ 和 ZIP 归档文件。
+
+\label{idx:709}
+\label{idx:710}
+你可以根据很多因素选择不同的包生成器，例如运行所在机器上可用的工具。举个例子，在 Windows 上构建时创建 Windows 安装程序，在安装了相应工具的 Linux 上构建时创建 DEB 或 RPM 包。比如，如果运行 Linux，你可以检查是否安装了 \texttt{dpkg}，若已安装则创建 DEB 包：
+
+\begin{codebox}[cmake]
+if(LINUX)
+  find_program(DPKG_PROGRAM dpkg)
+  if(DPKG_PROGRAM)
+    list(APPEND CPACK_GENERATOR DEB)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+        "${CPACK_DEBIAN_PACKAGE_DEPENDS} libdrogon1t64 (>= 1.8.7)"))
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+  else()
+    message(STATUS "dpkg not found - won't be able to create DEB       packages")
+  endif()
+endif()
+\end{codebox}
+
+我们使用 \texttt{CPACK\_\allowbreak{}DEBIAN\_\allowbreak{}PACKAGE\_\allowbreak{}DEPENDS} 变量让 DEB 包要求先安装 Drogon 框架。
+
+对于 RPM 包，你可以手动检查是否存在 \texttt{rpmbuild}：
+
+\begin{codebox}[cmake]
+  find_program(RPMBUILD_PROGRAM rpmbuild)
+    if(RPMBUILD_PROGRAM)
+      list(APPEND CPACK_GENERATOR RPM)
+      # 该包在基于 RPM 的 Linux 发行版上不存在，但  #原理是相同的
+      # set(CPACK_RPM_PACKAGE_REQUIRES "${CPACK_RPM_PACKAGE_REQUIRES}")
+    else()
+      message(STATUS "rpmbuild not found - won't be able to create RPM packages")
+    endif()
+  endif()
+\end{codebox}
+
+很巧妙，对吧？
+
+\label{idx:711}
+\label{idx:712}
+这些生成器还提供了大量其他有用的变量，如果需要超出这里描述的基本需求之外的功能，请随时查阅 CMake 文档。
+
+关于变量还有最后一点——你也可以用它们来避免意外打包不需要的文件。这可以通过以下方式实现：
+
+\begin{codebox}[cmake]
+set(CPACK_SOURCE_IGNORE_FILES /.git /dist /.*build.* /\\\\.DS_Store)
+\end{codebox}
+
+一切就绪之后，我们就可以从 CMake 列表中引入 CPack 本身：
+
+\begin{codebox}[cmake]
+include(CPack)
+\end{codebox}
+
+请记住，这一定要作为最后一步来做，因为稍后使用过的变量不会被 CMake 传递给 CPack。
+
+要运行它，可以直接调用 \texttt{cpack}，或使用较长的形式，后者还会先检查是否有需要重新构建的内容：\texttt{cmake --build .\allowbreak{} --target package}。如果只需要重新构建某一类包，可以用 \texttt{-G} 标志轻松覆盖生成器——例如，用 \texttt{-G DEB} 只构建 DEB 包，用 \texttt{-G WIX -C Release} 打包发布版 MSI 可执行文件，或用 \texttt{-G Drag\allowbreak{}NDrop} 获得 DMG 安装程序。
+
+下面来讨论一种更“原始”的打包方式。RPM 和 DEB 等格式的一个缺点是依赖其他包，这使得把一个包安装到另一个 Linux 发行版，甚至是同一发行版的不同版本上都变得困难。这种情况甚至有一个专门的术语：依赖地狱（dependency hell），就像 Windows 的 DLL 地狱一样。Snap、Flatpak 和 AppImage 等包格式旨在解决这一问题，让 Linux 上的软件分发变得更容易。这些格式都把应用及其依赖打包成一个依赖于其运行时环境的单一包。
+
+\label{idx:713}
+\label{idx:714}
+AppImage 包就是普通的可执行文件。\texttt{linuxdeploy} 是一个用这种格式组装可移植软件的工具，它不如 Snap 或 Flatpak 那么流行。但 AppImage 不需要准备特定的开发环境，这也是我们选择它来演示使用 CPack External 生成器进行自定义打包的原因：
+
+\begin{codebox}[cmake]
+# linuxdeploy 在此目录中检测到可执行文件 set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+find_program(LINUXDEPLOY_PROGRAM NAMES linuxdeploy linuxdeploy-x86_64.AppImage
+                                       linuxdeploy-aarch64.AppImage)
+if(LINUXDEPLOY_PROGRAM)
+  list(APPEND CPACK_GENERATOR External)
+  configure_file(../../cmake/CPackExternal.cmake.in
+                 "${CMAKE_BINARY_DIR}/CPackExternal.cmake" COPYONLY)
+  set(CPACK_EXTERNAL_PACKAGE_SCRIPT
+      "${CMAKE_BINARY_DIR}/CPackExternal.cmake")
+  set(CPACK_EXTERNAL_ENABLE_STAGING YES)
+  configure_file(../../resources/customer.desktop
+                 "${CMAKE_BINARY_DIR}/customer.desktop" COPYONLY)
+  configure_file(../../resources/customer.svg
+                 "${CMAKE_BINARY_DIR}/customer.svg" COPYONLY)
+else()
+  message(STATUS"linuxdeploy not found - won't be able to create AppImage executables")
+endif()
+\end{codebox}
+
+\label{idx:715}
+\label{idx:716}
+\texttt{customer.\allowbreak{}desktop} 文件是一个桌面条目文件。AppImage 需要这类文件作为运行可执行文件的入口点。\texttt{configure\_\allowbreak{}file(\allowbreak{})\allowbreak{}} 命令可以把文本中的变量引用替换为它们的值：
+
+\begin{codebox}[text]
+[Desktop Entry]
+Type=Application
+Name=customer
+Exec=customer
+Icon=customer
+Categories=Network
+\end{codebox}
+
+\texttt{CPACK\_\allowbreak{}EXTERNAL\_\allowbreak{}PACKAGE\_\allowbreak{}SCRIPT} 变量指向一个静态或动态创建的 CMake 脚本。无论它是如何创建的，这个脚本都与主项目隔离，因为 CPack 只向它的环境中注入有限的变量。因此，\texttt{find\_\allowbreak{}program(\allowbreak{})\allowbreak{}} 命令会执行两次——一次在主项目中，一次在 \texttt{CPack\allowbreak{}External.\allowbreak{}cmake} 脚本中。
+
+这一方案利用了这样一个事实：\texttt{CMAKE\_\allowbreak{}CURRENT\_\allowbreak{}LIST\_\allowbreak{}DIR} 变量指向构建资源所在的 \texttt{CMAKE\_\allowbreak{}BINARY\_\allowbreak{}DIR} 目录。之所以可行，是因为在我们的例子中，\texttt{CPack\allowbreak{}External.\allowbreak{}cmake} 脚本被复制到了这个目录：
+
+\begin{codebox}[cmake]
+find_program(LINUXDEPLOY_PROGRAM 
+NAMES linuxdeploy linuxdeploy x86_64.AppImage linuxdeploy-aarch64.AppImage
+)
+if(LINUXDEPLOY_PROGRAM)
+    execute_process(
+        COMMAND
+         ${CMAKE_COMMAND} -E env
+         LDAI_OUTPUT=${CPACK_PACKAGE_FILE_NAME}.appimage
+         LINUXDEPLOY_OUTPUT_VERSION=$<IF:$<BOOL:${CPACK_PACKAGE_VERSION}>,
+                ${CPACK_PACKAGE_VERSION},0.0.1>
+                ${LINUXDEPLOY_PROGRAM}
+                --output=appimage
+                --appdir=${CPACK_TEMPORARY_DIRECTORY}
+                --desktop-file=${CMAKE_CURRENT_LIST_DIR}/customer.desktop
+                --icon-file=${CMAKE_CURRENT_LIST_DIR}/customer.svg
+                --verbosity=2
+        WORKING_DIRECTORY ${CPACK_PACKAGE_DIRECTORY}
+    )
+endif()
+\end{codebox}
+
+\label{idx:717}
+\label{idx:718}
+\texttt{configure\_\allowbreak{}file(\allowbreak{})\allowbreak{}} 命令有两种方式把文本中的 CMake 变量替换为实际值：\texttt{\$\{VAR\}} 和 \texttt{@VAR@}，或者使用 \texttt{@ONLY} 配合 \texttt{@VAR@}。在我们的例子中，\texttt{CPack\allowbreak{}External.\allowbreak{}cmake} 脚本是原样复制、不做任何替换的。当 CMake 项目被重新配置且找到 \texttt{linuxdeploy} 工具时，这个脚本会被重写。
+
+\texttt{customer.\allowbreak{}desktop} 条目文件和 \texttt{customer.\allowbreak{}svg} 图像可以被复制到 AppImage 包内的 \texttt{/\allowbreak{}usr/\allowbreak{}share/\allowbreak{}applications/\allowbreak{}} 和 \texttt{/\allowbreak{}usr/\allowbreak{}share/\allowbreak{}icons/\allowbreak{}hicolor/\allowbreak{}scalable/\allowbreak{}apps/\allowbreak{}} 目录，而无需把它们作为 \texttt{–desktop-file} 和 \texttt{–icon-file} 选项传入，因为 \texttt{linuxdeploy} 能自动检测到这些文件。不过，我们的例子中并没有采用这种做法。
+
+分发的 AppImage 包可以被签名，签名也可以被验证，但这一特性依赖于 OpenPGP 加密和签名工具。更多信息请参阅 AppImage、gpg 或 gpg2 的文档。
+
+\label{idx:719}
+\label{idx:720}
+此外，AppImage 文件可以被挂载，以便查看或提取其内容。只需在运行 AppImage 可执行文件时加上 \texttt{--appimage-mount} 选项即可。这是一种便于分发程序的格式，有其优点也有其缺点。
+
+\section{小结}
+
+在本章中，你学到了很多关于构建和打包代码的知识。你现在能够编写构建更快的模板代码，知道如何选择更快速编译代码的工具，也知道如何发现潜在的代码问题并使用以编译器为中心的工具。
+
+除此之外，你现在可以用现代 CMake 定义构建目标和测试套件，用查找模块和 \texttt{Fetch\allowbreak{}Content} 管理外部依赖，创建各种格式的包和安装程序，最后但同样重要的是，用包管理器安装依赖。
+
+下一章我们将讨论包管理，包括项目依赖以及使用 Conan 和 Conan 包构建可执行文件。
+
+\section{问题}
+
+\begin{enumerate}
+\item 在 CMake 中，安装目标与导出目标有什么区别？
+\item 如何让模板代码编译得更快？
+\item 我们如何确保在 CMake 中强制使用某个特定的 C++ 标准？
+\item 你会如何在 CMake 中构建文档，并把它随 DEB 和 RPM 包一起发布？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item GCC Wiki，\emph{编译器书籍列表}：\href{https://gcc.gnu.org/wiki/ListOfCompilerBooks}{https://gcc.gnu.org/wiki/ListOfCompilerBooks}
+\item C++ Reference，\emph{C++ 编译器支持}：\href{https://en.cppreference.com/w/cpp/compiler_support}{https://en.cppreference.com/w/cpp/compiler\_support}
+\item Odin Holmes，\emph{基于类型的模板元编程并未消亡}（演讲），C++Now 2017：\href{https://youtu.be/EtU4RDCCsiU}{https://youtu.be/EtU4RDCCsiU}，\href{https://github.com/boostcon/cppnow_presentations_2017/blob/master/05-17-2017_wednesday/type_based_template_metaprogramming_is_not_dead__odin_holmes__cppnow_05-17-2017.pdf}{https://github.com/boostcon/cppnow\_presentations\_2017/blob/master/05-17-2017\_wednesday/type\_based\_template\_metaprogramming\_is\_not\_dead\_\_odin\_holmes\_\_cppnow\_05-17-2017.pdf}
+\item Henry Schreiner，\emph{现代 CMake 导论}：\href{https://cliutils.gitlab.io/modern-cmake}{https://cliutils.gitlab.io/modern-cmake}
+\item \emph{CPM.cmake}，GitHub：\href{https://github.com/cpm-cmake/CPM.cmake/}{https://github.com/cpm-cmake/CPM.cmake/}
+\item CMake，\emph{一个示例查找模块}（关于创建查找脚本的文档）：\href{https://cmake.org/cmake/help/latest/manual/cmake-developer.7.html\#a-sample-find-module}{https://cmake.org/cmake/help/latest/manual/cmake-developer.7.html\#a-sample-find-module}
+\item CMake，\emph{CPack}：\href{https://cmake.org/cmake/help/latest/module/CPack.html}{https://cmake.org/cmake/help/latest/module/CPack.html}
+\item Rafał Świdziński，\emph{Modern CMake for C++: Effortlessly Build Cutting-Edge C++ Code and Deliver High-Quality Solutions}，第二版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/modern-cmake-for-c-9781805123361}{https://www.packtpub.com/en-us/product/modern-cmake-for-c-9781805123361}
+\item Tom Hulton-Harrop，\emph{Minimal CMake: Learn the Best Bits of CMake to Create and Share Your Own Libraries and Applications}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/minimal-cmake-9781835080658}{https://www.packtpub.com/en-us/product/minimal-cmake-9781835080658}
+\item Dominik Berner 和 Mustafa Kemal Gilor，\emph{CMake Best Practices: Upgrade Your C++ Builds with CMake for Maximum Efficiency and Scalability}，第二版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/cmake-best-practices-9781835880654}{https://www.packtpub.com/en-us/product/cmake-best-practices-9781835880654}
+\item Conan.io，\emph{cmake-conan}，GitHub：\href{https://github.com/conan-io/cmake-conan}{https://github.com/conan-io/cmake-conan}
+\item \emph{Drogon Framework}（文档），GitHub：\href{https://drogonframework.github.io/drogon-docs/\#/}{https://drogonframework.github.io/drogon-docs/\#/}
+\item Canonical Snapcraft，\emph{关于 Snap}：\texthref{https://snapcraft.io/about}
+\item Flatpak Documentation，\emph{术语}：\href{https://docs.flatpak.org/en/latest/introduction.html\#terminology}{https://docs.flatpak.org/en/latest/introduction.html\#terminology}
+\item AppImage，\emph{打包原生二进制文件}：\href{https://docs.appimage.org/packaging-guide/from-source/native-binaries.html}{https://docs.appimage.org/packaging-guide/from-source/native-binaries.html}
+\item \emph{linuxdeploy}，GitHub：\href{https://github.com/linuxdeploy/linuxdeploy}{https://github.com/linuxdeploy/linuxdeploy}
+\item Freedesktop.org，\emph{图标主题规范}：\href{https://specifications.freedesktop.org/icon-theme-spec/latest/}{https://specifications.freedesktop.org/icon-theme-spec/latest/}
+\item AppImage，\emph{对 AppImage 进行签名}：\href{https://docs.appimage.org/packaging-guide/optional/signatures.html}{https://docs.appimage.org/packaging-guide/optional/signatures.html}
+\item Arch Linux Wiki，\emph{GnuPG}：\href{https://wiki.archlinux.org/title/GnuPG}{https://wiki.archlinux.org/title/GnuPG}
+\item Alibaba Cloud，\emph{编译效率提升 42\%！C++ 模块的实践分析}（博客）：\href{https://www.alibabacloud.com/blog/42\%25-boost-in-compilation-efficiency-a-practical-analysis-of-c\%2B\%2B-modules_601974}{https://www.alibabacloud.com/blog/42\%25-boost-in-compilation-efficiency-a-practical-analysis-of-c\%2B\%2B-modules\_601974}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书专属权益} 扫描此二维码或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按名称搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

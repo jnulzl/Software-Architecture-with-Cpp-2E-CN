@@ -1,0 +1,924 @@
+\label{idx:137}
+作为架构师，你需要识别出哪些需求对架构而言是重要的，以及为什么重要。本章将教你了解解决方案的功能性需求与\textbf{非功能性需求}（\textbf{NFRs}）。功能性需求告诉你解决方案应该做什么——它的特性、功能和行为。而非功能性需求则告诉你系统在完成这些功能时表现得多好。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\label{idx:138}
+\item 理解需求的类型
+\item 识别\textbf{架构重要需求}（\textbf{ASRs}）
+\item 从各种来源收集需求
+\item 记录需求
+\item 记录架构
+\item 选择合适的视图来记录
+\item 生成自动化文档
+\end{itemize}
+
+在本章结束时，你将学会如何识别并归类这两类需求，以及如何编写能清晰描述它们的文档。
+
+\section{技术要求}
+
+要复现我们根据源码生成文档的步骤，你必须安装 CMake、Doxygen、Sphinx、\texttt{sphinx\_\allowbreak{}mdinclude} 和 Breathe。我们使用的是 Read the Docs Sphinx 主题，所以也请一并安装它。你可以随意使用上述工具的最新版本。
+
+相关代码可在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter03}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter03} 找到。
+
+\section{理解需求的类型}
+
+在创建软件系统时，你应当尽早收集需求，并不断问自己：你正在做的是否正是客户所需要的。很多时候，他们甚至不知道自己需要什么样的需求才能最好地满足自身需要。成功的架构师的职责，就是发现产品的需求并确保这些需求得到满足。你需要考虑三种截然不同的需求类型：功能性需求、质量属性和约束。下面我们逐一来看。
+
+\subsection{功能性需求}
+
+\label{idx:139}
+这类需求定义了你的系统应该做什么，或者应该提供什么功能。它们也可能规定系统不能做什么。
+
+\begin{myTip}{提示}
+
+请记住，功能并不总是会影响架构，因此你必须留意哪些需求会真正决定你的解决方案长什么样。
+\end{myTip}
+
+\label{idx:140}
+通常，如果某个功能性需求带有一些必须满足的质量要求，它就可能变得架构重要。设想一款面向音乐、各类艺术和商店活动的商户与访客的应用，该活动在你所在的城市举办。它的功能性需求可能有以下几个例子：
+
+\begin{itemize}
+\item 作为店主，我想要筛选出包含特定商品的订单
+\item 作为店主，我想要管理店铺的新闻通讯，以便顾客可以订阅并接收最新动态
+\end{itemize}
+
+这些需求中的第一个告诉我们，我们必须有一个用于跟踪订单和商品的组件，并且具备搜索能力。
+
+第二个例子更加直白；现在我们知道自己需要一个用于订阅和发送通知的服务。这无疑是一个架构重要的功能性需求。
+
+\label{idx:141}
+顺带一提，这些需求实际上是以用户故事的形式给出的。用户故事按以下格式表述需求，这种格式被称为 Connextra 模板：\emph{As a <role>, I can/want to <capability>, so that <benefit>}。在敏捷软件开发中，用户故事是一种从用户视角捕捉软件特性的工具。这是一种常见的需求表述方式，能帮助利益相关者和开发者找到共同点并更好地沟通。
+
+\label{idx:142}
+取决于 UI 究竟应如何呈现以及我们的应用应达到多大规模，我们既可以只是给应用添加一个简单页面，也可能需要 Lucene 或 Elasticsearch 这类更高性能、更可扩展的功能来筛选订单。这意味着我们可能面对一个 ASR——一个直接驱动并能证明某项架构设计合理性的 ASR——它同时涉及功能性需求（如筛选订单）和 NFR（如性能与可扩展性）。下面我们来看一些 NFR，它们描述运行能力与约束，同样可能成为 ASR。
+
+\subsection{非功能性需求}
+
+\label{idx:143}
+NFR 关注的不是系统应该具备哪些功能，而是系统在何种条件下、以多好的程度来完成这些功能。这一类需求包含两个主要子类：质量属性和约束。
+
+\subsubsection{质量属性}
+
+\label{idx:144}
+\label{idx:145}
+质量属性是解决方案的特征，例如性能、可维护性和易用性。你的软件可以有几十种乃至上百种不同的质量。在选择软件应具备哪些质量时，要尽量只关注重要的那些，而不是把你能想到的全都列出来。
+
+\label{idx:146}
+质量属性需求的示例包括以下这些：
+
+\begin{itemize}
+\item 在通常负载下，系统对 99.9\% 的请求响应时间低于 500 ms（别忘了说明通常负载是什么或将会是什么）
+\item 网站不会存储支付过程中使用的客户信用卡数据（机密性的一个例子）
+\item 在更新系统时，如果任何组件更新失败，系统将回滚到更新之前的状态（生存性）
+\label{idx:147}
+\item 系统可以从 Windows、macOS 和 Android 访问（可移植性；试着弄清楚是否需要支持桌面、移动端和/或 Web 等平台）
+\end{itemize}
+
+\label{idx:148}
+把功能性需求记录到产品待办列表（一份按优先级排序的任务清单）中相当直接，但质量属性需求就没这么简单了。幸运的是，有几种方法可以应对：
+
+\begin{itemize}
+\item 其中一些可以表述在任务、故事和发布版本的\textbf{完成定义}或\textbf{验收标准}中
+\item 另一些可以像前面展示的那样直接表述为用户故事
+\item 你也可以在设计和代码评审中检查它们，并在适用时创建自动化测试
+\end{itemize}
+
+\label{idx:149}
+\textbf{属性驱动设计}（\textbf{ADD}）是一种有用的方法学，它关注质量属性以及实现这些属性的方式，以创建可适应、可维护和可扩展的系统。该方法包含创建文档并分析所创建架构的步骤。这种方法的优势在于，它为设计迭代中需要执行的任务提供了详细的逐步说明，从而降低了架构师的入门门槛。要了解更多关于 ADD 的内容，请参阅\emph{延伸阅读}部分中链接的相关文章。
+
+\subsubsection{约束}
+
+\label{idx:150}
+\label{idx:151}
+\label{idx:152}
+约束是你在交付项目时必须遵循的、不可协商的决定。它们可以是设计决策、技术决策，甚至是政治性的（涉及人员或组织事务）。另外两个常见的约束是时间和预算。约束的示例可能如下：
+
+\begin{itemize}
+\item 团队规模永远不会超过四名开发者、一名 QA 工程师和一名系统管理员
+\item 由于我们公司当前所有产品都使用 Oracle DB，新产品也必须使用它，以便充分利用我们的专长
+\end{itemize}
+
+约束，连同应用将运行于其中的环境，都可能对你的架构产生显著影响。例如，嵌入式应用的设计方式需要不同于运行在云端的应用；而由经验较少的开发者开发的应用，或许应当使用简单而安全的框架，而不是使用学习曲线陡峭的框架，或者自行开发。
+
+\label{idx:153}
+\label{idx:154}
+NFR 总会影响你的架构。重要的是不要过度规定它们，因为误判（假阳性）会在产品开发过程中成为持续的负担。同样重要的是不要规定得不足，因为这在后期可能表现为错失销售机会，或无法满足监管机构的要求。
+
+在下一节中，你将学到如何在这两个极端之间取得平衡，并只关注那些在你的具体情况下真正重要的需求。
+
+\section{识别架构重要需求（ASRs）}
+
+\label{idx:155}
+在设计软件系统时，处理几十甚至上百个需求是很常见的。为了理清它们并得出好的设计，你需要知道哪些需求是重要的、无论你如何做设计决策都必须实现，以及哪些甚至可以忽略。你应当学会识别最重要的那些需求，以便优先聚焦于它们，在尽可能短的时间内交付最大的价值。
+
+ASR 是那些对系统架构有显著影响的需求。它们既可以是功能性需求，也可以是非功能性需求。你如何判断哪些需求才是真正重要的呢？如果去掉某个特定需求就能让你构建出不同的架构，那么你面对的就是一个 ASR。这类需求发现得太晚，往往会让你既损失时间又损失金钱，因为你将不得不重新设计系统的某一部分，甚至整个解决方案。你只能祈祷它不会让你再付出其他资源和声誉的代价。
+
+为需求排定优先级有多种方法。例如，你可以用两个指标来对需求排序：业务价值和对架构的影响。在这两个尺度上都高的需求最为重要，应当优先处理。如果你发现这类需求过多，就应当重新审视你的优先级方案。如果仍无济于事，那可能说明这个系统根本无法实现。
+
+另一种为需求排定优先级的方法是用铁三角，它包含三个主要约束：预算、时间和范围（功能）。这些约束会通过迫使你做出技术权衡，直接塑造你的架构。例如，预算约束可能限制你的技术选型，紧张的进度可能要求更简单的解决方案，而范围扩大则可能需要灵活的架构。此外，改变其中一个约束必然会影响其他约束。在这些项目约束之间取得平衡，有助于确定项目的质量。范围内的特性和功能会影响预算。预算影响开发进度。时间框架则影响范围内功能的深度和复杂度。（这里必须指出，复杂系统往往需要考虑比这个三角形所涵盖的三个因素更多的因素。）
+
+\label{idx:156}
+\label{idx:157}
+这种方法至少从 20 世纪 50 年代起就已被使用，并演化出其他变体，例如\textbf{项目菱形}和\textbf{项目管理知识体系}（\textbf{PMBOK}）。要了解更多关于 PMBOK 的内容，你可以阅读 Ashley Hunt 所著的\emph{《成为 PMP® 认证专业人士》}（Becoming a PMP® Certified Professional）一书。
+
+\myGraphic{0.372}{images/B18456_03_01.png}{图 3.1：项目管理三角形（图片由 Mapto 提供，来自 Wikimedia Commons 公有领域：\texthref{https://commons.wikimedia.org/wiki/File:Project-triangle-en.svg}）}
+
+\label{idx:158}
+值得注意的是，这两种方法相互补充。前者有助于指导技术和设计决策，而后者提供了更广阔的视角，用于平衡与时间、范围和预算相关的整体项目约束。把这两种视角结合起来使用，有助于确保架构与项目始终保持一致。
+
+\begin{myTip}{提示}
+
+一个常见错误是，在架构工作一开始就把具体技术套用到你的架构上。我们强烈建议你先收集所有需求，聚焦于对架构重要的那些需求，然后才决定用什么技术和技术栈来构建你的项目。
+\end{myTip}
+
+既然识别 ASR 如此重要，下面我们来谈谈一些能在这方面帮到你的模式。
+
+\subsection{架构重要性的标志}
+
+\label{idx:159}
+如果你有与任何外部系统集成的需求，这很可能影响你的架构。下面我们来看一些常见的标志，用以判断某个需求是不是 ASR：
+
+\begin{itemize}
+\label{idx:160}
+\item \textbf{需要创建一个软件组件来处理它}：例如发送电子邮件、推送通知、与公司的\textbf{企业资源计划}（\textbf{ERP}）服务器交换数据，或使用特定的数据存储。
+\item \textbf{对系统有显著影响}：核心功能往往定义你的系统应该是什么样子。横切关注点，例如授权、可审计性，或具备事务行为，也是很好的例子。
+\item \textbf{难以实现}：低延迟就是一个很好的例子；除非你在开发早期就考虑到它，否则实现它可能是一场持久战，尤其是当你突然意识到在热路径上根本承受不起垃圾回收时。
+\label{idx:161}
+\item \textbf{为满足某些架构而迫使做出权衡}：如果代价太高，你的设计决策甚至可能需要牺牲一些需求，以换取其他更重要的需求。把这类决策记录在某处，并意识到你正在处理 ASR，是一种好做法。如果任何需求以某种方式约束你或限制产品，它很可能对架构来说是重要的。如果你想在众多权衡之下得出最佳架构，那么一定要去了解\textbf{架构权衡分析方法}（\textbf{ATAM}）。本章末尾链接了相关资源。
+\end{itemize}
+
+\subsection{识别 ASR 的障碍及其应对方法}
+
+\label{idx:162}
+与直觉相反，许多 ASR 乍看之下很难发现。这由两个因素造成：它们可能难以定义，而且即便被描述出来，也可能描述得很模糊。
+
+你的客户可能还不清楚他们需要什么，但你仍应主动提问，以避免任何臆断。例如，如果系统要发送通知，你必须弄清楚这些通知是实时的，还是每天一封电子邮件就够了，因为前者可能要求你构建发布-订阅架构。
+
+不过，在大多数情况下，你都需要做出一些假设，因为并非所有事情都是事先已知的。如果你发现某个需求挑战了你的假设，它可能就是一个 ASR。如果你假设可以在凌晨 3 点到 4 点之间维护你的服务，却发现来自不同时区的客户届时仍然需要使用它，这就挑战了你的假设，并很可能改变产品的架构。
+
+此外，在项目早期阶段，人们往往倾向于含糊地对待质量属性，尤其是经验较少或技术背景较弱的人。但另一方面，这恰恰是处理这类 ASR 的最佳时机，因为此时将它们实现到系统中的成本最低。
+
+不过值得注意的是，很多人在描述需求时，喜欢不加深入思考地使用含糊的措辞。如果你在设计一个类似 Uber 的服务，一个例子可能是\emph{当收到司机搜索请求时，系统必须快速回复一条可用司机消息，或者系统必须 7×24 小时可用}。
+
+\label{idx:163}
+一经提问，往往会发现 99.9\% 的月度可用性完全足够，而\emph{快速}实际上不过几秒钟。这类措辞总是需要澄清，而且了解其背后的理由往往很有价值。也许这只是某人的主观意见，并无任何数据或业务需求支撑。另外要注意，在请求-响应这种情况下，质量属性隐藏在另一个需求内部，使其更难被发现。
+
+最后，对某个系统而言属于架构重要的需求，对另一个系统未必同等重要，即便这两个系统服务于相似的目的。随着系统不断壮大、开始与越来越多的其他系统通信，其中一些需求会变得愈发重要。另一些则可能在产品需求发生变化时才变得重要。正因如此，判断哪些需求会成为 ASR、哪些不会，并没有银弹。
+
+掌握了这些知识之后，你就知道如何把重要的需求与其余需求区分开来。下面我们来讨论几种获取这些需求的技术。
+
+\section{获取需求}
+
+\label{idx:164}
+无论项目规模大小，明确定义的需求都至关重要，因为它们界定了任何项目的目标。如果这些需求没有清晰地定义并达成一致，就会在开发的各个阶段导致严重后果，例如功能无法满足用户期望，或者项目遇到初期阶段未曾预料到的技术难题。因此，有必要重视需求的获取与分析过程。
+
+\subsection{了解上下文}
+
+\label{idx:165}
+在挖掘需求时，你应当考虑更广阔的上下文。你必须找出未来可能对产品产生负面影响的潜在问题。这些风险往往来自外部。让我们重新审视之前那个类似 Uber 的服务场景。你的服务面临的一个示例风险可能是立法的潜在变化：你应当意识到，某些国家可能会设法修改法律，把你逐出它们的市场。Uber 缓解这类风险的做法是让本地合作伙伴来应对区域性的限制。
+
+除了未来的风险之外，你还必须关注当前的问题，例如公司缺乏领域专家，或者市场上竞争激烈。以下是你可采取的做法：
+
+\begin{itemize}
+\item 留意并记录做出的任何假设。最好有一份专门的文档来跟踪它们。
+\item 尽可能提出问题，以澄清或排除你的假设。
+\item 你需要考虑项目的依赖关系，包括外部和内部的，因为它们会影响开发进度。另一个有用的方面是塑造公司日常行为的业务规则，因为你的产品很可能需要遵循、甚至改进这些规则。
+\item 此外，如果有足够多与用户或业务相关的数据，你应当尝试挖掘它，以获取洞见、找出有助于就未来产品及其架构做出决策的模式。如果你已经有了一些用户，却无法挖掘数据，那么与领域专家沟通、并观察用户的行为方式会很有帮助。
+\end{itemize}
+
+你可以移除个人身份信息来对用户做匿名化处理，然后记录他们在使用当前已部署系统完成日常任务时的活动。这样一来，你不仅能将他们工作中的一部分自动化，还能基于具体的结论而非抽象的假设，把他们的工作流程改成更高效的那一种。不过，如果收集软件遥测数据，就必须要征得用户同意。请记住，用户不喜欢改变自己的习惯，所以在可能的情况下，最好循序渐进地引入变化。
+
+\subsection{了解现有文档}
+
+\label{idx:166}
+现有文档可以是极好的信息来源，尽管它们也可能存在问题。你应当留出一些时间，至少熟悉所有与你工作相关的现有文档。很可能其中隐藏着一些需求。另一方面，请记住，文档从来都不完美；它极有可能缺少某些重要信息。你还应当做好它已经过时的准备。
+
+在架构方面，从来不存在唯一的真相来源，所以除了阅读文档，你还应当与相关人员大量讨论。尽管如此，阅读文档是让你为这类讨论做好准备的好方法。
+
+\subsection{了解你的利益相关者}
+
+\label{idx:167}
+要想成为一名成功的架构师，你必须学会与业务人员沟通，因为需求直接或间接地来自他们。无论他们来自你的公司还是客户方，你都应当了解他们业务的上下文。例如，你必须了解以下内容：
+
+\begin{itemize}
+\item 业务的驱动力是什么？
+\item 公司有哪些目标？
+\item 你的产品将有助于实现哪些具体目标？
+\end{itemize}
+
+一旦你了解了这些，就更容易与来自管理层或高管的许多人建立共识，也更容易收集到关于你软件的更具体的需求。举例来说，如果公司在意其用户的隐私，它就可能有一条需求：尽可能少地存储关于用户的数据，并用只存储在用户设备上的密钥对其进行加密。通常，如果这类需求源自公司文化，那么对某些员工来说它们太过显然，以至于根本不会明确表达出来。了解业务的上下文能帮助你提出恰当的问题，进而反过来帮助公司。
+
+话虽如此，请记住，你的利益相关者可能、也必将有一些并不一定直接反映在公司目标中的需求。他们可能对要提供的功能有自己的想法，或者对软件应达到的指标有自己的主张。也许某位经理向他的员工承诺了一个学习新技术或使用某项特定技术的机会。如果这个项目对他们的职业发展很重要，他们就可能成为强有力的盟友，甚至说服他人支持你的决策。
+
+另一类重要的利益相关者是负责部署你软件的人员。他们可能带来自己的一类需求，称为过渡需求。这类需求的例子包括用户与数据库迁移、基础设施过渡或数据转换，所以别忘了主动联系他们，把这些需求也一并收集起来。
+
+\subsection{从利益相关者处获取需求}
+
+\label{idx:168}
+到这一步，你应当已经有一份列明利益相关者角色和联系方式的清单。现在是时候把它用起来了。一定要抽出时间，与每位利益相关者谈谈他们需要系统提供什么、以及他们如何设想这个系统。你可以进行访谈，比如一对一的会谈或小组会谈。与利益相关者交谈时，要帮助他们做出明智的决策——向他们展示其回答对最终产品可能产生的结果。
+
+利益相关者常说他们的所有需求都同等重要，这很常见。请设法说服他们，按照需求为其业务带来的价值来排定优先级。诚然，会有一些关键任务需求，但即便另外一批需求无法交付，项目很可能也不会失败，更不用说那些会进入你需求愿望清单的锦上添花项了。
+
+\label{idx:169}
+除了访谈之外，你还可以为他们组织工作坊，形式可以像头脑风暴会。在这类工作坊中，一旦建立了共识、每个人都清楚自己为何参与这样一项工作，你就可以开始请每个人尽可能多地提出他们能想到的使用场景。这些场景确定之后，你可以着手合并相似的那些，然后排定优先级，最后对所有用户故事加以细化。工作坊不只是关于功能性需求；每个使用场景也可以分配一个质量属性。细化之后，所有质量属性都应当是可度量的、可测试的，并且可用于评估系统所关注的质量。最后要说明的一点是：你无需把所有利益相关者都拉进这类活动，因为视系统规模而定，它们有时会持续一天以上。
+
+\section{记录需求}
+
+\label{idx:170}
+完成前面描述的步骤之后，就该细化你收集到的所有需求了，但把它们放进单一文档往往并不现实，因为它们通常由许多工件构成：架构图与工作流程图、线框图、电子表格、检查清单，以及其他形式的专门文档。
+
+需求由所有利益相关者产出和消费，其中有相当广泛的一群人需要阅读你的文档。这意味着你应当面向目标读者来撰写它，使它能够为技术水平各不相同的人带来价值，从客户、销售人员和市场营销人员，到设计师和项目经理，再到软件架构师、开发人员和测试人员。
+
+有时候，准备两个版本的文档是有道理的：一个给最贴近项目业务一侧的人，另一个更偏技术，给开发团队。不过，通常只要有一份人人都能读懂的文档就够了，其中用若干节（有时是单独几段）或整章来涵盖更偏技术性的细节。
+
+下面我们来浏览一下，你的需求文档可以包含哪些章节。
+
+\subsection{记录上下文}
+
+\label{idx:171}
+需求文档应当充当人们加入你项目时的入口之一：它应当概述产品的目的、它试图达成的业务目标、它将交付的关键功能、谁会使用它，以及它可以如何使用。在设计开发之前，产品团队成员应当阅读它，从而清楚地了解自己要做什么。
+
+你可以描述几个典型的用户角色，比如 \emph{身为 CTO 的约翰（John）} 或 \emph{身为司机的安（Ann）}，让读者更有机会把系统的使用者当作真实的人来思考，并了解可以对他们抱有什么样的预期。
+
+在 \emph{了解上下文}节中描述的所有内容，也应当在本节中加以汇总，有时甚至在文档中给予单独的章节。上下文应当提供大多数非项目利益相关者所需的全部信息。它应当简明而准确。
+
+对于你可能想留待日后研究并决定的任何未决问题，也是如此。对于你做出的每一项决策，最好记录以下内容：
+
+\begin{itemize}
+\item 决策是什么
+\item 由谁做出、何时做出
+\item 其背后有何理由
+\end{itemize}
+
+既然你已经知道如何记录项目的上下文，下面我们也来学习如何恰当地描述它的范围。
+
+\subsection{记录范围}
+
+\label{idx:172}
+本节应当界定项目中包含什么、超出范围之外又是什么。你应当说明范围为何以特定方式界定的理由，尤其是在写到那些最终不会被纳入的内容时。
+
+本节还应当涵盖高层级的功能性需求和 NFR，但细节应当放入文档后续的章节。如果你熟悉敏捷实践，那么在这里只需描述史诗和较大的用户故事即可。
+
+如果你或你的利益相关者对范围有任何假设，应当在此提及。如果范围因任何问题或风险而可能发生变化，你也应当写些内容加以说明；对于你不得不做出的任何权衡取舍，同样如此。
+
+\subsection{记录功能性需求}
+
+\label{idx:173}
+每一条需求都应当精确且可测试。看看这个例子：\emph{系统将为司机提供一个评级系统}。你该如何针对它编写测试？更好的做法是为评级系统单独建一节，并在那里为它规定精确的需求。
+
+再看看另一个例子：\emph{如果有空闲司机离乘客很近，应当把即将到来的用车请求通知他们}。如果可用的司机不止一位呢？在多大距离之内我们仍可称之为\emph{近}？这条需求既不精确，又缺少部分业务逻辑。我们只能寄希望于没有空闲司机的情形已由另一条需求涵盖。
+
+\label{idx:174}
+2009 年，Rolls-Royce 公司开发了 \textbf{Easy Approach to Requirements Syntax }（\textbf{EARS}），以帮助应对这一问题。在 EARS 中，有五类基本需求，它们应当以不同的方式撰写、服务于不同的目的。之后可以把它们组合起来，构成更复杂的需求。这些基本类型如下：
+
+\begin{itemize}
+\item \textbf{普遍需求}：\emph{<系统> 应 <响应>}。例如，\emph{应用程序应使用 C++ 开发}。
+\item \textbf{事件驱动型}：\emph{当 <触发器> <可选前置条件> 时，<系统> 应 <响应>}。例如，\emph{当有订单到达时，网关应产生一个新的订单事件}。
+\item \textbf{非期望行为}：\emph{如果 <触发器>，那么 <系统> 应 <响应>}。例如，\emph{如果处理请求耗时超过 1 秒，该工具应显示进度条}。
+\item \textbf{状态驱动型}：\emph{当处于 <状态> 时，<系统> 应 <响应>}。例如，\emph{当一段行程正在进行时，应用应显示地图，帮助司机导航到目的地}。
+\item \textbf{可选特性}：\emph{在 <特性> 的情况下，<系统> 应 <响应>}。例如，\emph{在有空调的情况下，应用应让用户通过移动应用设置温度}。
+\end{itemize}
+
+一个更复杂需求的例子是：\emph{在使用双服务器配置时，如果备份服务器 5 秒内没有收到主服务器的消息，它应当尝试把自己注册为新的主服务器}。
+
+你并不一定非得使用 EARS，但如果你为含糊、模糊、过于复杂、不可测试、有遗漏或以其他方式表述拙劣的需求而苦恼，它会有所帮助。无论你选择哪种方式或措辞，都要确保使用一种简洁的模型，它基于通用的语法，并使用预定义的关键词。
+
+\label{idx:175}
+为列出的每条需求分配一个标识符也是一种好做法，这样你就有一种简便的方式来引用它们。例如，可以用标识符 \emph{REQMI} 来代替 \emph{管理库存}。这个标识符可以在整个文档中使用，而不必每次都重复完整的需求。
+
+说到更详细的需求格式，它应当包含以下字段：
+
+\begin{itemize}
+\item \textbf{ID 或索引}：用于方便地标识某条特定需求。
+\item \textbf{标题}：这里可以使用 EARS 模板。
+\item \textbf{详细描述}：你可以在这里放入任何你认为相关的信息，例如用户故事。
+\item \textbf{负责人}：这条需求服务于谁？可以是产品负责人、销售团队、法务、IT 等等。
+\item \textbf{优先级}：这一点不言自明。
+\item \textbf{交付期限}：如果这条需求与某个关键日期相关，你可以在此注明。
+\end{itemize}
+
+既然我们已经知道如何记录功能性需求，下面来讨论一下应当如何处理非功能性需求的记录。
+
+\subsection{记录 NFR}
+
+\label{idx:176}
+每个质量属性，例如性能或可扩展性，都应当在你的文档中有自己的一节，并列出具体的、可测试的需求。大多数质量属性都是可度量的，因此有了具体的指标，对解决日后出现的问题会有极大帮助。你还可以单独用一节来讲述项目所受到的约束。
+
+在措辞方面，你可以使用同样的 EARS 模板来记录你的 NFR。或者，你也可以用本章上下文部分所定义的角色，把它们表述为用户故事。
+
+\subsection{管理文档的版本历史}
+
+\label{idx:177}
+你可以采用以下两种做法之一：要么在文档内部创建版本日志，要么使用外部的版本管理工具。两种方式各有利弊，但我们推荐采用后一种。就像你为代码使用版本控制系统一样，你也可以把它用于文档。我们并不是说你必须使用存放在 Git 仓库中的 Markdown 文档，但只要你还同时生成一个\emph{业务人员可读}的版本（无论是网页还是 PDF 文件），这就是一个完全可行的做法。或者，你也可以直接使用在线工具，例如 Redmine wiki 或 Confluence 页面，它们允许你在每次发布编辑时写一段有意义的注释来描述改了什么，并查看版本之间的差异。如果你决定采用修订日志的做法，它通常是一张表格，包含以下字段：
+
+\begin{itemize}
+\item \textbf{修订号}：一个编号，用于标识这些变更是引入到文档的哪一次迭代中。如果愿意，你还可以为特殊修订添加标签，例如 \emph{初稿}。
+\item \textbf{更新者}：做出该项变更的人。
+\item \textbf{评审者}：评审该项变更的人。
+\item \textbf{变更描述}：这次修订的 \emph{提交信息}。它说明发生了哪些变化。
+\end{itemize}
+
+文档应当有负责人，因为没有负责人的文档会变得陈旧，维护起来也需要投入更多精力。
+
+\subsection{在敏捷项目中记录需求}
+
+\label{idx:178}
+许多敏捷的拥护者会声称，记录所有需求纯粹是浪费时间，因为它们多半无论如何都会变。然而，一种好的做法是把它们当作待办列表中的条目来对待：将在即将到来的迭代中开发的那些，应当比你想晚些实现的需求定义得更详细。正如你不会在有必要之前就把史诗拆分为故事、把故事拆分为任务，在确定需要实现之前，你只提供粗略描述、粒度较粗的需求也无妨。
+
+\begin{myTip}{提示}
+
+记录某条需求的来源是谁、是什么，这样你就能知道将来谁可以为你提供细化它所需的输入。
+\end{myTip}
+
+以一场贸易展会为例。假设在下一个迭代中，我们要构建供访客查看的店铺页面，而在再下一个迭代中，我们要加入订阅机制。我们的需求可能如下所示：
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XXXX}
+\toprule
+\textbf{ID} & \textbf{优先级} & \textbf{描述} & \textbf{利益相关者} \\
+\midrule
+DF-42 & P1 & 店铺页面必须展示店铺的库存， 并为每一件商品附上照片和价格。 & 乔什（Josh）、里克（Rick） \\
+DF-43 & P2 & 店铺页面必须展示一幅标注店铺位置的地图。 & 乔什、坎迪斯（Candice） \\
+DF-44 & P2 & 客户必须能够订阅店铺。 & 史蒂文（Steven） \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+如你所见，前两项与我们接下来要做的功能有关，所以它们描述得更详细。谁知道呢，也许在下一个迭代之前，关于订阅的那条需求就会被砍掉，因此没必要考虑它的每一个细节。
+
+\label{idx:179}
+另一方面，有些情况仍然要求你拥有一份完整的需求清单。如果你需要应对外部监管机构或审计、法务、合规等内部团队，那么他们很可能仍然需要你提供一份撰写良好的纸质文档。有时，直接交给他们一份包含从待办列表中提取的工作项的文档就可以了。最好就像对待其他任何利益相关者那样与他们沟通：了解他们的期望，从而知道满足其需求的最小可行文档是什么样的。
+
+记录需求的关键，在于让你与提出具体需求的各方之间达成共识。这该如何实现？一旦你有了可以拿出手的草稿，就应当把文档拿给他们看并收集反馈。这样，你就能知道哪里含糊、不清楚或有遗漏。即便要经历几次迭代，它也能帮助你与利益相关者达成共识，从而让你更有信心自己构建的是正确的东西。
+
+\subsection{其他章节}
+
+\label{idx:180}
+在文档中设立一个\emph{链接与资源}一节是个好主意，你可以在其中指向诸如问题跟踪看板、工件、CI、源码仓库，以及任何你觉得顺手的内容。架构、营销及其他类型的文档也可以在这里列出。
+
+如有需要，你还可以加入一份术语表。
+
+\label{idx:181}
+现在，你已经知道如何记录你的需求及相关信息。下面简单说说如何记录所设计的系统。
+
+\section{记录架构}
+
+\label{idx:182}
+正如你应当记录需求一样，你也应当记录逐渐成形的架构。这当然不只是为了有一份文档：它应当帮助项目中涉及的每一个人更清楚地了解对自己和对最终产品的要求，从而变得更高效。你绘制的图表并非都对所有人有用，但你应当从它们未来读者的视角来创建这些图表。
+
+\label{idx:183}
+有众多框架可用于记录你的构想，其中许多服务于特定的领域、项目类型或架构范围。举例来说，如果你对记录企业架构感兴趣，你可能会对 \textbf{TOGAF} 感兴趣。它是 \textbf{The Open Group Architecture Framework} 的缩写。它依托于以下四个领域：
+
+\begin{itemize}
+\item 业务架构（战略、组织、关键流程与治理）
+\item 数据架构（逻辑数据管理与物理数据管理）
+\item 应用架构（各个系统的蓝图）
+\item 技术架构（硬件、软件与网络基础设施）
+\end{itemize}
+
+\label{idx:184}
+\label{idx:185}
+\label{idx:186}
+如果你是在整个公司乃至更广的范围内记录你的软件，这种分组方式就很有用。其他规模相近的框架包括 \textbf{NATO Architecture Framework }（\textbf{NAF};\href{https://eapad.dk/resource/nato-architecture-framework-naf-v-4/}{https://eapad.dk/resource/nato-architecture-framework-naf-v-4/}）、与之对等的美国版本 \textbf{Department of Defense Architecture Framework}（\textbf{DoDAF};\href{https://dodcio.defense.gov/Library/DoD-Architecture-Framework/}{https://dodcio.defense.gov/Library/DoD-Architecture-Framework/}）、ArchiMate（\href{https://www.archimatetool.com/}{https://www.archimatetool.com/}）、TOGAF（\href{https://www.opengroup.org/togaf}{https://www.opengroup.org/togaf}）、\textbf{Business Process Model and Notation}（\textbf{BPMN}; \href{https://www.bpmn.org/}{https://www.bpmn.org/}）以及 \textbf{Systems Modeling Language}（\textbf{SysML}; \href{https://sysml.org/}{https://sysml.org/}）。
+
+如果你不是在记录企业架构，尤其是如果你才刚刚踏上架构的自我提升之路，那么你很可能会对其他框架更感兴趣，例如 4+1 和 C4 模型。
+
+\subsection{理解 4+1 模型}
+
+4+1 视图模型由 Philippe Kruchten 于 1995 年在其题为 \emph{Architectural Blueprints—The “4+1” View Model of Software Architecture} 的论文中提出。作者称，它旨在“\emph{描述软件密集型系统的架构，其基础是使用多个并发的视图}”。它的名称来自它所包含的各个视图。
+
+\label{idx:187}
+\label{idx:188}
+这个模型广为人知，因为它出现在市场上已经很久，并且能胜任其工作。它非常适合较大的项目，虽然也可以用于中小型项目，但对它们的需求而言可能过于复杂（尤其是当项目以敏捷方式开发时）。如果你正面临这种情况，就应该试试下一节介绍的 C4 模型。
+
+4+1 模型的一个缺点是，它不强制使用正式的记法或标准，并且采用一组固定的视图；而描述架构的务实做法，是根据项目的具体情况来选择视图（稍后会详细说明）。
+
+另一方面，一个很好的优点是各视图之间的关联方式，尤其是在涉及场景时。同时，每位利益相关者都能轻松获取模型中与自己相关的部分。这就引出了该模型呈现出来的样子：
+
+\myGraphic{0.864}{images/B18456_03_02.png}{图 3.2：4+1 模型概览}
+
+\label{idx:189}
+\label{idx:190}
+\label{idx:191}
+上图中的参与者（actor）是对相应视图最感兴趣的人。所有视图都可以用不同类型的 \textbf{统一建模语言（Unified Modeling Language）}（\textbf{UML}）图来表示。下面来讨论图中的各个组成部分：
+
+\begin{itemize}
+\label{idx:192}
+\label{idx:193}
+\item \textbf{逻辑视图}展示功能是如何提供给用户的。它展示系统的组件（对象）以及它们之间如何交互。最常见的情况是，它由类图、对象图和复合结构图组成。如果你有成千上万个类，或者只是想更好地展示它们之间的交互，那么还应该有通信图或序列图，这两者都属于我们下一个视图的范畴：
+\end{itemize}
+
+\myGraphic{0.907}{images/B18456_03_03.png}{图 3.3：类图，展示我们计划拥有的类型及其关系}
+
+\begin{itemize}
+\label{idx:194}
+\label{idx:195}
+\item \textbf{进程视图}围绕系统的运行时行为展开。它展示进程、进程之间的通信，以及与外部系统的交互。它通常由序列图、通信图、活动图、状态图、交互概览图和时序图来表示。该视图涉及许多 NFR，包括并发、性能、可用性和可扩展性：
+\end{itemize}
+
+\myGraphic{0.833}{images/B18456_03_04.png}{图 3.4：活动图，展示工作流和流程}
+
+\begin{itemize}
+\label{idx:196}
+\label{idx:197}
+\item \textbf{开发视图}用于分解子系统，围绕软件组织展开。复用、工具约束、分层、模块化、打包和执行环境——该视图可以通过展示系统的构建块分解来表示它们。它借助组件和包等来完成这一点：
+\end{itemize}
+
+\myGraphic{0.908}{images/B18456_03_05.png}{图 3.5：包图，提供系统的高层视图，并展示特定包之间的依赖或关系}
+
+\begin{itemize}
+\label{idx:198}
+\label{idx:199}
+\item \textbf{物理视图}用于通过部署图把软件映射到硬件上。它面向系统工程师，可以涵盖与硬件相关的一部分 NFR，例如通信：
+\end{itemize}
+
+\myGraphic{0.908}{images/B18456_03_06.png}{图 3.6：部署图，展示每个软件组件将在其上运行的硬件，以及网络相关的信息}
+
+\begin{itemize}
+\label{idx:200}
+\label{idx:201}
+\item 这些\textbf{场景}把所有其他视图粘合在一起。场景由用例图表示，对所有利益相关者都可能有用。该视图展示系统是否做了它应该做的事，以及是否保持一致。当所有其他视图都完成后，场景视图可能是多余的。然而，没有使用场景，它们也就无从谈起。该视图从高层展示系统，而其他视图则深入细节：
+\end{itemize}
+
+\myGraphic{0.899}{images/B18456_03_07.png}{图 3.7：用例图，展示特定参与者如何与系统交互，以及这些交互之间如何相互关联}
+
+\label{idx:202}
+\label{idx:203}
+这些视图彼此互相关联，而且常常必须共存才能展现完整的图景。想想如何表达并发吧。仅靠逻辑视图是做不到的。由于把并发映射到任务和进程更具表现力，我们需要进程视图。而进程又会被映射到物理的、通常是分布式的节点上，这就把物理视图牵扯进来。这意味着我们需要在三个视图中有效地记录这类关注点，而每一个视图都对特定的一组利益相关者有意义。视图之间的其他关联还包括以下这些：
+
+\begin{itemize}
+\item 逻辑视图和进程视图都用于分析和设计，以概念化产品
+\item 开发与部署相结合，描述软件如何打包，以及每个包何时部署
+\item 逻辑视图和开发视图展示功能如何反映在源代码中
+\item 进程视图和部署/物理视图旨在共同描述 NFR
+\end{itemize}
+
+现在你已经熟悉了 4+1 模型，我们再来讨论另一个模型，它简单却极为有效：C4 模型。希望使用它会让你大呼过瘾（一语双关）。
+
+\subsection{理解 C4 模型}
+
+\label{idx:204}
+\label{idx:205}
+C4 模型非常适合中小型项目。它易于应用，因为它相当简单，并且不依赖任何预定义的记法。如果你想开始用它绘制图表，可以试试在用户友好的拖放式工具 Draw.io、Mermaid、Miro、Lucidchart 或 IcePanel 中使用 C4 形状。
+
+在 C4 模型中，有四种主要的图类型，如下所示：
+
+\begin{itemize}
+\item 系统上下文
+\item 容器
+\item 组件
+\item 代码
+\end{itemize}
+
+其他的 C4 模型还有系统景观（system landscape）、动态（dynamic）和部署（deployment）。
+
+就像使用地图放大和缩小一样，你可以用这四种类型来展示某个特定代码区域的更多细节，或者\emph{缩小}以展示关于某个特定模块、甚至整个系统的交互和周边环境的更多内容。
+
+系统上下文是审视架构的一个很好的起点，因为它把系统作为一个整体来展示，周围是它的用户以及与之交互的其他系统。你可以在这里查看一个 C4 系统上下文图的示例：
+
+\myGraphic{0.920}{images/B18456_03_08.png}{图 3.8：C4 系统上下文图（作者 Simon Brown，依据 CC BY 4.0 许可：\texthref{https://c4model.com/diagrams/system-context}）}
+
+\label{idx:206}
+\label{idx:207}
+如你所见，它展示的是\emph{整体图景}，因此不应该聚焦于具体的技术或协议。相反，可以把它看作一张也能展示给非技术利益相关者的图。仅凭这张图，就应该能清楚地看出，其中涉及一个参与者（以人形描绘的客户），他与我们解决方案的某个组件——即客户服务系统——进行交互。而这个系统又与另外两个系统交互，每次交互都在箭头旁有所描述。
+
+我们描述的系统上下文图用于提供系统的概览，附带少量细节。下面我们逐一来看其他的图：
+
+\begin{itemize}
+\label{idx:208}
+\label{idx:209}
+\item \textbf{容器图}：这张图用于展示系统内部的概览。如果你的系统使用数据库、提供服务，或者只是由某些应用组成，这张图都会把它展示出来。它还能展示容器的主要技术选型。请注意，这里的容器并不是指 Docker 容器，而是指应用或数据存储；虽然每一个都是可单独运行、可单独部署的单元，但这种图类型并不涉及部署场景。容器视图面向技术人员，但并不局限于开发团队。架构师以及运维和支持人员也是它的目标受众。
+\end{itemize}
+
+\myGraphic{0.908}{images/B18456_03_09.png}{图 3.9：C4 容器图（作者 Simon Brown，依据 CC BY 4.0 许可：\texthref{https://c4model.com/diagrams/container}）}
+
+（此图仅用于示意。请查看图形资源包以获取高分辨率版本。）
+
+\begin{itemize}
+\label{idx:210}
+\label{idx:211}
+\label{idx:212}
+\label{idx:213}
+\item \textbf{组件图}：如果你想了解某个特定容器的更多细节，就该轮到组件图登场了。它展示所选容器内部的组件如何相互交互，以及如何与容器外部的元素和参与者交互。通过查看这张图，你可以了解每个组件的职责以及它是用什么技术构建的。组件图的目标受众主要聚焦于某个特定容器，由开发团队和架构师组成。
+\end{itemize}
+
+\myGraphic{0.899}{images/B18456_03_10.png}{图 3.10：C4 组件图（作者 Simon Brown，依据 CC BY 4.0 许可：\texthref{https://c4model.com/diagrams/component}）}
+
+（此图仅用于示意。请查看图形资源包以获取高分辨率版本。）
+
+\begin{itemize}
+\label{idx:214}
+\label{idx:215}
+\item \textbf{代码图}：最后我们来到代码图，它在你放大到某个特定组件时出现。这一视图主要由 UML 图组成，包括类图、实体关系图等，理想情况下应该由独立工具和 IDE 从源代码自动生成。你绝对不应该为系统中的每个组件都制作这样的图；相反，应聚焦于最重要的那些组件，并让它们以某种方式告诉读者你当时的想法。这意味着在这类图中少即是多，因此你应该从代码图中省略不必要的元素。在许多系统中，尤其是较小的系统，这类图会被省略。它与组件图的目标受众相同。
+\end{itemize}
+
+\myGraphic{0.899}{images/B18456_03_11.png}{图 3.11：C4 代码图（作者 Simon Brown，依据 CC BY 4.0 许可：\texthref{https://c4model.com/diagrams/code}）}
+
+\label{idx:216}
+\label{idx:217}
+你可能会发现 C4 模型缺少某些特定的视图。例如，如果你想知道如何展示系统的部署，你可能会感兴趣地了解到，除了主要图表之外，还有一些补充图表。其中之一就是部署图，你可以在接下来看到它。它展示系统中的容器映射到基础设施中的节点。总的来说，它是 UML 部署图的一个更简单的版本：
+
+\myGraphic{0.920}{images/B18456_03_12.png}{图 3.12：C4 部署图（作者 Simon Brown，依据 CC BY 4.0 许可：\texthref{https://c4model.com/diagrams/deployment}）}
+
+（此图仅用于示意。请查看图形资源包以获取高分辨率版本。）
+
+\label{idx:218}
+\label{idx:219}
+说到与 C4 模型相关的 UML 图，你可能还会想，为什么它在呈现系统用例方面投入如此之少。如果你正面临这种情况，那么你应该考虑用 UML 中的用例图来补充前面提到的模型，或者考虑引入一些序列图。
+
+在记录架构时，重要的是你记录了什么、分享了哪些知识，而不是遵循某套具体的硬性规则。选择最适合你需求的工具即可。
+
+\subsection{在敏捷项目中记录架构}
+
+\label{idx:220}
+在敏捷环境中，你记录架构的方式应该与记录需求的方式类似。首先也是最重要的，要考虑谁会阅读你准备的材料，以确保你以正确的方式描述了正确的内容。你的文档不必是一份冗长的 Word 文档。你可以使用演示文稿、wiki 页面、单张图表，甚至有人描述架构时的会议录音。
+
+重要的是收集关于所记录架构的反馈。同样，与记录需求时一样，重要的是与你的利益相关者反复推敲这些文档，以了解在哪些地方需要改进。尽管这看起来像是在浪费时间，但如果做得恰当，它应该能在交付产品方面为你节省一些时间。足够好的文档应该能帮助新人更快地进入高效状态，并在后续过程中为更熟悉的利益相关者提供指引。如果你只是在某些会议上讨论架构，那么很有可能，一个季度之后，没人会记得你当初为什么做出那些决定，以及它们在不断变化的敏捷格局中是否仍然有效。
+
+在创建文档时，反复推敲很重要，因为很可能对一两个重要细节存在一些误解。另一些时候，你或你的利益相关者会获得更多知识并决定改变一些东西。要做好准备，在文档被认为成熟和完成之前，至少要通读几遍。通常，通过即时消息、电话或面对面进行几次交谈，能帮助你更快地完成文档，并处理可能出现的任何后续问题，所以优先选择这些方式，而不是电子邮件或其他异步沟通方式。
+
+\section{选择要记录的合适视图}
+
+\label{idx:221}
+架构是一个过于复杂的主题，无法用一张大图来描述。想象你是某栋建筑的架构师。要设计整栋建筑，你需要为不同方面分别绘制图纸：一张给管道，另一张给电力和其他电缆，等等。每一张图纸都会展示项目的不同视图。软件架构也是如此：你需要从不同角度呈现软件，面向不同的利益相关者。
+
+此外，如果你在建一栋智能住宅，你很可能还会画一张你想在周围放置的设备的平面图。尽管并非所有项目都需要这类视图，但既然它在你的项目中发挥作用，或许就值得加上它。同样的做法对架构也适用：如果你发现某个不同的视图对文档有价值，就应该把它加进去。那么，你如何知道哪些视图可能有价值呢？可以尝试执行以下步骤：
+
+\begin{enumerate}
+\item 从 4+1 模型或 C4 模型中的视图开始。
+\item 询问你的利益相关者，哪些内容对他们来说必须被记录下来，并考虑调整你的视图集合。
+\item 选择那些能帮助你评估架构是否达成其目标、以及所有 ASR 是否都得到满足的视图。阅读后续各节中每个视图的第一段，以检查它们是否符合你的需求。
+\end{enumerate}
+
+\begin{myTip}{提示}
+
+如果你仍然不确定该记录哪些视图，这里有一些建议：尽量挑选最重要的视图，因为当视图太多时，架构会变得难以理解。一组好的视图不仅应该展示架构，还应该暴露项目中的技术风险。
+\end{myTip}
+
+\label{idx:222}
+你可以在文档中纳入不同类型的架构视图。我们这里会简要介绍它们，不过如果你感兴趣，应该去读一读 Nick Rozanski 和 Eoin Woods 合著的 \emph{Software Systems Architecture: Working with Stakeholders Using Viewpoints and Perspectives} 一书。
+
+\subsection{功能视图}
+
+如果你的软件是作为更大系统的一部分来开发的，尤其是在各团队并非每日沟通的情况下，你就应该纳入一个功能视图（如同 4+1 模型中那样）。
+
+\label{idx:223}
+\label{idx:224}
+在功能视图中涉及的一个记录架构的重要且常被忽视的方面，是对你所提供接口的定义，尽管这是最需要描述的事情之一。无论是你的两个组件之间的接口，还是面向外部世界的入口点，你都应该花时间清晰地记录它，描述对象和调用的语义，以及用法示例（这些示例有时可以复用为测试）。
+
+在文档中纳入功能视图的另一个巨大好处是，它能厘清系统各组件之间的职责。开发该系统的每个团队都应该理解边界在哪里，以及谁负责开发哪项功能。所有需求都应明确映射到组件，以消除缺口和重复工作。
+
+\begin{myTip}{提示}
+
+这里要注意的一件重要事情是避免让功能视图过载。如果它变得杂乱，就没人愿意读它。如果你开始在上面描述基础设施，那就考虑添加一个部署视图。如果你的模型中最终出现了\emph{上帝对象（god object）}，就试着重新思考设计，把它拆分成更小、更具内聚性的部分。
+\end{myTip}
+
+\label{idx:225}
+\label{idx:226}
+关于功能视图的最后一点重要提示：尽量让你纳入的每张图都保持在同一抽象层次上。另一方面，不要选择过于抽象的层次而使其变得含糊不清；要确保每个元素都被正确定义，并被相关方理解。
+
+\subsection{信息视图}
+
+如果你的系统在信息、其处理流程、管理过程或存储方面有非直截了当的需求，那么纳入这类视图也许是个好主意。
+
+\label{idx:227}
+\label{idx:228}
+挑出最重要、数据最丰富的实体，展示它们如何在系统中流动、谁拥有它们、以及谁是生产者和消费者。标出某些数据保持\emph{新鲜}的时间有多长、何时可以安全地丢弃，数据到达系统某些点的预期延迟是多少，或者如果你的系统在分布式环境中工作，如何处理标识符，这些可能都很有用。如果你的系统管理事务，那么这一流程以及任何回滚，也应该对你的利益相关者清晰明了。转换、发送和持久化数据的技术对他们中的一些人也可能很重要。如果你在金融领域运营，或者必须处理个人数据，你多半必须遵守某些法规，所以要描述你的系统计划如何应对这一点。
+
+数据的结构可以用 UML 类模型来绘制。记住要明确数据的格式，尤其是在数据于两个不同系统之间流动时。NASA 损失了价值 1.25 亿美元的火星气候轨道器（Mars Climate Orbiter），该探测器是它与洛克希德·马丁（Lockheed Martin）共同开发的，原因就是双方在不知情的情况下使用了不同的单位，所以要留意系统之间的数据不一致问题。
+
+数据的处理流程可以使用 UML 的活动模型，而要展示信息的生命周期，可以使用状态图。
+
+\subsection{并发视图}
+
+\label{idx:229}
+\label{idx:230}
+如果运行大量并发的执行单元是你产品的一个重要方面，就考虑添加一个并发视图。它可以展示你可能存在哪些问题和瓶颈（除非这听起来太细了）。纳入它的其他好理由还包括：对进程间通信的依赖、非直截了当的任务结构、并发状态管理、同步或任务失败处理逻辑。
+
+这一视图可以使用你想要的任何记法，只要能捕捉到执行单元及其通信即可。如有必要，为你的进程和线程分配优先级，然后分析任何潜在问题，例如死锁或争用。你可以使用状态图来展示重要执行单元的可能状态及其转换（等待查询、执行查询、分发结果，等等）。
+
+\label{idx:231}
+如果你不确定是否需要为系统引入并发，一条好的经验法则是\emph{不要}。而如果你必须引入，就力求设计简单。调试并发问题从来都不容易，而且总是很耗时，所以如果可能的话，先试着优化你已有的东西，而不是一味地给手头的问题扔更多的线程。
+
+\label{idx:232}
+如果看着你的图，你担心资源争用，就试着把大对象上的锁替换为更多、但粒度更细的锁；使用轻量级同步（有时原子操作就足够了），引入乐观锁，或者减少共享的内容（在线程中为某些数据创建一份额外的副本，并使用写时复制（copy-on-write）之类的技术来处理它，可能比共享对唯一副本的访问更快）。
+
+\subsection{开发视图}
+
+\label{idx:233}
+\label{idx:234}
+如果你在构建一个包含大量模块的大系统，需要组织代码结构、有系统级的设计约束，或者想在系统的各个部分之间共享某些共性，那么从开发视角呈现解决方案应该会对你、以及软件开发人员和测试人员都有好处。
+
+开发视图的包图可以很方便地展示系统中不同模块位于何处、它们的依赖是什么，以及其他相关模块（例如，位于同一软件层中的模块）。它不必是一张 UML 图——哪怕用方框和线条也可以。如果你计划让某个模块可替换，这类图可以向你展示哪些其他软件包会受到影响。
+
+提高系统复用性的策略（例如为组件创建你自己的运行时框架），或者提高系统一致性的策略（例如对认证、日志、国际化或其他类型处理采用统一做法），都属于开发视图的一部分。如果你发现系统中存在任何共性部分，就把它们记录下来，以确保所有开发者也能看到。
+
+代码组织、构建和配置管理的统一做法也应该归入文档的这一部分。如果这一切听起来要记录的东西太多了，那就聚焦于最重要的部分，其余的只需简要提及，甚至干脆不提。
+
+\subsection{部署视图与运维视图}
+
+\label{idx:235}
+\label{idx:236}
+\label{idx:237}
+\label{idx:238}
+如果你有非标准或复杂的部署环境，例如在硬件、第三方软件或网络需求方面有特定需要，就考虑把它记录在一个单独的部署章节中，面向系统管理员、开发人员和测试人员。
+
+如有必要，涵盖以下内容：
+
+\begin{itemize}
+\item 所需的内存量
+\item CPU 线程数（是否启用超线程）
+\label{idx:239}
+\item 关于\textbf{非统一内存访问}（\textbf{NUMA}）节点的绑定（pinning）与亲和性（affinity）
+\item 专用网络设备需求，例如能够给数据包做标记、以黑盒方式测量延迟和吞吐量的交换机
+\item 网络拓扑
+\item 所需的估算带宽
+\item 你的应用对存储的需求
+\item 你计划使用的任何第三方软件
+\end{itemize}
+
+一旦你有了这些需求，就可以把它们映射到具体的硬件，并放入一个运行时平台模型中。如果你想要正式的建模，可以使用带构造型（stereotype）的 UML 部署图。它应该展示你的处理节点和客户端节点、在线和离线存储、网络链路、专用硬件（如防火墙或 FPGA 或 ASIC 设备），以及功能元素与它们将运行的节点之间的映射。
+
+如果你有非直截了当的网络需求，可以再添加一张图，展示网络节点以及它们之间的连接。
+
+如果你依赖特定的技术（包括软件的特定版本），最好把它们列出来，看看你使用的软件之间是否存在任何兼容性问题。有时，两个第三方组件会需要同一个依赖，但版本不同。
+
+如果你有特定的安装和升级计划，写几句关于它的说明也许是个好主意。A/B 测试、蓝绿部署，或你的解决方案将依赖的任何特定容器魔法之类的事情，都应该让所有相关方清楚。如有必要，还应涵盖数据迁移计划，包括迁移可能耗时多久以及何时可以安排。
+
+任何关于配置管理、性能监控、运维监控与控制的计划，以及备份策略，都可能值得描述。你很可能想要创建几个分组、确定每个分组的依赖，并为每个这样的分组定义方法。如果你能想到任何可能发生的错误，就要有一个检测和从中恢复的计划。
+
+\label{idx:240}
+\label{idx:241}
+\label{idx:242}
+\label{idx:243}
+这一部分还可以放一些给支持团队的说明：哪个利益相关者群体需要什么样的支持、你计划设立哪些类别的事件、如何升级，以及每一级支持将负责什么。
+
+最好尽早与运维人员接触，并专门为他们创建图表，以此让他们保持参与。
+
+既然我们已经讨论了如何手动创建关于系统及其需求的文档，下面转向自动化文档流程。
+
+\section{生成文档}
+
+\label{idx:244}
+作为工程师，我们不喜欢手工劳动。正因如此，如果某件事可以自动化并为我们省去工作，那它多半就会实现自动化。既然花了这么多精力来创建足够好的文档，那么能够至少自动化其中一部分工作，可以说是一种幸福。
+
+\subsection{生成需求文档}
+
+\label{idx:245}
+\label{idx:246}
+如果你是从零开始创建一个项目，凭空生成文档可能会很困难。不过，如果把需求记录在合适的工具中，有时也能据此生成文档。例如，如果你在使用 Jira，一个起点就是从问题导航器（issue navigator）视图中导出所有条目。你可以使用任意过滤器，只针对那些条目生成打印输出。如果你不喜欢默认的字段集合，或者觉得这不适合你的需求，可以试试 Jira 中用于需求管理的一款插件。它们能做的远不止导出需求；例如，\textbf{Requirements for Jira }（\textbf{R4J}）允许你创建完整的需求层次结构、追踪需求、管理变更并让变更在整个项目中传播、对任意需求变更进行影响分析，当然还可以使用用户自定义模板进行导出。许多这类工具还能帮助你针对需求创建测试套件，但我们见到的没有一个是免费的。
+
+\subsection{从代码生成图表}
+
+\label{idx:247}
+如果你想在不先深入源代码的情况下了解代码结构，那么从代码生成图表的工具或许会让你感兴趣。
+
+\label{idx:248}
+这类工具之一是 \textbf{CppDepend}，它能让你在源代码的不同部分之间创建各种依赖关系图。更进一步，它还允许你基于各种参数对代码进行查询和过滤。无论你是想初步了解代码的结构、弄清不同软件组件之间存在哪些依赖以及它们耦合得多紧，还是想快速定位技术债务最多的部分，这款工具或许都值得关注。尽管它是商业专有软件，但提供了功能完整的试用版，并且对非商业的开源项目免费，还有专门的网站和活跃的社区。
+
+\label{idx:249}
+\label{idx:250}
+有些绘图工具允许你从类图生成代码，也可以从代码生成类图。\textbf{Enterprise Architect} 能让你基于类和接口图生成多种语言的代码，C++ 就是其中之一，它还允许直接从源代码生成 UML 类图。另一个能做到这一点的工具是 \textbf{Visual Paradigm}。
+
+\subsection{从代码生成（API）文档}
+
+\label{idx:251}
+为了帮助他人浏览你已有的代码并使用你提供的 API，一个好主意是提供从代码注释生成的文档。这类文档最好的位置莫过于紧挨着它所描述的函数和数据类型，这非常有助于让文档与代码保持同步。
+
+\label{idx:252}
+编写这类文档的事实标准工具是 \textbf{Doxygen}。它的优点是速度快（尤其是对大型项目和生成 HTML 文档而言），生成器内置了一些正确性检查（例如检查函数中是否只有部分参数写了文档——这是一个判断文档是否仍然最新的好标志），并且支持浏览类和文件的层次结构。它的缺点包括无法进行全文搜索、PDF 生成效果不太理想，以及界面可能让一些人觉得繁琐。
+
+\label{idx:253}
+幸运的是，这些可用性上的缺陷可以通过使用另一种流行的文档工具来弥补。如果你读过任何 Python 文档，很可能遇到过 Sphinx。它的界面清爽易用，并使用 \textbf{reStructuredText} 作为标记语言。好消息是这两者之间有桥梁，因此你可以把 Doxygen 生成的 XML 用在 Sphinx 中。这个桥接软件叫做 \textbf{Breathe}。
+
+\label{idx:254}
+下面来看看如何在你的项目中设置它。假设我们把源代码放在 \texttt{src} 中，公共头文件放在 \texttt{include,} 中，文档放在 \texttt{doc} 中。首先，让我们创建一个 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件：
+
+\begin{codebox}[cmake]
+cmake_minimum_required(VERSION 3.10)
+project(“Breathe Demo” VERSION 0.0.1 LANGUAGES CXX)
+list(APPEND CMAKE_MODULE_PATH “${CMAKE_CURRENT_LIST_DIR}/cmake”)
+add_subdirectory(src)
+add_subdirectory(doc)
+\end{codebox}
+
+\begin{myTip}{提示}
+借助 \textbf{AI Code Explainer} 和 \textbf{Quick Copy} 功能提升你的编程体验。在下一代 Packt Reader 中打开本书。点击 \textbf{Copy} 按钮
+
+（\textbf{1}）即可快速将代码复制到你的编程环境，或点击 \textbf{Explain} 按钮
+
+（\textbf{2}）让 AI 助手为你解释一段代码。
+
+\myGraphic{0.92}{images/image__2_.png}{}
+
+购买本书即可免费获得\textbf{下一代 Packt Reader }。扫描二维码，或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后在搜索栏中按书名查找本书。请仔细核对所示的版本，以确保你拿到的是正确的那一版。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/Latest_QR.png}\end{center}
+\end{myTip}
+
+我们为项目设置了所需的 CMake 版本，指定了项目名称、版本和所使用的语言（在我们的例子里只有 C++），并把 \texttt{cmake} 目录添加到 CMake 查找其包含文件的路径下。
+
+在 \texttt{cmake} 子目录中，我们将创建一个文件 \texttt{Find\allowbreak{}Sphinx.\allowbreak{}cmake}，我们将像其名字所暗示的那样使用它，因为 Sphinx 本身并没有提供这样的文件：
+
+\begin{codebox}[cmake]
+find_program(
+  SPHINX_EXECUTABLE
+  NAMES sphinx-build
+  DOC “Path to sphinx-build executable”)
+# 处理 REQUIRED 和 QUIET 参数，设置 SPHINX_FOUND 变量
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(
+  Sphinx “Unable to locate sphinx-build executable” SPHINX_EXECUTABLE)
+\end{codebox}
+
+\label{idx:255}
+现在，CMake 会查找我们的 Sphinx 构建工具，如果找到，就设置相应的 CMake 变量，把 Sphinx 包标记为已找到。接下来，让我们创建用于生成文档的源代码。先来写一个 \texttt{include/\allowbreak{}breathe\_\allowbreak{}demo/\allowbreak{}demo.\allowbreak{}h} 文件：
+
+\begin{codebox}[cpp]
+#pragma once
+//需要 @file 注解，Doxygen 才能为本文件中的自由函数
+//编写文档
+/**
+ * @file
+ * @brief The main entry points of our demo
+ */
+/**
+ * A unit of performable work
+ */
+struct Payload {
+  /**
+   * The actual amount of work to perform
+   */
+  int amount;
+};
+/**
+   @brief Performs really important work
+   @param payload the descriptor of work to be performed
+ */
+void perform_work(Payload payload);
+\end{codebox}
+
+注意注释的语法。Doxygen 在解析我们的头文件时会识别它，从而知道该在生成的文档中放入什么内容。
+
+现在，让我们为头文件添加一个对应的实现文件 \texttt{src/\allowbreak{}demo.\allowbreak{}cpp}：
+
+\begin{codebox}[cpp]
+#include “breathe_demo/demo.h”
+#include <chrono>
+#include <thread>
+void perform_work(Payload payload) {
+  std::this_thread::sleep_for(std::chrono::seconds(payload.amount));
+}
+\end{codebox}
+
+\label{idx:256}
+这里没有 Doxygen 注释。我们倾向于在头文件中为类型和函数编写文档，因为它们是库的接口。源文件只是实现，并不会给接口增加任何新东西。
+
+除了前面这些文件，我们还需要在 \texttt{src} 中放一个简单的 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件：
+
+\begin{codebox}[cmake]
+add_library(BreatheDemo demo.cpp)
+target_include_directories(BreatheDemo PUBLIC
+  ${PROJECT_SOURCE_DIR}/include)
+target_compile_features(BreatheDemo PUBLIC cxx_std_11)
+\end{codebox}
+
+在这里，我们为目标指定源文件、其头文件所在的目录，以及编译所需的 C++ 标准。
+
+现在，让我们转到 \texttt{doc} 文件夹，神奇的事情就发生在这里。首先是一个 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件，它开头会检查 Doxygen 是否可用，如果不可用就跳过文档生成：
+
+\begin{codebox}[cmake]
+find_package(Doxygen)
+if (NOT DOXYGEN_FOUND)
+  return()
+endif()
+\end{codebox}
+
+还要注意 \texttt{return()} 调用，它会退出当前的 CMake 列表文件，这是一个不太广为人知但很有用的技巧。
+
+接下来，假设找到了 Doxygen，我们需要设置一些变量来控制生成过程。我们只需要给 Breathe 用的 XML 输出，所以让我们设置以下变量：
+
+\begin{codebox}[cmake]
+set(DOXYGEN_GENERATE_HTML NO)
+set(DOXYGEN_GENERATE_XML YES)
+\end{codebox}
+
+要强制使用相对路径，请使用 \texttt{set(\allowbreak{}DOXYGEN\_\allowbreak{}STRIP\_\allowbreak{}FROM\_\allowbreak{}PATH \$\{\allowbreak{}PROJECT\_\allowbreak{}SOURCE\_\allowbreak{}DIR\}\allowbreak{}/\allowbreak{}include)\allowbreak{}}。如果你有实现细节需要隐藏，可以用 \texttt{set(\allowbreak{}DOXYGEN\_\allowbreak{}EXCLUDE\_\allowbreak{}PATTERNS "*/\allowbreak{}detail/\allowbreak{}*")\allowbreak{}} 来实现。好了，既然所有变量都已设置好，现在就让我们开始生成：
+
+\begin{codebox}[text]
+# Note: Use doxygen_add_docs(doxygen-doc ALL ...) if you want your documentation
+# to be created by default each time you build. Without the # keyword you need to
+# explicitly invoke building of the ‘doc’ target.
+doxygen_add_docs(doxygen-doc ${PROJECT_SOURCE_DIR}/include COMMENT
+                 “Generating API documentation with Doxygen”)
+\end{codebox}
+
+\label{idx:257}
+在这里，我们调用了一个专门为使用 Doxygen 而编写的 CMake 函数。我们定义了一个目标 \texttt{doxygen-doc}，正如注释所说，我们需要显式调用它才能按需生成文档。
+
+现在，我们需要创建一个 Breathe 目标来消费从 Doxygen 得到的内容。为此，我们可以使用 \texttt{Find\allowbreak{}Sphinx} 模块：
+
+\begin{codebox}[cmake]
+find_package(Sphinx REQUIRED)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/conf.py.in
+               ${CMAKE_CURRENT_BINARY_DIR}/conf.py @ONLY)
+add_custom_target(
+  sphinx-doc ALL
+  COMMAND ${SPHINX_EXECUTABLE} -b html -c ${CMAKE_CURRENT_BINARY_DIR}
+          ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  COMMENT “Generating API documentation with Sphinx”
+  VERBATIM)
+\end{codebox}
+
+首先，我们调用自己的模块。然后，我们用项目中的变量填充一个 Python 配置文件，供 Sphinx 使用。我们创建一个 \texttt{sphinx-doc} 目标，它会生成 HTML 文件作为输出，并在生成过程中在构建输出中打印一行信息。
+
+最后，让我们通过添加以下依赖，强制 CMake 在每次生成 Sphinx 文档时都调用 Doxygen：\texttt{add\_\allowbreak{}dependencies(\allowbreak{}sphinx-doc doxygen-doc)\allowbreak{}}。
+
+如果你希望有更多的文档目标，引入一些替你处理与文档相关目标的 CMake 函数可能会有用。
+
+现在来看看 \texttt{conf.\allowbreak{}py.\allowbreak{}in} 文件里有什么，它用于指挥我们这款猫科工具。让我们创建它，并让它把 Sphinx 指向 Breathe：
+
+\begin{codebox}[python]
+extensions = [ “breathe”, “sphinx_mdinclude” ]
+breathe_projects = { “BreatheDemo”: “@CMAKE_CURRENT_BINARY_DIR@/xml” }
+breathe_default_project = “BreatheDemo”
+project = “Breathe Demo”
+author = “Breathe Demo Authors”
+copyright = “2024, Breathe Demo Authors”
+version = “@PROJECT_VERSION@”
+release = “@PROJECT_VERSION@
+html_theme = ‘sphinx_rtd_theme’
+\end{codebox}
+
+\label{idx:258}
+从前面这段代码清单可以看到，我们设置了 Sphinx 要使用的扩展、被编写文档的项目名称，以及其他几个相关变量。注意 \texttt{@NOTATION@}，CMake 会用它把相应 CMake 变量的值填入输出文件。最后，我们让 Sphinx 使用我们的 ReadTheDocs 主题（\texttt{sphinx\_\allowbreak{}rtd\_\allowbreak{}theme}）。
+
+拼图的最后几块是 reStructuredText 文件，它们定义了文档中该在何处包含什么内容。首先，让我们创建一个 \texttt{index.rst} 文件，其中包含一个目录和几个链接：
+
+\begin{codebox}[text]
+Breathe Demo
+============
+Welcome to the Breathe Demo documentation!
+.. toctree::
+ :maxdepth: 2
+ :caption: Contents:
+Introduction <self>
+ readme
+ api_reference
+\end{codebox}
+
+第一个链接指向当前页面，这样我们就能从其他页面回到这里。我们会把标签显示为 \texttt{Introduction}。其他名称则指向扩展名为 \texttt{.rst} 的其他文件。由于我们引入了 \texttt{sphinx-mdinclude} 扩展，就可以把 \texttt{README.md} 文件包含进文档中，这能省去一些重复。 \texttt{readme.\allowbreak{}rst} 文件的内容只是 \texttt{.\allowbreak{}.\allowbreak{} mdinclude::\allowbreak{} .\allowbreak{}.\allowbreak{}/\allowbreak{}README.\allowbreak{}md}。最后，我们将用以下命令把 Doxygen 的输出合并到 \texttt{api\_\allowbreak{}reference}.rst 文件中：
+
+\begin{codebox}[text]
+API Reference
+=============
+.. doxygenindex::
+\end{codebox}
+
+\label{idx:259}
+我们只需给参考页面取一个我们喜欢的名字，并指定这里应列出 Doxygen 生成的文档，就大功告成了！只要构建 \texttt{sphinx-doc} 目标，你就会得到一个像这样的页面：
+
+\myGraphic{0.920}{images/B18456_03_13.png}{图 3.13：我们文档的主页面，整合了自动生成的部分和手动编写的部分}
+
+而当我们查看 API 文档页面时，它看起来应该是这样：
+
+\myGraphic{0.920}{images/B18456_03_14.png}{图 3.14：自动生成的 API 文档}
+
+\label{idx:260}
+如你所见，文档是为我们的 \texttt{Payload} 类型及其每个成员自动生成的，也为自由函数 \texttt{perform\_\allowbreak{}work}（包括它的每个参数）生成了文档。此外，所有内容都按照定义该类型和函数的文件进行了分组。太棒了！
+
+\section{总结}
+
+在本章中，你了解了关于需求和文档的所有要点。你学会了如何成功地获取需求，以及如何识别最重要的需求。现在你能编写精简而实用的文档，以面向视图的方式只呈现真正重要的内容。你能够区分不同类型和风格的图表，并选用最适合自己需求的那一种。最后但同样重要的是，你现在能够自动生成美观的文档。
+
+在下一章中，你将了解一些有用的架构设计模式，它们能帮助你满足系统的需求。我们将讨论各种模式，以及如何应用它们来提供许多重要的质量属性，无论是在单个组件的尺度上，还是在跨分布式系统的层面上。
+
+\section{问题}
+
+\begin{enumerate}
+\item 什么是质量属性？
+\item 获取需求时应该使用哪些来源？
+\item 你如何判断一个需求是否具有架构重要性？
+\item 你应当如何以图形方式记录各方对你的系统可能提出的功能性需求？
+\item 开发视图文档在什么时候有用？
+\item 你如何自动检查代码的 API 文档是否已经过时？
+\item 你如何在图表上标明某个给定流程是由系统的不同组件处理的？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Ashley Hunt，\emph{《成为 PMP® 认证专业人士（PMBOK）：PMP® 考试项目管理精通学习指南》}，Packt Publishing： \href{https://www.packtpub.com/en-us/product/becoming-a-pmp-certified-professional-9781838985912}{https://www.packtpub.com/en-us/product/becoming-a-pmp-certified-professional-9781838985912}
+\item JC Olamendy，\emph{使用 ATAM 评估软件架构}（博客），JC Olamendy's Thoughts： \href{https://johnolamendy.wordpress.com/2011/08/12/evaluate-the-software-architecture-using-atam/ }{https://johnolamendy.wordpress.com/2011/08/12/evaluate-the-software-architecture-using-atam/}
+\item Nick Rozanski 和 Eoin Woods，\emph{《软件系统架构：使用视点和视角与利益相关者协作》}，第二版，Addison-Wesley Professional： \href{https://www.amazon.com/dp/032171833X}{https://www.amazon.com/dp/032171833X}
+\item John Terzakis，\emph{EARS：需求语法简易方法}（会议演讲），Intel Corporation，ICCGI 会议： \href{https://www.iaria.org/conferences2013/filesICCGI13/ICCGI_2013_Tutorial_Terzakis.pdf}{https://www.iaria.org/conferences2013/filesICCGI13/ICCGI\_2013\_Tutorial\_Terzakis.pdf}
+\item Philippe Kruchten，\emph{架构蓝图——软件架构的“4+1”视图模型}，第 12 卷，第 6 期，IEEE Software： \href{https://www.cs.ubc.ca/\string~gregor/teaching/papers/4+1view-architecture.pdf}{https://www.cs.ubc.ca/\textasciitilde{}gregor/teaching/papers/4+1view-architecture.pdf}
+\item Henriette Baumann、Patrick Grassle 和 Philippe Baumann，\emph{《UML 2.0 实战：基于项目的教程——一本详尽实用的纸质书与电子书指南，演示如何将 UML 应用于真实世界的开发项目》}，Packt Publishing： \href{https://www.packtpub.com/en-us/product/uml-20-in-action-a-project-based-tutorial-9781847190420}{https://www.packtpub.com/en-us/product/uml-20-in-action-a-project-based-tutorial-9781847190420}
+\item \emph{统一建模语言（UML）}： \href{https://www.uml-diagrams.org/}{https://www.uml-diagrams.org/}
+\item C4 Model，\emph{C4 模型工具：可视化与基于文本的 C4 建模及绘图工具}： \href{https://c4model.tools/ }{https://c4model.tools/}
+\item C4 Model，\emph{用于可视化软件架构的 C4 模型}： \href{https://c4model.com/}{https://c4model.com/}
+\item Humberto Cervantes 和 Rick Kazman，\emph{《ADD 3.0：重新思考设计过程中的驱动因素与决策》}（演示文稿），Software Engineering Institute，Carnegie Mellon University： \href{https://insights.sei.cmu.edu/library/add-30-rethinking-drivers-and-decisions-in-the-design-process/}{https://insights.sei.cmu.edu/library/add-30-rethinking-drivers-and-decisions-in-the-design-process/} 立即解锁本书的专属权益 扫描此二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 \emph{注意：开始之前请准备好你的购买发票。}
+\end{itemize}

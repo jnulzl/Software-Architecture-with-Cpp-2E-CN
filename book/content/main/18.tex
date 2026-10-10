@@ -1,0 +1,1294 @@
+顾名思义，\textbf{云原生设计}所描述的是首先为在云中运行而构建的应用架构。它并非由某一种技术或语言所定义，而是要充分利用现代云平台所提供的一切。
+
+这可能意味着要组合使用多种手段：在必要时使用\textbf{平台即服务}（\textbf{PaaS}）、多云部署、边缘计算、\textbf{函数即服务}（\textbf{FaaS}）、静态文件托管、微服务以及托管服务。它超越了传统操作系统的边界。云原生开发者不再以 POSIX API 和类 Unix 操作系统为目标，而是使用 Pulumi 这类库和框架，以及 Kubernetes、Docker Swarm、Cloud Foundry 和 OpenStack 这类平台，在更高层的概念上进行构建。
+
+尽管云原生开发常与 C\#、Go、Java、JavaScript（Node.js）或 Python 等语言联系在一起，但 C++ 依然是构建高性能、可扩展云应用的有力竞争者。C++ 贴近硬件，因而能带来无与伦比的性能和高效的资源利用。此外，C++ 兼容大量库和框架，适合那些必须跨不同云服务商、操作系统和硬件环境运行的应用。
+
+话虽如此，C++ 需要对系统编程有深入的理解。与 Python 或 TypeScript 这类高层语言相比，用 C++ 编写和维护代码可能更耗时，而且它的云端工具和库也许不如 Go、Java 或 C\# 这类语言那么丰富。不过，Kubernetes 完全支持 C++ 应用，使其能够运行在任何云环境中。
+
+在本章中，我们将介绍构成云原生架构的一些核心构建模块（例如 Kubernetes、服务发现和服务网格）和设计模式（例如声明式配置、可观测性和 GitOps）。可观测性对云原生分布式系统和远程运维的嵌入式设备尤为重要，本章将展示如何使用上一章介绍的 OpenTelemetry 对应用进行插桩。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 理解云原生
+\item 使用 Kubernetes 编排云原生工作负载
+\item 云原生分布式系统中的可观测性
+\item 使用服务网格连接服务
+\item 走向 GitOps
+\end{itemize}
+
+到本章结束时，你将充分理解软件架构中现代云原生趋势如何应用到你的应用当中。
+
+\section{技术要求}
+
+本章的示例需要 Docker 27.2 和 Kubernetes 1.32。
+
+本章涉及的代码已放在 GitHub 上：\href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter18}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter18}。
+
+\section{理解云原生}
+
+虽然可以把现有应用迁移到云中运行，但这样的迁移并不会让应用变成云原生。它只是运行在云中，而架构选择仍然基于本地部署（on-premises）的模式。
+
+\label{idx:1922}
+相比之下，云原生应用天然是分布式的、松耦合且可扩展的。它们不绑定于任何特定的物理基础设施，甚至不需要开发者去考虑具体的基础设施。这类应用通常以 Web 为中心。
+
+在本节中，我们将了解 \textbf{云原生计算基金会}（\textbf{CNCF}）——这个组织维护着我们依赖的许多工具和框架。我们还将探讨把云视为操作系统的理念，然后考察支撑云原生系统的一些关键机制：负载均衡、反向代理和服务发现。
+
+\subsection{云原生计算基金会}
+
+\label{idx:1923}
+\label{idx:1924}
+云原生设计的倡导者之一就是 CNCF，它托管着 Kubernetes 项目。CNCF 汇聚了各种技术，让人们更容易构建独立于云服务商的云原生应用。CNCF 托管的技术及生态系统技术包括以下几类：
+
+\begin{itemize}
+\item 用于可观测性的 \textbf{Fluentd}、\textbf{Jaeger}、\textbf{Prometheus} 和\textbf{ OpenTelemetry }
+\item 用于协调与服务发现的 \textbf{CoreDNS }和\textbf{ etcd }
+\item 用于调度与编排的 \textbf{Kubernetes}、\textbf{KubeEdge} 和\textbf{ wasmCloud }
+\item 用于持续交付的 \textbf{Argo} 和 \textbf{Flux}，以及用于应用自动化的 \textbf{OpenKruise}
+\item 用于应用定义与部署的 \textbf{Dapr}、\textbf{Helm} 和 \textbf{KubeVela}，以及用于镜像构建的 \textbf{Buildpacks}
+\item 用于安全与合规的 \textbf{Falco}、\textbf{Open Policy Agent}、\textbf{Kubescape} 和 \textbf{Kyverno }
+\end{itemize}
+
+云原生应用通常基于应用容器构建，并往往运行在 Kubernetes 平台之上。然而，这并非硬性要求，我们完全可以在 Kubernetes 和容器之外使用许多 CNCF 框架。
+
+\label{idx:1925}
+\label{idx:1926}
+在云原生设计中，我们不再把服务器或虚拟机视为基础，而是把云本身看作操作系统。下一节将探讨这一理念。
+
+\subsection{将云视为操作系统}
+
+\label{idx:1927}
+\label{idx:1928}
+云原生设计的主要特征是把各种云资源当作应用的构建模块。在云原生设计中，很少使用单独的\textbf{虚拟机}（\textbf{VM}）。云原生方法不再以运行在某些实例上的特定操作系统为目标，而是直接以云 API（例如使用 FaaS 时）或 Kubernetes 之类的中间方案为目标。从这个意义上说，云就成了你的操作系统，因为 POSIX API 不再限制你。
+
+此外，由于容器改变了构建和分发软件的方式，如今我们可以不必再去考虑底层硬件基础设施。与此同时，你的软件并非孤立运行，因此仍然需要连接不同的服务、监控它们、控制它们的生命周期、存储数据或传递密钥。这正是 Kubernetes 所提供的，也是它如此流行的原因之一。
+
+你大概能想象到，云原生应用以 Web 和移动端为先。桌面应用也能从加入一些云原生组件中受益，但这种情况较少见。
+
+云原生应用中仍然可以使用硬件和其他低层访问。如果你的工作负载需要使用 GPU 或 FPGA，这不应妨碍你转向云原生。
+
+更重要的是，如果你需要使用别处无法获得的定制硬件，云原生应用也可以在本地部署。因此，这个术语并不局限于公有云，它更多是指一种看待不同资源的思维方式。
+
+\label{idx:1929}
+现在，让我们从把云视为操作系统这一总体理念，转向让分布式应用保持可靠的实用机制。在这里，负载均衡、反向代理和服务发现成为三个关键的构建模块。
+
+\subsection{负载均衡}
+
+\label{idx:1930}
+负载均衡是分布式和云原生应用的重要组成部分。它不仅能把传入的请求分散到一组服务上（这对扩展至关重要），还能帮助提升应用的响应速度和可用性。智能负载均衡器可以收集指标，以便对传入流量的模式作出反应，监控集群中各服务器的状态，并把请求转发到负载更轻、响应更快的节点上，避开当前不健康的节点。
+
+\myGraphic{0.548}{images/B18456_18_01.png}{图 18.1：负载均衡}
+
+负载均衡带来更高的吞吐量和更少的停机时间。通过把请求转发到多台服务器，单点故障被消除，尤其是在使用多个负载均衡器时，例如采用主动-被动（active–passive）方案。
+
+负载均衡器可以用在架构中的任何位置：你可以对来自 Web 的请求、Web 服务器发往其他服务的请求、发往缓存或数据库服务器的请求，以及任何其他符合你需求的请求进行负载均衡。
+
+\begin{myTip}{提示}
+
+引入负载均衡时有几点需要牢记。其中之一是会话保持（session persistence）——确保同一客户的所有请求都发往同一台服务器，以维持会话特有的状态，这样他们精心挑选的粉色细高跟鞋就不会从你电商网站的购物车中消失。会话与负载均衡配合起来可能很棘手：要格外小心，不要混淆会话，否则客户会突然发现自己登录到了别人的账户；无数公司都曾栽在这个错误上，尤其是在把缓存也加入进来的时候。把缓存与负载均衡结合起来是个好主意，只要确保做法正确即可。
+\end{myTip}
+
+\label{idx:1931}
+虽然负载均衡器常用于把流量分散到多台服务器，但有时你需要的只是一个更简单的方案。在这种情况下，可以把反向代理放在服务器前面，作为替代。
+
+\subsection{反向代理与正向代理}
+
+\label{idx:1932}
+如果你只想部署一个服务器实例，那么在它前面加一个服务（而非负载均衡器）也许是个好主意——那就是反向代理。正向代理通常代表发送请求的客户端行事，而反向代理则代表处理这些请求的服务器行事，其名称正源于此。
+
+\myGraphic{0.707}{images/B18456_18_02.png}{图 18.2：正向代理与反向代理}
+
+使用反向代理有多种原因和用途：
+
+\begin{itemize}
+\label{idx:1933}
+\item \textbf{安全性}：你的服务器地址现在被隐藏起来了，而且服务器可以得到代理的\textbf{分布式拒绝服务}（\textbf{DDoS}）防护能力的保护。
+\label{idx:1934}
+\item \textbf{灵活性与可扩展性}：你可以随心所欲地、在任何时候修改隐藏在代理后面的基础设施。
+\item \textbf{缓存}：如果代理可以直接从自己的缓存中返回相同的响应，又何必要去打扰服务器呢？
+\item \textbf{压缩}：压缩数据可以降低所需的带宽，这对网络连接较差的移动用户尤其有用。它还能降低你的网络成本（但很可能会增加计算开销）。
+\item \textbf{安全套接层}（\textbf{SSL}）\textbf{终止}：通过接管后端服务器加解密网络流量的负担，减轻其负载。
+\end{itemize}
+
+\label{idx:1935}
+流行的反向代理包括 NGINX、Traefik、HAProxy、Varnish 和 Caddy。流行的正向代理包括 Squid、Privoxy 和 Tinyproxy。Envoy、NGINX 和 Apache 既可以配置为正向代理模式，也可以配置为反向代理（也称网关）模式。反向代理往往还提供负载均衡能力和 A/B 测试（分流测试）。它们的其中一项能力就是服务发现。下面来看看它如何发挥作用。
+
+\subsection{服务发现}
+
+\label{idx:1936}
+\label{idx:1937}
+顾名思义，\textbf{服务发现}（\textbf{SD}）能够自动检测计算机网络中特定服务的实例。调用方无需硬编码服务应托管所在的域名或 IP，只需将其指向一个服务注册表即可。采用这种方式，你的架构会变得更加灵活，因为现在你使用的所有服务都能被轻松找到。如果你设计的是基于微服务的架构，那么引入 SD 会大有裨益。
+
+SD 有几种实现方式。在客户端 SD 中，调用方直接联系 SD 实例。每个服务实例都有一个注册表客户端，负责注册和注销实例、处理心跳等事务。这种方式虽然相当直接，但要求每个客户端都必须实现 SD 逻辑。Netflix Eureka 就是这种方式中常用的服务注册表的一个例子。
+
+\myGraphic{0.500}{images/B18456_18_03.png}{图 18.3：客户端服务发现}
+
+\label{idx:1938}
+另一种做法是使用服务端 SD。此时仍然存在服务注册表，每个服务实例中也有注册表客户端。不过调用方不再直接联系它，而是连接到负载均衡器（例如 AWS Elastic Load Balancing、Azure Load Balancer 或 Google Cloud Load Balancing），由负载均衡器在将客户端调用分发到特定实例之前，调用服务注册表或使用内置的服务注册表。
+
+\myGraphic{0.751}{images/B18456_18_04.png}{图 18.4：服务端服务发现}
+
+\label{idx:1939}
+这种方式通常通过云负载均衡来实现，又称\textbf{负载均衡即服务}（\textbf{LBaaS}），它屏蔽了预置负载均衡器的复杂性。除了云服务商的负载均衡器之外，NGINX 和 Consul 等工具也能提供服务端发现能力。
+
+客户端发现通常能对负载均衡提供更多控制，但会使客户端实现变得复杂。另一方面，服务端发现简化了客户端实现，却可能引入延迟和单点故障。如何选择取决于系统复杂性、期望的控制程度以及对延迟的敏感度等因素。
+
+SD 还与服务注册密不可分。在自注册中，服务直接与服务注册表交互：启动时将自己加入注册表，关闭时将自己删除。在第三方注册中，服务注册表通过轮询部署环境或订阅事件来注册所有微服务。
+
+\label{idx:1940}
+\label{idx:1941}
+在 C++ 中，SD 的实现可见于 Eclipse \texttt{iceoryx} 库。这是一款开源的\textbf{进程间通信}（\textbf{IPC}）中间件，广泛应用于汽车行业和\textbf{物联网}（\textbf{IoT}），并支持多种操作系统（Linux、macOS、QNX、FreeBSD 和 Windows）。
+
+在 Kubernetes 中，SD 通常由 CoreDNS 提供，它实现了 DNS SD 和 DNS 解析（通过 DNS 查询将域名转换为对应的 IP 地址）。默认情况下，Kubernetes 会自动为 Service 分配形如 \texttt{<service-name>.\allowbreak{}<namespace>.\allowbreak{}svc.\allowbreak{}cluster.\allowbreak{}local} 的名称，为 Pod 分配形如 \texttt{<pod-name>.\allowbreak{}<namespace>.\allowbreak{}pod.\allowbreak{}cluster.\allowbreak{}local} 的名称，其中 \texttt{namespace} 是 Kubernetes 的命名空间。Kubernetes 中用于内部 SD 的默认域名是 \texttt{cluster.\allowbreak{}local}。
+
+现在我们已经知道如何高效地发现和使用服务，接下来看看如何以最佳方式部署它们。
+
+\section{使用 Kubernetes 编排云原生工作负载}
+
+\label{idx:1942}
+Kubernetes 的一些概念已在\emph{第 16 章}\emph{容器}中介绍过。为了保持连贯，这里我们简要回顾一下。Kubernetes 是一个可扩展的开源平台，用于自动化和管理容器应用。它有时也被称作 K8s，因为它以 \emph{K} 开头、以 \emph{s} 结尾，中间有八个字母。
+
+它的设计基于 Borg——Google 内部使用的一套系统。Kubernetes 最初的项目代号是 Project Seven，取自《星际迷航》中友善的角色“九之七”（Seven of Nine），她曾是 Borg 的无人机。Kubernetes 具备的部分特性如下：
+
+\begin{itemize}
+\item 应用自动伸缩
+\item 可配置的网络
+\item 批处理作业执行
+\item 应用的统一升级
+\item 在其之上运行高可用应用的能力
+\item 声明式配置
+\end{itemize}
+
+\label{idx:1943}
+Kubernetes 非常灵活，可以部署在多种环境中。基础设施和架构越复杂，Kubernetes 带来的收益就越大：
+
+\begin{itemize}
+\item 可扩展到大规模集群并高效地均衡工作负载
+\item 在发生故障时自动复制 Pod、重启失败的容器并均衡负载
+\label{idx:1944}
+\item 让定义\textbf{基础设施即代码}（\textbf{IaC}）变得简单，并只需一条命令 \texttt{kubectl} 即可启动新应用
+\item 对基础设施层进行抽象
+\item 支持用于预置和均衡 Pod 的服务网格
+\end{itemize}
+
+然而，Kubernetes 是一个相当复杂的平台，只有经验丰富的专业人士才能真正理解它。聘请这类专家成本高昂，而等你自己的团队摸清所有复杂细节又要耗费很长时间。只有当可扩展性和容错性方面的收益对产品至关重要时，使用 Kubernetes 才划算；否则，其复杂性可能会超过它带来的收益。
+
+要充分利用这套系统，掌握命令行工具是必不可少的——尤其是 \texttt{kubectl}。另一方面，设计良好、构思周到的图形界面和文本界面能够完成大多数常见任务，并在操作系统时提供额外的能力。这类面向 Kubernetes 的界面包括经典的 Kubernetes Dashboard、Portainer（一个通用且易用的 GUI 管理平台，适用于 Docker、Docker Swarm、Kubernetes 和 Podman）、k9s（Kubernetes CLI）、Headlamp（Kubernetes UI），以及 Kubernetes IDE：Monokle、K8Studio、Lens 和 Freelens。
+
+\label{idx:1945}
+Kubernetes 还同时具备内置和第三方调试工具，例如 Telepresence（面向远程 Kubernetes 集群的本地开发环境）、Traceloop（系统调用追踪与可观测性工具）以及 Inspektor Gadget（一套工具和框架，利用 Linux 内核技术\textbf{扩展伯克利数据包过滤器}（\textbf{eBPF}）在 Kubernetes 集群和 Linux 主机上进行数据收集和系统检查）。
+
+\label{idx:1946}
+在探讨部署方案之前，我们先来看看 Kubernetes 集群的典型结构。
+
+\subsection{Kubernetes 结构}
+
+\label{idx:1947}
+你可以使用 MicroK8s、minikube、kind、k3d、K3s、k0s 或 KubeFire 等工具，以及 Docker Desktop、Rancher Desktop 或 Podman Desktop 等应用，在单台机器上运行 Kubernetes。这类配置对开发和测试很有用，但不建议用于生产环境，因为单机集群功能有限，也没有故障转移机制。
+
+Kubernetes 集群的典型规模是六台或更多机器。其中三台机器组成控制平面，另外三台则是工作节点。
+
+\emph{图 18.5} 展示了控制平面和工作节点的各个组件。为简单起见，图中只画了一个控制平面节点和两个工作节点：
+
+\myGraphic{0.920}{images/B18456_18_05.png}{图 18.5：Kubernetes 组件}
+
+\label{idx:1948}
+之所以要求至少三个控制平面节点，是因为这是提供高可用所需的最小数量。单主节点配置仅适用于能够容忍因主节点故障而导致集群停机的工作负载，而关键任务型生产工作负载则需要多主节点集群。也可以让控制平面节点同时充当工作节点，但不提倡这么做，因为这会削弱集群性能、增加延迟，并危及集群的高可用性。
+
+\subsubsection{控制平面}
+
+\label{idx:1949}
+在 Kubernetes 中，你很少直接与单个工作节点交互。相反，所有 API 请求都发往控制平面。控制平面再根据请求决定要采取的操作，然后将指令传达给工作节点。
+
+你可以通过几种方式与控制平面交互：
+
+\begin{itemize}
+\item 使用 \texttt{kubectl} CLI
+\item 使用 Web 仪表盘
+\item 在 \texttt{kubectl} 之外的应用程序内部使用 Kubernetes API
+\end{itemize}
+
+控制平面节点通常运行几个重要组件：
+
+\begin{itemize}
+\item \textbf{API 服务器}：所有集群请求的入口点。
+\item \textbf{调度器}：决定将工作负载放置在何处。
+\item \textbf{etcd}：一个分布式键值存储，保存配置数据、状态数据和元数据。
+\item \textbf{处理特定需求的其他组件}：例如，部署在公有云（如 Canonical Kubernetes 和 Google Cloud Platform）中的 Kubernetes 集群会在控制平面节点上运行云控制器。云控制器与云服务商的 API 交互，以替换故障机器、预置负载均衡器或分配外部 IP 地址。
+\end{itemize}
+
+\subsubsection{工作节点}
+
+\label{idx:1950}
+\label{idx:1951}
+顾名思义，工作节点是运行应用工作负载的机器。它们可以是你本地托管的物理服务器、私有托管的虚拟机，或来自云服务商的虚拟机。
+
+Kubernetes 工作节点同时支持 Linux 和 Windows 操作系统。不过，运行 macOS 的工作节点只能通过虚拟化方式集成，例如使用 \texttt{mac\allowbreak{}OS-vz-Kubelet}——一个直接运行在 macOS 上的虚拟 kubelet，使 Kubernetes 能够直接管理原生的 macOS 工作负载。
+
+集群中的每个工作节点至少运行以下三个程序：
+
+\begin{itemize}
+\label{idx:1952}
+\item 容器运行时（例如 containerd、CRI-O、Docker Engine、\textbf{Mirantis Container Runtime}（\textbf{MCR}）、gVisor 或 Kata Containers），使该机器能够处理应用容器
+\item kubelet，负责接收来自控制平面的请求，并据此管理各个容器
+\item kube-proxy，负责节点级别的网络和负载均衡
+\end{itemize}
+
+\label{idx:1953}
+接下来我们看看在你的组织中部署 Kubernetes 的不同方式。要从中做出选择，需要分析它们各自相关的额外成本与收益。
+
+\subsection{部署 Kubernetes 的可行方案}
+
+\label{idx:1954}
+部署 Kubernetes 的方式之一，是将其直接部署到本地托管的裸金属服务器上，例如使用 Kubernetes 提供的 \texttt{kubeadm} 安装工具。这种方式的一个好处是，对于大规模应用而言，它可能比云服务商提供的方案更便宜。但它有一个主要缺点：每当需要增加节点时，你都得依赖运维人员来提供。
+
+为缓解这一问题，你可以在裸金属服务器之上运行虚拟化设备，例如 OpenStack 或 Xen Orchestra（用于 XCP-ng 或 XenServer 的 Web UI）。这样就可以利用 Kubernetes 内置的云控制器来自动预置所需资源。你依然能同样地控制成本，但手动工作更少。虚拟化会带来一些额外开销，但在大多数情况下，这应当是一笔合理的取舍。
+
+如果你不想自己托管服务器，可以将 Kubernetes 部署在云服务商提供的虚拟机之上运行。这种方式比裸金属更灵活。此外，选择这条路线还能使用一些现成的模板来获得最优配置。
+
+有现成的 Terraform 和 Ansible 模块可用于在主流云平台上构建集群。不过，管理开销也会随之增加，因为集群的运维和升级都由你负责。
+
+最后，主流云厂商还提供了托管服务。在其中一些服务中，你只需为工作节点付费，控制平面则是免费的。
+
+在公有云中运行时，你为什么会选择自托管 Kubernetes 而非托管服务呢？原因之一可能是你需要某个特定版本的 Kubernetes。云服务商在引入更新方面通常有点慢。
+
+\label{idx:1955}
+\label{idx:1956}
+无论哪种情况，要简化部署和管理，你都可以借助自动化工具，例如 Charmed Kubernetes（一套经过精选的 Kubernetes 部署工具集）、\textbf{Kubernetes Operations}（\textbf{kOps}；一款用于自动化安装和管理的工具）、Kubespray（一款用于自动化部署的工具）、Crossplane（一个用于构建云原生控制平面的框架）以及 Cozystack（一个免费的 PaaS 平台和构建云的框架）。Cozystack 还提供容器原生虚拟化，可在通过 KubeVirt 管理和托管的容器内运行虚拟机，从而让遗留应用或混合工作负载迁移到 Kubernetes 环境成为可能。
+
+\subsection{理解 Kubernetes 概念}
+
+Kubernetes 引入了不少概念，初次接触时可能听起来陌生或令人困惑。一旦你了解了它们的用途，就更容易理解 Kubernetes 的特别之处。下面是一些最常见的 Kubernetes 对象：
+
+\begin{itemize}
+\label{idx:1957}
+\label{idx:1958}
+\item \textbf{容器}，具体来说是应用容器，是一种分发和运行单个应用的方法。它包含在任何地方运行未经修改的应用所需的代码和配置。
+\label{idx:1959}
+\label{idx:1960}
+\item \textbf{Pod} 是 Kubernetes 的基本构建块。它是原子的，由一个或多个容器组成。Pod 内的所有容器共享相同的网络接口、卷（如持久存储或 secret）和资源（CPU 与内存）。它们可以通过 \texttt{localhost} 相互通信。
+\label{idx:1961}
+\label{idx:1962}
+\label{idx:1963}
+\label{idx:1964}
+\item \textbf{Deployment}是一种更高层的对象，用于管理 Pod 及其生命周期。它通常管理一组 Pod 副本，支持滚动升级，并在发生故障时管理回滚。正因如此，Kubernetes 应用才能轻松地伸缩和管理生命周期。
+\label{idx:1965}
+\label{idx:1966}
+\item \textbf{DaemonSet}是一种与 Deployment 类似的控制器，因为它也管理 Pod 的分发位置。Deployment 关心的是维持给定数量的副本，而 DaemonSet 则将 Pod 分散到所有工作节点上。其主要用例是在每个节点上运行某个系统级 Service，例如监控或日志代理。
+\label{idx:1967}
+\label{idx:1968}
+\item \textbf{Job} 专为一次性任务而设计。Deployment 中的 Pod 在其内部容器终止时会自动重启，因此适合所有监听网络端口以接收请求的常驻 Service。然而，Deployment 不适合批处理作业，例如缩略图生成这类只需在需要时运行的任务。Job 会创建一个或多个 Pod 并监视它们，直到完成给定任务。当达到指定数量的 Pod 成功终止后，该 Job 即被视为完成。
+\label{idx:1969}
+\label{idx:1970}
+\item \textbf{CronJob} 顾名思义，是在集群内周期性运行的 Job。
+\label{idx:1971}
+\label{idx:1972}
+\item \textbf{Service} 表示在集群内执行的某个特定功能。它们关联有一个网络端点（通常经过负载均衡）。Service 可以由一个或多个 Pod 来承担。Service 的生命周期与众多 Pod 的生命周期相互独立。由于 Pod 是临时的，它们可能随时被创建和销毁。Service 对单个 Pod 进行抽象，以实现高可用性。为便于使用，Service 拥有自己的 IP 地址和 DNS 名称。
+\end{itemize}
+
+\subsection{以声明式方式管理 Kubernetes}
+
+\label{idx:1973}
+我们此前已在 \emph{第 11 章}\emph{持续集成与持续部署}中介绍过声明式与命令式方法的区别。Kubernetes 采用声明式方法。你无需给出关于所需采取步骤的指令，而是提供描述集群期望状态的资源。由控制平面负责分配内部资源，以满足你的需求。
+
+\label{idx:1974}
+可以直接使用命令行来添加资源。这在测试时可能很快捷，但在大多数情况下，你希望对自己创建的资源留有记录。因此，大多数人使用清单文件（manifest），它以代码化的方式描述所需的资源。清单通常是 YAML 文件，但也可以使用 JSON。
+
+下面是一个定义单个 Pod 的示例 YAML 清单：
+
+\begin{codebox}[yaml]
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-server
+  labels:
+    app: tradefair-front
+spec:
+  containers:
+    - name: webserver
+      image: nginx
+      ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+\end{codebox}
+
+第一行是必需的，它声明清单中将使用哪个 API 版本，因为有些资源只在特定的 API 组中可用。这一信息告诉 Kubernetes 如何解释该资源定义。
+
+第二行描述我们正在创建什么资源。接下来是资源的元数据（metadata）和规约（specification）。
+
+在 \texttt{metadata} 中，name 是必需的，因为它是区分一个资源与另一个资源的方式。如果我们想创建另一个同名的 Pod，就会收到一个错误，提示该资源已存在。label 是可选的，在编写选择器时很有用。例如，如果我们想创建一个允许连接到该 Pod 的 Service，就会使用一个匹配 \texttt{app} 标签、其值等于 \texttt{tradefair-front} 的选择器。
+
+\label{idx:1975}
+规约（specification）也是必需的部分，因为它描述资源的实际内容。在我们的示例中，我们列出一个名为 \texttt{webserver} 的容器，使用来自 Docker Hub 的镜像 \texttt{nginx}。由于我们想从外部连接到 NGINX Web 服务器，我们还暴露了服务器所监听的容器端口 \texttt{80}。端口描述中的名称是可选的。
+
+尽管 Pod 是 Kubernetes 中最基本的单元，但在实际部署中你很少直接管理它们。相反，你通常会使用 Deployment，它管理相同的 Pod，并确保始终有期望数量的 Pod 在运行。
+
+这个 Deployment 管理我们的 \texttt{customer} 应用：
+
+\begin{codebox}[yaml]
+apiVersion: v1
+kind: Deployment
+metadata:
+  name: customer-deployment
+  labels:
+    app: customer
+\end{codebox}
+
+接下来，在 \texttt{spec} 部分，我们定义副本（replicas）和选择器（selectors）。Kubernetes 副本是克隆体，使 Kubernetes 能够同时运行多个相同的 Pod，从而实现自愈（如果某个 Pod 失败，Kubernetes 会重新创建它）。Kubernetes 使用选择器，根据标签灵活地选择对象：
+
+\begin{codebox}[yaml]
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: customer
+  template:
+    metadata:
+      labels:
+        app: customer
+\end{codebox}
+
+\label{idx:1976}
+在 Deployment 的 \texttt{template} 部分内部，我们定义要运行的容器。当 \texttt{image\allowbreak{}Pull\allowbreak{}Policy} 设为 \texttt{Never} 时，kubelet 只会使用该节点上已本地缓存（可用）的镜像版本。例如，这种模式可用于开发场景，因为本地容器镜像不会推送到任何容器镜像仓库。这类镜像除了本地构建之外无处可拉取。其他镜像拉取策略选项有 \texttt{If\allowbreak{}Not\allowbreak{}Present} 和 \texttt{Always}：
+
+\begin{codebox}[yaml]
+    spec:
+      containers:
+        - name: customer
+          image: customer:latest
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              protocol: TCP
+              containerPort: 8080
+\end{codebox}
+
+Kubernetes 还支持用探针（probe）来监控应用健康状况。就绪探针（readiness probe）判断应用何时准备好接收流量，而存活检查（liveness check）判断应用何时出现故障并需要重启。因此，健康检查必须足够快，以免 Kubernetes 陷入不断重启 Pod 的循环。在最简单的情况下，应用可以只有一个快速健康检查端点。默认超时时间为一秒：
+
+\begin{codebox}[yaml]
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+\end{codebox}
+
+\label{idx:1977}
+OpenTelemetry Collector 可以通过环境变量进行配置。\texttt{ OTEL\_\allowbreak{}EXPORTER\_\allowbreak{}OTLP\_\allowbreak{}INSECURE} 是 OpenTelemetry 使用的环境变量，用于在发送遥测数据（追踪、指标和日志）时为导出器的 gRPC 连接启用客户端传输安全。在生产环境中，你几乎绝不应该设置 \texttt{OTEL\_\allowbreak{}EXPORTER\_\allowbreak{}OTLP\_\allowbreak{}INSECURE=\allowbreak{}true}。网络（尤其是互联网）上的未加密数据传输使其容易遭受拦截。对于任何外部或生产接收端，务必使用安全连接：
+
+\begin{codebox}[yaml]
+          env:
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://aspire-dashboard-otlp-clusterip:8080
+            - name: OTEL_SERVICE_NAME
+              value: customer
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: "true"
+\end{codebox}
+
+在我们的配置中，遥测数据被发送到 Aspire 仪表盘。它用 C\# 编写，是一个免费开源的 OpenTelemetry 仪表盘，用于按照 OpenTelemetry 标准、借助遥测数据来调试和监控分布式应用，并在单一界面中实时呈现服务及其日志、追踪和指标的全貌。
+
+接下来我们看看 Kubernetes 如何在容器和 Pod 层面增强安全性与隔离。提升 Pod 安全性的一种良好做法，是按照最小权限原则来配置安全上下文（security context）——该原则主张只授予任何实体执行其既定功能所必需的最小访问权限。
+
+因此，Kubernetes 和 Docker 支持将容器文件系统以只读方式挂载，从而通过最小化整个应用的攻击面来强化容器化工作负载。只读根文件系统有助于施行不可变基础设施策略，因为容器只需在已知目录内的挂载卷上写入数据。不可变根文件系统还能阻止恶意二进制文件写入宿主系统，并确保攻击者无法篡改你容器中的可执行文件。
+
+\label{idx:1978}
+不过，应用可能需要将自身状态记录到某处。这可以是一个临时卷，而 Kubernetes 提供了几种临时卷类型。例如，\texttt{emptyDir} 卷就是临时的，因为当 Pod 从节点上移除时，其中的所有数据都会被永久删除。也可以使用 \texttt{emptyDir} 作为半永久存储卷，将日志纳入可观测性管道，因为并非所有应用都会把日志流式输出到标准输出（\texttt{stdout}），而是采用更传统的方式将日志存储在磁盘上：
+
+\begin{codebox}[yaml]
+   securityContext:
+      readOnlyRootFilesystem: true
+    volumeMounts:
+      - mountPath: /var/run
+        name: tmpfs
+volumes:
+  - name: tmpfs
+    emptyDir: {}
+\end{codebox}
+
+其他 Pod 安全最佳实践还包括：以非 root 用户运行容器（\texttt{security\allowbreak{}Context.\allowbreak{}run\allowbreak{}As\allowbreak{}Non\allowbreak{}Root} 和 \texttt{security\allowbreak{}Context.\allowbreak{}run\allowbreak{}As\allowbreak{}User}）、禁止权限提升（\texttt{security\allowbreak{}Context.\allowbreak{}allow\allowbreak{}Privilege\allowbreak{}Escalation}），以及禁用 ServiceAccount 令牌的自动挂载（\texttt{automount\allowbreak{}Service\allowbreak{}Account\allowbreak{}Token}）。
+
+\label{idx:1979}
+此外，容器正越来越多地被用于管理 IoT 或 5G 网络中的外围设备，在这些场景中，维持运行时安全至关重要。运行时安全可以借助以下工具得到增强：KubeArmor（一个云原生运行时安全执行引擎，利用 eBPF 和 Linux 安全模块）、K8TLS（读作 \emph{cattles}；通过检测服务器的\textbf{传输层安全}（\textbf{TLS}）和证书配置来评估其端口安全性）以及 ThreatMapper（一个面向 IDE、CI/CD 管道和集群的\textbf{云原生应用保护平台}（\textbf{CNAPP}））。
+
+\label{idx:1980}
+接下来看 Kubernetes Service，其类型决定了 Service 是可以从外部访问还是仅限内部访问。默认情况下，Kubernetes 会创建一个 \texttt{ClusterIP} 类型的 Service，意味着该服务只能在集群内部访问。
+
+\myGraphic{0.412}{images/B18456_18_06.png}{图 18.6：Kubernetes 中的 ClusterIP Service}
+
+\label{idx:1981}
+\texttt{NodePort} 是将外部流量路由到 Service 的最简单方式。可以通过 \texttt{Node\allowbreak{}IP:Node\allowbreak{}Port} 访问该 Service。它会将 Pod 暴露到集群每个节点上的某个端口。Kubernetes 会在 \texttt{30000}–\texttt{32767} 范围内（默认情况下）分配一个端口，并将其绑定到该 Service。在本例中，我们的 Service 监听节点端口 \texttt{30000}：
+
+\begin{codebox}[yaml]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer
+spec:
+  type: NodePort
+  selector:
+    app: customer
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30000
+\end{codebox}
+
+\label{idx:1982}
+最终得到的配置如 \emph{图 18.7} 所示：
+
+\myGraphic{0.381}{images/B18456_18_07.png}{图 18.7：Kubernetes 中的 NodePort Service}
+
+\label{idx:1983}
+\texttt{Load\allowbreak{}Balancer} 类型的 Service 通过云基础设施中创建的负载均衡器，提供对集群内应用的访问。这类 Service 会自动为应用分配一个外部 IP 地址，并将传入流量分发到多个应用 Pod 上，从而提供高可用性、容错能力和可扩展性。不过，它依赖于云服务提供商的原生解决方案。这个 Kubernetes Service 是为 MicroK8s（一个轻量级 Kubernetes 发行版）中的 NGINX Ingress Controller 定义的：
+
+\begin{codebox}[yaml]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress
+  namespace: ingress
+spec:
+  selector:
+    name: customer-ingress-microk8s
+  type: LoadBalancer
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+\end{codebox}
+
+\emph{图 18.8} 展示了这一概念：
+
+\myGraphic{0.409}{images/B18456_18_08.png}{图 18.8：Kubernetes 中的负载均衡器 Service}
+
+\label{idx:1984}
+\texttt{Ingress} 是一种 Kubernetes 资源，用于管理对集群内 Service 的外部访问，并充当智能路由器。在下面的配置中，所有 HTTP 流量都经过监听端口 \texttt{8080} 的 \texttt{customer} Service：
+
+\begin{codebox}[yaml]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: customer-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: customer.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: customer
+                port:
+                  number: 8080
+\end{codebox}
+
+\label{idx:1985}
+\emph{图 18.9} 展示了 \texttt{Ingress} 如何将流量路由到集群内的 Service：
+
+\myGraphic{0.713}{images/B18456_18_09.png}{图 18.9：Kubernetes 中的 Ingress 控制器}
+
+\texttt{External\allowbreak{}Name} 类型的 Service 为位于 Kubernetes 集群外部的服务器定义 DNS \textbf{规范名称}（\textbf{CNAME}）记录：
+
+\myGraphic{0.406}{images/B18456_18_10.png}{图 18.10：Kubernetes 中的 ExternalName Service}
+
+\label{idx:1986}
+无头（headless）Service 没有集群 IP 地址，而是为匹配指定选择器的每个 Pod 分别提供 DNS 记录。这样一来，应用无需经过负载均衡即可直接访问每个 Pod，这对于数据库或消息处理系统等需要直接访问特定实例的分布式系统非常有用。
+
+\myGraphic{0.419}{images/B18456_18_11.png}{图 18.11：Kubernetes 中的无头 Service}
+
+\label{idx:1987}
+此外，随着部署规模的增长，如果始终需要根据不同的环境或部署来调整静态的 Kubernetes manifest，那么使用它们很快就会变得十分繁琐。于是，生成式工具迅速涌现，其中最著名的是基于 Go 模板引擎的 Helm 和 Helmfile，它们可以从声明式规格动态生成 Kubernetes manifest。Helm 将应用组织为 chart（用 YAML 编写、并穿插着 Go 模板引擎指令的 Helm chart），并在 Kubernetes 上部署打包好的应用。而 Helmfile 则以声明式规格包装 Helm chart，把多个 chart 组合起来，在 Kubernetes 环境中创建一个可管理的、完整的部署产物。得益于这种范式，通常只需要修改几个参数，就能部署一个应用，而不必再编写另一份 Kubernetes manifest。
+
+这些工具的替代方案有 Skaffold（便于持续开发）、Kustomize（定制 Kubernetes 对象）、Grafana Tanka（由 Jsonnet 语言驱动的配置工具）、Kapitan（通用的模板化配置管理工具）、cdk8s（用于定义 Kubernetes 应用和可复用抽象的软件开发框架）以及 Helmwave（用于部署 Helm chart 的工具）。
+
+\label{idx:1988}
+最后，虽然存在用于与 Kubernetes REST API 交互的客户端库，但它们并未被广泛使用。对于静态类型语言而言，这很可能是因为它们需要重新编译程序，使得任何配置变更都变得不透明。如果没有程序的源代码，甚至不去反汇编它，通常就无法确切判断究竟应用了哪份 Kubernetes manifest。
+
+\subsection{Kubernetes 网络}
+
+\label{idx:1989}
+\label{idx:1990}
+\label{idx:1991}
+Kubernetes 通过 \textbf{容器网络接口}（\textbf{CNI}）支持可插拔的网络架构，CNI 是一个用于在 Linux 容器中配置网络接口的框架。目前存在多种 CNI 插件，例如 Cilium、Calico、Flannel、Weave Net、AWS VPC、Azure CNI、GKE 和 Terway，可根据需求选用。
+
+\myGraphic{0.920}{images/B18456_18_12.png}{图 18.12：Kubernetes 网络}
+
+无论你选择哪个插件，有些概念都是通用的。以下是典型的网络场景。
+
+\subsubsection{容器间通信}
+
+\label{idx:1992}
+\label{idx:1993}
+单个 Pod 可以承载多个不同的容器。由于网络接口绑定到 Pod 而非容器，因此每个容器都在同一个 Linux 网络命名空间中运行。这意味着各个容器可以通过 Linux 回环网络互相寻址。这类虚拟网络接口用于在系统内部发送网络数据，例如发往地址 \texttt{127.0.0.1}（\texttt{localhost}）。
+
+\myGraphic{0.920}{images/B18456_18_13.png}{图 18.13：Kubernetes 容器间通信，以及实现跨节点 Pod 间通信的覆盖网络}
+
+\label{idx:1994}
+严格来说，容器并不是相互隔离的盒子。它们是利用 Linux 内核的两个特性——命名空间（namespaces）和 \textbf{控制组}（\textbf{cgroups}）——运行的普通进程，这两个特性分别提供进程隔离和资源管理。这些 Linux 特性在 \emph{第 16 章} \emph{容器} 中已有介绍。
+
+Linux 命名空间是一项内核特性，它在单个 Linux 主机内，从操作系统层面隔离进程 ID、网络和文件系统等系统资源，以分隔不同的进程组。因此，在容器之间，\texttt{IPC} 命名空间为进程间通信提供了一层支持，\texttt{UTS} 命名空间为使用同一主机名提供了一层支持，\texttt{network} 命名空间则为使用同一网络协议栈提供了一层支持。因此，同一个 Pod 中的容器可以通过 \texttt{localhost} 相互通信。
+
+\label{idx:1995}
+\label{idx:1996}
+由于端口空间共享，同一个 Pod 中的容器不能绑定到相同的端口号；而其他 Pod 中的容器拥有各自的网络接口和端口空间，从而消除了不同 Pod 之间的端口冲突。
+
+\begin{myNotic}{注意}
+
+更深入地看网络的技术细节，网络套接字通过将 IP 地址和端口号组合成 \texttt{IP:port} 的形式来寻址，这种组合称为唯一的 \emph{套接字地址}。就 Pod 而言，这里指的是内部 \emph{唯一} 的 IP 地址 \texttt{127.0.0.1}。\texttt{localhost} 的 IPv4 范围在 \texttt{127.\allowbreak{}0.\allowbreak{}0.\allowbreak{}0/\allowbreak{}8}（CIDR 记法）地址段中包含 16,777,216 个 IP 地址，它们被保留用于回环，也就是说，它会将流量路由回本地机器，而不会送到其他机器。尽管该地址段中的任何地址都可用于回环，但标准且最常用的地址是 \texttt{127.0.0.1}。事实上，命名空间中会创建多个这样相同但相互隔离的虚拟回环网络接口，将 Linux 中的进程容器化提升到了一个全新的水平。
+\end{myNotic}
+
+\subsubsection{Pod 间通信}
+
+\label{idx:1997}
+\label{idx:1998}
+每个 Pod 都会被分配一个唯一且仅在集群内部有效的内部 IP 地址。一旦 Pod 被删除，该地址便不再保留。当某个 Pod 知道另一个 Pod 的地址时，就能连接到后者暴露的端口，因为它们共享同一个扁平网络。Pod 网络由 kubelet 使用 CNI 处理。在这种通信模型中，你可以把 Pod 看作承载容器的虚拟机。
+
+\begin{myNotic}{注意}
+
+默认情况下并不提供 Pod 之间的隔离。Kubernetes 命名空间提供了一种组织和划分资源范围的机制，但它们本身并不会阻止某个命名空间中的 Pod 与另一个命名空间中的 Pod 通信。它们将集群内的资源划分为逻辑单元，例如开发环境和生产环境。默认情况下，Kubernetes 资源创建在名为 \texttt{default} 的默认命名空间中。若要实现 Pod 隔离，则需要配置其他资源，例如网络策略（network policy）。
+\end{myNotic}
+
+\subsubsection{Pod 与 Service 之间的通信}
+
+\label{idx:1999}
+\label{idx:2000}
+Pod 与 Service 之间的通信是集群内最常用的通信场景。每个 Service 都会被分配独立的 IP 地址和 DNS 名称，从而能被其他 Pod 发现。Service 网络由 kube-proxy 处理，它会均衡流量负载，并根据 Service 选择器将客户端请求路由到合适的模块。与 Pod 不同，Service 不是创建或分配到单个节点上的，而是集群范围的。
+
+\subsubsection{外部与内部之间的通信}
+
+\label{idx:2001}
+\label{idx:2002}
+外部流量通常通过负载均衡器进入集群。这些负载均衡器要么绑定到、要么由特定的 Service 或 ingress 控制器处理。当对外暴露的 Service 来处理流量时，其行为类似于 Pod 与 Service 之间的通信。而使用 ingress 控制器时，你还能获得额外功能，例如路由、可观测性或高级负载均衡。Ingress 路由可以基于主机，也可以基于路径。
+
+\subsection{采用 Kubernetes 之前需要考虑什么}
+
+\label{idx:2003}
+在组织内部引入 Kubernetes 需要一定的投入。Kubernetes 带来了许多好处，例如自动扩展、自动化和各种部署场景。然而，这些好处未必足以证明必要投入是值得的。
+
+这种投入涉及几个方面：
+
+\begin{itemize}
+\item \textbf{基础设施成本}：运行控制平面和工作节点的相关成本可能相对较高。此外，如果你想使用各种 Kubernetes 扩展，例如 GitOps 或服务网格（后文会介绍），成本还会上升。它们同样需要额外的资源来运行，并会在应用常规服务之上增加更多开销。除了节点本身，你还应考虑其他成本。某些 Kubernetes 特性在部署到受支持的云服务提供商时效果最佳。这意味着，要想从这些特性中获益，你必须走以下路线之一：
+
+\begin{itemize}
+\item 将工作负载迁移到专门受支持的云上
+\item 为你选择的云服务提供商自行实现驱动
+\item 将你的本地部署基础设施迁移到支持 API 的虚拟化环境，例如 VMware vSphere 或 OpenStack
+\end{itemize}
+\item \textbf{运维成本}：Kubernetes 集群及相关 Service 需要维护。尽管应用本身的维护工作减少了，但这一好处会被维持集群运行的成本略微抵消。
+\label{idx:2004}
+\item \textbf{学习成本}：整个产品团队都必须学习新概念。即便你有一个专门的平台团队为开发者提供易用的工具，开发者仍然需要基本了解自己所做的工作如何影响整个系统，以及应该使用哪个 API。
+\end{itemize}
+
+在决定引入 Kubernetes 之前，请考虑你能否承受它所要求的初期投入。
+
+\section{云原生分布式系统中的可观测性}
+
+\label{idx:2005}
+分布式系统，例如云原生架构中的那些系统，会带来一些独特的挑战。在任意时刻都有数量众多的不同服务在运行，这使得调查各组件的运行状况变得非常不便。
+
+\label{idx:2006}
+在单体系统中，日志记录和性能监控通常就足够了。然而，在分布式系统中，分布式追踪变得不可或缺，因为它让你能够跟踪一个请求在各个服务之间流转的过程，追踪其生命周期。此外，在分布式系统中，即便是日志记录也需要精心设计。不同的组件会产生不同的日志格式。这些日志必须存放在某个地方。若将它们与交付日志的服务放在一起，那么在发生故障时就很难看清全局。另外，由于微服务可能生命周期很短，你会希望将日志的生命周期与提供日志的服务或承载该服务的机器的生命周期解耦。
+
+\label{idx:2007}
+\label{idx:2008}
+在 \emph{第 17 章} \emph{可观测性} 中，我们介绍了统一的日志层如何帮助管理日志。我们还探讨了用于日志记录、监控和追踪的各种专门工具。然而，跨不同工具管理日志、指标和追踪会导致碎片化。这正是 OpenTelemetry 发挥作用之处——它标准化了可观测性数据的收集和导出方式，同时仍允许你自行选择用于日志记录、监控和追踪的不同工具。
+
+\subsection{使用 OpenTelemetry 对应用进行插桩}
+
+\label{idx:2009}
+\label{idx:2010}
+OpenTelemetry Operator（一个 Kubernetes Operator）可自动完成 OpenTelemetry Collector 的部署和管理，后者负责从应用中收集遥测数据。它还能自动对应用进行插桩，无需手动修改代码即可收集遥测数据。Kubernetes Operator 是一种自定义控制器，它用面向应用的知识扩展 Kubernetes API，并自动完成高度复杂的应用及其组件的部署或管理。
+
+然而，OpenTelemetry Operator 不支持为 C++ 服务注入和配置自动插桩。因此，C++ 应用使用 \texttt{opentelemetry-cpp} 库实现手动插桩，该库提供指标（metric）、日志记录器（logger）和追踪器（tracer）的 provider。
+
+\label{idx:2011}
+下面是一个来自 \texttt{metrics.\allowbreak{}cpp} 的示例。OpenTelemetry Collector 同时支持 \textbf{OpenTelemetry 协议}（\textbf{OTLP}）的 HTTP 和 gRPC exporter，用于发送遥测数据。该示例只初始化了 gRPC exporter，它会自动配置：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+namespace otlp_metrics {
+void init_metrics() {
+  const otlp_exporter::OtlpGrpcMetricExporterOptions exporter_options;
+  auto exporter =
+  otlp_exporter::OtlpGrpcMetricExporterFactory::Create(exporter_options);
+  const
+  metrics_sdk::PeriodicExportingMetricReaderOptions reader_options;
+  std::unique_ptr<metrics_sdk::MetricReader> reader{
+      new metrics_sdk::PeriodicExportingMetricReader(std::move(exporter),
+                                                     reader_options)};
+  const auto provider = 
+  std::static_pointer_cast<metrics_api::MeterProvider>(
+      std::make_shared<metrics_sdk::MeterProvider>()
+  );
+  const auto p = 
+  std::static_pointer_cast<metrics_sdk::MeterProvider>(provider);
+  p->AddMetricReader(std::move(reader));
+  metrics_api::Provider::SetMeterProvider(provider);
+}
+\end{codebox}
+
+\label{idx:2012}
+\label{idx:2013}
+用于在一段时间内进行数值测量的主要 OpenTelemetry 指标类型有计数器（counter）、仪表（gauge）和直方图（histogram）。计数器既可以是整数类型 \texttt{uint64\_t}，也可以是浮点类型 \texttt{double}：
+
+\begin{codebox}[cpp]
+opentelemetry::nostd::unique_ptr<metrics_api::Counter<uint64_t>>
+init_uint64_counter(const std::string &name) {
+  const auto provider = metrics_api::Provider::GetMeterProvider();
+  const opentelemetry::nostd::shared_ptr<metrics_api::Meter> meter =
+      provider->GetMeter(name);
+  return meter->CreateUInt64Counter(name + "_counter");
+}
+}  //namespace otlp_metrics
+\end{codebox}
+
+\label{idx:2014}
+接下来，我们看一个来自 \texttt{logger.\allowbreak{}cpp} 的示例，它初始化了 OpenTelemetry 日志记录器。这样就能同时将 OpenTelemetry 日志发送到终端和 collector，这在 collector 不可用时进行调试也很有用：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+namespace otlp_logger {
+void init_logger() {
+  const otlp_exporter::OtlpGrpcLogRecordExporterOptions logger_options;
+  auto exporter =
+  otlp_exporter::OtlpGrpcLogRecordExporterFactory::Create(logger_options);
+  auto processor =
+  logs_sdk::SimpleLogRecordProcessorFactory::Create(std::move(exporter));
+  std::vector<std::unique_ptr<logs_sdk::LogRecordProcessor>> processors;
+  processors.push_back(std::move(processor));
+  auto context = 
+  logs_sdk::LoggerContextFactory::Create(std::move(processors));
+  const std::shared_ptr<logs_api::LoggerProvider> provider =
+      logs_sdk::LoggerProviderFactory::Create(std::move(context));
+      logs_api::Provider::SetLoggerProvider(provider);
+}
+\end{codebox}
+
+\label{idx:2015}
+\label{idx:2016}
+要记录日志条目，首先必须从 OpenTelemetry provider 获取一个 \texttt{logger} 实例，如下所示：
+
+\begin{codebox}[cpp]
+opentelemetry::nostd::shared_ptr<logs_api::Logger> get_logger(
+const std::string &name
+) {
+  const auto provider = logs_api::Provider::GetLoggerProvider();
+  return provider->GetLogger(name + "_logger");
+}
+}  //namespace otlp_logger
+\end{codebox}
+
+\label{idx:2017}
+现在来看一个来自 \texttt{tracer.\allowbreak{}cpp} 的示例。OpenTelemetry tracer provider 的实现与指标和日志并没有太大区别：
+
+\begin{codebox}[cpp]
+namespace otlp_tracer {
+void init_tracer() {
+  auto exporter =
+      opentelemetry::exporter::otlp::OtlpGrpcExporterFactory::Create();
+  auto processor =
+      trace_sdk::SimpleSpanProcessorFactory::Create(std::move(exporter));
+  const std::shared_ptr<opentelemetry::trace::TracerProvider> provider =
+      trace_sdk::TracerProviderFactory::Create(std::move(processor));
+  trace_api::Provider::SetTracerProvider(provider);
+  context::propagation::GlobalTextMapPropagator::SetGlobalPropagator(
+opentelemetry::nostd::shared_ptr<context::propagation::TextMapPropagator>(
+          new trace_api::propagation::HttpTraceContext()
+));
+}
+opentelemetry::nostd::shared_ptr<trace_api::Tracer>
+get_tracer(const std::string &name) {
+  const auto provider = trace_api::Provider::GetTracerProvider();
+  return provider->GetTracer(name + "_tracer");
+}
+\end{codebox}
+
+前面的代码同时初始化了 tracer provider 和 propagator。在实际系统中，上下文传播至关重要：它跨服务携带请求特定的元数据，以便将各个 span 关联到单一 trace 中。
+
+\label{idx:2018}
+\label{idx:2019}
+OpenTelemetry 库提供了 \texttt{Http\allowbreak{}Text\allowbreak{}Map\allowbreak{}Carrier} 模板类，用于通过 HTTP 头读写 trace 上下文。但它与 Drogon 框架不兼容，因为二者对头部的内部约定不同：OpenTelemetry 以首字母大写的形式存储它们（例如 \texttt{Trace\allowbreak{}Parent} 和 \texttt{Trace\allowbreak{}State}），而 Drogon 使用小写形式（\texttt{traceparent}、\texttt{tracestate}）。
+
+为了解决这个问题，下面的 \texttt{Http\allowbreak{}Text\allowbreak{}Map\allowbreak{}Carrier} 类充当适配器，使 Drogon 框架能够传播 HTTP 请求头：
+
+\begin{codebox}[cpp]
+class HttpTextMapCarrier final : 
+public context::propagation::TextMapCarrier {
+public:
+  explicit HttpTextMapCarrier(const drogon::SafeStringMap<std::string> 
+  &headers): headers_(headers) {}
+  [[nodiscard]] opentelemetry::nostd::string_view
+  Get(const opentelemetry::nostd::string_view key) const noexcept override {
+    if (const std::string key_ = key.data(); headers_.contains(key_)) {
+      return headers_.at(key_);
+    }
+    return "";
+  }
+  void Set(const opentelemetry::nostd::string_view,
+           const opentelemetry::nostd::string_view) noexcept override {
+    //服务器不需要
+  }
+  const drogon::SafeStringMap<std::string> &headers_;
+};
+\end{codebox}
+
+\label{idx:2020}
+\label{idx:2021}
+适配器就位后，便可从传播过来的 HTTP 请求头中提取父上下文来创建 trace 上下文。随后基于提取出的父上下文创建当前上下文。服务端使用的 \texttt{Extract} 方法与客户端使用的 \texttt{Inject} 方法配对使用，以便将上下文随请求一起通过网络连接传播：
+
+\begin{codebox}[cpp]
+opentelemetry::nostd::shared_ptr<trace_api::Span> get_http_request_span(
+    const drogon::HttpRequestPtr &request,
+    const opentelemetry::nostd::shared_ptr<trace_api::Tracer> &tracer,
+    const std::string &name) {
+  trace_api::StartSpanOptions options;
+  options.kind = trace_api::SpanKind::kServer;
+  const HttpTextMapCarrier carrier{request->headers()};
+  const auto propagator =
+      context::propagation::GlobalTextMapPropagator::GetGlobalPropagator();
+  //从 HTTP 头中提取上下文
+  auto current_ctx = context::RuntimeContext::GetCurrent();
+  const auto new_context = propagator->Extract(carrier, current_ctx);
+  options.parent = trace_api::GetSpan(new_context)->GetContext();
+\end{codebox}
+
+\emph{客户端}和 \emph{服务端}这两个术语仅指特定交互中的角色。一个服务在发送请求时充当客户端，在接收请求时充当服务端。这一概念让许多人感到困惑。
+
+\label{idx:2022}
+每个 trace 和 span 都有相应的标识符：\texttt{trace\_id} 和 \texttt{span\_id}。在创建第一个 span 时，OpenTelemetry 库会生成这些标识符，将它们存储在内存中，然后导出到外部系统。每个新 span 都会链接到一个 trace，并在存在父 span 时链接到父 span，从而构成一条完整的链条。
+
+\label{idx:2023}
+trace 上下文通过 W3C Trace Context 规范定义的两个标准化 HTTP 头来传递：
+
+\begin{itemize}
+\item \texttt{traceparent}：一个必需的头部，包含协议版本、父级的 \texttt{trace\_id} 和 \texttt{span\_id}
+\item \texttt{tracestate}：一个可选的头部，携带额外的厂商特定信息
+\end{itemize}
+
+\texttt{traceparent} 头部具有特定的格式。它看起来是这样的：\texttt{00-95c05e0080dd609cf8434c32053fbea1-00077415d33cdca4-01}。
+
+\texttt{traceparent} 头部由四部分组成，各部分用连字符分隔，具体说明如下：
+
+\begin{itemize}
+\item \textbf{版本}（\texttt{00}）：格式版本
+\item \textbf{Trace ID}（\texttt{95c05e0080dd609cf8434c32053fbea1}）：一个 32 字符的十六进制字符串，唯一标识整个 trace
+\item \textbf{父 span ID}（\texttt{00077415d33cdca4}）：一个 16 字符的十六进制字符串，标识直接父 span
+\item \textbf{Trace flags}（\texttt{01}）：一个单字节，保存 trace 选项
+\end{itemize}
+
+\label{idx:2024}
+OpenTelemetry 定义了语义约定（semantic convention），也称为语义属性（semantic attribute），用于为不同种类的操作和数据提供通用名称。语义约定意味着在整个代码库、库和平台上，为 trace、指标、日志、profiles 和资源遵循一套标准化、通用的命名方案。下面展示了如何在从 HTTP 头中提取出父上下文后启动一个 span，并使用语义属性来描述该请求：
+
+\begin{codebox}[cpp]
+  //使用从 HTTP 头中提取的父上下文启动 span
+  auto span = tracer->StartSpan(
+      name,
+      {{semconv::http::kHttpRequestMethod, request->method()},
+       {semconv::url::kUrlPath, request->path()},
+       {semconv::url::kUrlQuery, request->query()},
+       {semconv::network::kNetworkLocalAddress, request->getLocalAddr().toIp()},
+       {semconv::network::kNetworkLocalPort,
+        std::to_string(request->getLocalAddr().toPort())},
+       {semconv::network::kNetworkPeerAddress, request->getPeerAddr().toIp()},
+       {semconv::network::kNetworkPeerPort,
+        std::to_string(request->getPeerAddr().toPort())}},
+      options);
+\end{codebox}
+
+\label{idx:2025}
+\label{idx:2026}
+除这些语义属性之外，OpenTelemetry trace 还可以包含自定义属性。与只处理必要 HTTP 头的上下文传播不同，\texttt{span} 属性可以保留所有头部：
+
+\begin{codebox}[cpp]
+  for (const auto &[key, value] : request->headers()) {
+    span->SetAttribute("http.header." + key, value);
+  }
+  return span;
+}
+} //namespace otlp_tracer
+\end{codebox}
+
+追踪完成插桩后，下一步就是配置遥测数据的导出方式。exporter 既可以通过显式设置属性来配置，也可以通过环境变量来配置。最重要的环境变量如下：
+
+\begin{itemize}
+\item \texttt{OTEL\_\allowbreak{}EXPORTER\_\allowbreak{}OTLP\_\allowbreak{}ENDPOINT}：适用于任何信号类型的基础端点 URL，例如 \texttt{http:/\allowbreak{}/\allowbreak{}otel.\allowbreak{}collector:4317/\allowbreak{}}
+\item \texttt{OTEL\_\allowbreak{}SERVICE\_\allowbreak{}NAME}：我们应用的名称
+\end{itemize}
+
+\label{idx:2027}
+一旦 meter、logger 和 tracer 都设置好，就可以向已插桩的函数中添加指标、日志和 span。\texttt{std::\allowbreak{}source\_\allowbreak{}location::\allowbreak{}current(\allowbreak{})\allowbreak{}} 函数返回一个对象，其中包含表示调用位置的值，用于标注日志记录。span 在 \texttt{get\_\allowbreak{}http\_\allowbreak{}request\_\allowbreak{}span} 函数中启动，然后通过在当前作用域中调用 \texttt{With\allowbreak{}Active\allowbreak{}Span} 函数将其标记为活动状态。\texttt{main.cpp} 中的以下代码演示了这一点：
+
+\begin{codebox}[cpp]
+const auto tracer = otlp_tracer::get_tracer("http-server");
+auto span = otlp_tracer::get_http_request_span(
+     request, tracer, "customer/handle_get/outer");
+auto scope = opentelemetry::nostd::shared_ptr<trace_api::Tracer>::element_type::WithActiveSpan(span);
+const auto location = std::source_location::current();
+const auto ctx = span->GetContext();
+logger->Info("handling HTTP request to " + request->path(),
+             common::MakeAttributes({{"file", location.file_name()},
+                                     {"line", location.line()}}),
+             ctx.trace_id(), ctx.span_id(), ctx.trace_flags(),
+             std::chrono::system_clock::now());
+span->AddEvent("Processing request");
+handle_get(request, get_responder, std::move(callback));
+span->End();
+\end{codebox}
+
+\label{idx:2028}
+这里使用的日志函数是可变参数函数模板，可以接受不同类型的实参：\texttt{std::\allowbreak{}string\_\allowbreak{}view}、\texttt{Span\allowbreak{}Context}、\texttt{SpanId}、\texttt{TraceId}、\texttt{Trace\allowbreak{}Flags}、\texttt{System\allowbreak{}Timestamp}、\texttt{std::\allowbreak{}chrono::\allowbreak{}system\_\allowbreak{}clock::\allowbreak{}time\_\allowbreak{}point}、\texttt{Key\allowbreak{}Value\allowbreak{}Iterable} 以及 \texttt{std::\allowbreak{}span<std::\allowbreak{}pair<std::\allowbreak{}string\_\allowbreak{}view,\allowbreak{} Attribute\allowbreak{}Value>>}。\texttt{Attribute\allowbreak{}Value} 类是一种变体类型，充当诸如 \texttt{bool}、\texttt{int32\_t}、\texttt{uint32\_t}、\texttt{int64\_t}、\texttt{uint64\_t}、\texttt{double} 和 \texttt{const char *} 等类型的通用类。
+
+\label{idx:2029}
+\label{idx:2030}
+OpenTelemetry 日志记录可以具有属性，这些属性用于分析日志记录并对其进行过滤。在截图中，\textbf{file} 和 \textbf{line} 属性对应于将日志条目发送到 collector 的 C++ 文件。其他属性还包括记录时间和当前 trace 上下文，它们分别对应 \textbf{Timestamp} 和 \textbf{Trace} 列：
+
+\myGraphic{0.920}{images/B18456_18_14.png}{图 18.14：Aspire 仪表板上应用的 OpenTelemetry 日志}
+
+\begin{myTip}{提示}
+想查看这张图片的高分辨率版本？请在下一代 Packt Reader 中打开本书，或在 PDF/ePub 版本中查看。
+
+购买本书即可获得 \textbf{下一代 Packt Reader} 以及本书的 \textbf{免费 PDF/ePub 版本}。扫描二维码，或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按书名查找本书。请仔细核对所显示的版本，确保获取的是正确的那一版。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/01.png}\end{center}
+\end{myTip}
+
+\label{idx:2031}
+下一张截图展示了一些 trace 属性，不过这个列表相当长：
+
+\myGraphic{0.920}{images/B18456_18_15.png}{图 18.15：Aspire 仪表板上应用的 OpenTelemetry trace}
+
+\label{idx:2032}
+\label{idx:2033}
+在更复杂的场景中，trace 往往包含嵌套的 span，这由父 span ID 的存在来体现，其中子 span 表示子操作。它在 \texttt{responder.\allowbreak{}h} 中是这样呈现的：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+template <typename Responder>
+void handle_get(
+    const drogon::HttpRequestPtr &request, Responder &responder,
+    std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
+    auto span = otlp_tracer::get_tracer("http-server")
+                ->StartSpan("customer/handle_get/inner");
+    auto scope = opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer>::element_type::WithActiveSpan(span);
+\end{codebox}
+
+\label{idx:2034}
+span 处于活动状态后，便可以将当前上下文与日志条目关联起来，在使用 OpenTelemetry 分析服务端和客户端上的事件时正需要这样做，因为事件可以被过滤和追踪：
+
+\begin{codebox}[cpp]
+  span->AddEvent("get optional parameter 'name'");
+  const auto ctx = span->GetContext();
+  const auto logger = otlp_logger::get_logger("responder");
+  auto location = std::source_location::current();
+  logger->Info("get optional parameter 'name'",
+               common::MakeAttributes(
+                   {{"file", location.file_name()},
+                    {"line", location.line()}}),
+               ctx.trace_id(), ctx.span_id(), ctx.trace_flags(),
+               std::chrono::system_clock::now());
+  auto name = request->getOptionalParameter<std::string>("name");
+\end{codebox}
+
+务必结束已启动的 span：
+
+\begin{codebox}[cpp]
+  if (!name) {
+    const auto err = "missing value for 'name'";
+    span->AddEvent(err);
+    span->SetStatus(opentelemetry::trace::StatusCode::kError)
+    location = std::source_location::current();
+    logger->Error(err,
+                  common::MakeAttributes({{"file", location.file_name()},
+                                          {"line", location.line()}}),
+                  ctx.trace_id(), ctx.span_id(), ctx.trace_flags(),
+                  std::chrono::system_clock::now());
+    responder.respond(drogon::k400BadRequest, Json::Value(err),
+                      std::move(callback));
+    span->End();
+    return;
+  }
+\end{codebox}
+
+\label{idx:2035}
+\label{idx:2036}
+最后，我们来看看指标在实际中的样子。与 URL 查询参数 \texttt{name} 关联的 \texttt{handle\_\allowbreak{}get} 计数器用于统计对 \texttt{handle\_\allowbreak{}get} 函数的成功调用次数：
+
+\begin{codebox}[cpp]
+  const auto counter = otlp_metrics::init_uint64_counter("handle_get");
+  const std::map<std::string, std::string> labels = 
+  {{"name", name.value()}};
+  const auto attributes = common::KeyValueIterableView{labels};
+  counter->Add(1, attributes);
+\end{codebox}
+
+OpenTelemetry 指标带有属性，这使得按维度筛选和分析指标成为可能。在下面的示例中，\texttt{handle\_\allowbreak{}get} 计数器的值通过 \texttt{name} URL 查询参数加以区分：
+
+\myGraphic{0.857}{images/B18456_18_16.png}{图 18.16：应用在 Aspire 仪表板上的 OpenTelemetry 指标}
+
+\label{idx:2037}
+\label{idx:2038}
+OpenTelemetry 信号（追踪、指标、日志和 baggage）可以通过添加不同类型的属性来丰富：
+
+\begin{codebox}[cpp]
+  span->AddEvent("return response");
+  location = std::source_location::current();
+  logger->Info("return response to '" + name.value() + "'",
+               common::MakeAttributes(
+                   {{"file", location.file_name()}, 
+                    {"line", location.line()}}),
+               ctx.trace_id(), ctx.span_id(), ctx.trace_flags(),
+               std::chrono::system_clock::now());
+  const auto [code, response] = responder.prepare_response(name.value());
+  responder.respond(code, response, std::move(callback));
+  span->SetStatus(opentelemetry::trace::StatusCode::kOk);
+  span->End();
+}
+\end{codebox}
+
+\label{idx:2039}
+有了手动埋点，C++ 应用现在可以通过 OpenTelemetry 发出一致的遥测数据。
+
+\begin{myNotic}{注意}
+
+\label{idx:2040}
+像 OpenTelemetry 这样的云原生可观测性工具提供了丰富的遥测数据，为创建诸如 Testkube 之类的测试框架铺平了道路。Testkube 是一个面向云原生应用的测试编排与执行框架，它简化了 Kubernetes 应用的测试，可与多个平台和工具集成，并能利用多种测试框架。
+\end{myNotic}
+
+\section{使用服务网格连接服务}
+
+\label{idx:2041}
+微服务和云原生设计会带来各自的一系列问题。即便服务数量有限，不同服务之间的通信、可观测性、调试、限流、认证、访问控制以及 A/B 测试也可能颇具挑战。随着服务数量增加，上述需求的复杂度也随之上升。
+
+服务网格正是在这里登场。本质上，服务网格牺牲一部分资源（用于运行控制平面和边车所需的资源），来换取针对上述挑战的自动化、集中式管控方案。
+
+\subsection{引入服务网格}
+
+\label{idx:2042}
+传统上，上述所有需求过去都是在每个应用自身内部编码实现的。而事实证明，其中许多需求在许多不同的应用之间是共通的。当你的应用由众多服务组成时，为所有这些服务添加新功能的成本就会变得高昂。有了服务网格，你就可以改从单一位置来控制这些功能。服务网格把这些功能抽象到一个专门的基础设施层，无需改动应用代码就能提供安全性、可靠性、流量管理和可观测性。
+
+由于容器化工作流已经抽象了一部分运行时和一部分网络，服务网格把这种抽象又提升到了另一个层次。这样一来，容器内的应用只需感知 OSI 网络模型中应用层上发生的事情，而较低层次则由服务网格处理。虽然我们常用理论上更详尽、七层的 OSI 模型来解释这一点，但四层的 TCP/IP 模型更为实用、更为简单，并且是互联网的技术基础。
+
+\myGraphic{0.789}{images/B18456_18_17.png}{图 18.17：OSI 模型与 TCP/IP 模型对比}
+
+搭建服务网格使你能对网络流量进行细粒度控制，并让你更深入地洞察这些流量。依赖关系变得可见，流量的流向、形态和数量也一目了然。
+
+不仅流量本身由服务网格处理，断路器、限流或重试等其他常见模式也不必再由每个应用各自实现并单独配置。这些功能同样可以外包给服务网格。类似地，A/B 测试或金丝雀发布也是服务网格能够胜任的用例。
+
+\label{idx:2043}
+如前所述，服务网格的好处之一是控制力更强。其架构通常由一个可管理的边缘代理（处理外部流量）和若干内部代理（通常以边车形式部署在每个微服务旁边）组成。这样一来，网络策略就可以写成代码，并与所有其他配置一起集中存储在同一处。你不再需要为想要连接的两个服务分别开启双向 SSL/TLS 加密，只需在服务网格配置中启用一次该功能即可。
+
+然而，服务网格会增加 CPU 和内存负载，并引入额外的延迟。如果你的服务需要极致性能，最好直接优化通信，而不借助中间代理。如果你目前还是单体应用、刚刚向微服务架构过渡，那就不要立即上马服务网格。可以先从 Tyk、Kong、KrakenD、Gravitee、Apache APISIX 或 Express Gateway 之类的 API 网关入手。先实现日志和监控——之后再来评估你是否需要网格。搭建服务网格需要知识和技能。配置不当会引入漏洞、增加调试难度，并妨碍扩展。
+
+接下来，我们将介绍一些服务网格解决方案。
+
+\subsection{服务网格解决方案}
+
+\label{idx:2044}
+这里描述的所有解决方案都采用自托管方式。
+
+\subsubsection{Istio}
+
+\label{idx:2045}
+\label{idx:2046}
+Istio 是一套用 Go 和 C++ 编写的功能强大的服务网格工具集。它通过将 Envoy 代理作为边车容器部署，让你能够连接微服务。由于 Envoy 是可编程的，Istio 控制平面中的配置变更会被传达给所有代理，代理随后会相应地重新配置自身。
+
+\emph{图 18.18} 展示了这种边车架构；每个服务实例都与一个 Envoy 代理（数据平面）配对，而控制平面则负责管理配置、SD 和证书：
+
+\myGraphic{0.864}{images/B18456_18_18.png}{图 18.18：边车模式下的 Istio 服务网格架构}
+
+\label{idx:2047}
+\label{idx:2048}
+除其他职责外，Envoy 代理还负责处理加密和认证。借助 Istio，在服务之间启用 \textbf{双向 TLS}（\textbf{mTLS}）在大多数情况下只需在配置中拨动一个开关。如果你不希望所有服务之间都启用 mTLS，可以只针对特定服务有选择地启用，同时允许其他服务之间进行未加密的通信。
+
+Istio 在可观测性方面也很有帮助。首先，Envoy 代理会导出与 Prometheus 和 OpenTelemetry 兼容的代理级指标。此外还有 Istio 导出的服务级指标和控制平面指标。其次，还有描述网格内流量流转的分布式追踪。Istio 可以把追踪数据提供给不同的后端：Zipkin、Jaeger、Lightstep 和 Datadog。最后，还有 Envoy 访问日志，它以类似 NGINX 的格式显示每一次调用。
+
+你可以使用 Kiali（Istio 服务网格的控制台）来可视化你的网格。这样，你就能配置、验证和排查网格问题，并可视化服务关系图，其中包括是否启用了加密、不同服务之间的流量大小、以及每个服务的健康检查状态等信息。
+
+\label{idx:2049}
+Envoy 是 Istio 的核心。这个服务代理的行为与 NGINX 或 HAProxy 十分相似。主要区别在于它可以动态地重新配置。这个过程通过 API 以编程方式进行，无需修改配置文件、再重新加载守护进程。此外，Envoy 还可以用 WebAssembly（一种沙箱技术）来扩展。Envoy 有两个突出的方面：性能和受欢迎程度。
+
+\label{idx:2050}
+Istio 的作者声称，这个服务网格应当兼容不同的技术。在撰写本书时，文档最完善、集成最深入、测试最充分的当属与 Kubernetes 的集成。其他支持的环境包括本地部署、通用云，以及搭配 Consul 的 Nomad。
+
+\label{idx:2051}
+如果你所在的行业需要关注合规性，例如金融机构须遵守的 \textbf{支付卡行业数据安全标准}（\textbf{PCI DSS}），那么 Istio 可以通过自动化的策略执行、健壮的服务间认证以及全面的流量加密，在这些方面提供帮助。
+
+如果你管理的是一个规模小、结构简单的应用或一个小型 Kubernetes 集群，就不应使用 Istio，因为 Istio 额外的开销和复杂度可能超过它带来的收益。除非你有一支能够应对其复杂搭建与维护的团队，或者你需要它所提供的高级流量管理和遥测能力，否则也不应使用它。
+
+\label{idx:2052}
+如果需要在跨地域分布的多个区域和云之间提供统一的服务网格平面、统一的访问控制与安全策略至关重要，并且需要为跨不同集群的微服务提供统一的流量管理（路由、重试、超时），那么使用 Istio 是合理的。然而，如果你的基础设施不需要冗余的网络连接，或者安全性已通过其他方式解决，那么 Istio 可能就是一个过度设计的方案。
+
+\subsubsection{Linkerd}
+
+\label{idx:2053}
+\label{idx:2054}
+在 Istio 成为服务网格的代名词之前，这个领域是由 Linkerd 代表的。最初的 Linkerd 项目被设计成与平台无关，并以 Java VM 为目标。这意味着它资源占用高，而且常常反应迟缓。较新的版本名为 Linkerd2，用 Go 和 Rust 编写，以解决这些问题。与最初的 Linkerd 不同，Linkerd2 只专注于 Kubernetes。Linkerd2 还与 OpenTelemetry 集成以实现可观测性。
+
+\myGraphic{0.701}{images/B18456_18_19.png}{图 18.19：Linkerd 服务网格架构}
+
+Linkerd2 的各项服务按其功能域划分得清清楚楚，命名也简单直白。控制平面由三个服务组成：identity、destination 和 proxy injector。identity 服务通过基于 TLS 的密码学认证来提供安全的服务身份标识。destination 服务为数据平面代理配置流量路由，以及其他一些行为配置，如按路由的指标、重试和超时。proxy injector 服务则自动向每个新创建的 Pod 注入一个代理容器。
+
+数据平面由边车代理组成，它们拦截服务之间的所有网络流量，自动加密连接，管理重试和超时，并提供指标。
+
+\label{idx:2055}
+\texttt{linkerd-init} 容器会运行 iptables（一个用于配置 Linux 内核防火墙的工具），自动将所有进出的 TCP 流量转发通过代理服务器。
+
+Linkerd2 使用自有的、名为 \texttt{linkerd2-proxy} 的代理，它用 Rust 编写，而不是依赖像 Envoy 这样社区支持更广、标准化程度更高的现有项目。如果你需要更广泛的行业支持，或者需要生态更成熟的代理，就应选择别的工具。Linkerd2 的一个吸引人的特点是，开发它的公司还提供付费支持。
+
+\subsubsection{Consul 服务网格}
+
+\label{idx:2056}
+\label{idx:2057}
+服务网格领域还添了新成员：用 Go 编写的 Consul 服务网格。这是 HashiCorp 的产品，它是一家声誉卓著的云公司，以 Terraform、Vault、Packer、Nomad 和 Consul 等工具而闻名。
+
+\myGraphic{0.741}{images/B18456_18_20.png}{图 18.20：Consul 服务网格架构}
+
+Consul 的架构是分层的，但同一个 Consul agent 服务会扮演不同的角色。控制平面中的 agent 可以以服务器模式或客户端模式运行。
+
+在服务器模式下，由一个领导者维护集群状态、处理所有客户端请求，并将变更复制到跟随者 agent。如果领导者故障，跟随者会进行选举以确立新的领导者，并使用 Raft 共识算法确保数据一致性、防止数据丢失。此外，服务器 agent 存储服务注册表条目，并响应 DNS/HTTP API 查询，从而提供并实现 SD。
+
+\label{idx:2058}
+在客户端模式下，agent 运行在节点上，与服务器节点交互以执行大多数操作，并维护自身的小部分状态。它们没有投票权，也不能成为集群领导者。它们的职责是将本地服务注册到服务器集群、向集群报告节点和服务健康状态，并将 DNS/RPC 请求中继给服务器。
+
+数据平面中的边车代理透明地处理进出服务的连接。
+
+\label{idx:2059}
+与其他解决方案一样，Consul 也具备 mTLS 和流量管理功能。它被宣传为一个多云、多数据中心、多区域的网格。这个服务网格能与不同的平台、数据平面产品和可观测性提供商集成。在撰写本书时，实际情况要低调一些，主要支持的环境和运行时是 Kubernetes、Nomad 和 VM。生产部署应使用 Envoy 代理，测试和开发则可使用内置的 L4 代理。
+
+如果你正考虑为应用使用 Nomad，那么 Consul 服务网格可能是一个极佳的选择，也非常契合，因为两者都是 HashiCorp 的产品。
+
+如果你的系统规模小，且不需要复杂的网络安全或流量管理，就不应使用 Consul 服务网格。对于所需功能已在代码层面实现的简单应用，或者你的基础设施尚未做好准备去承担实现代理服务器和控制平面所带来的额外复杂度，也不推荐使用它。
+
+\section{走向 GitOps}
+
+\label{idx:2060}
+\label{idx:2061}
+我们想在本章讨论的最后一个主题是 GitOps。它是众所周知的 \textbf{持续集成}/\textbf{持续部署}（\textbf{CI}/\textbf{CD}）模式的延伸。也许\emph{延伸}并不是一个恰当的描述。
+
+CI/CD 系统通常力求高度灵活，而 GitOps 则力图将可能的集成数量降到最少。其中两个主要的不变元素是 Git 和 Kubernetes。Git 用于版本控制、发布管理和环境隔离。Kubernetes 则用作标准化且可编程的部署平台。
+
+\myGraphic{0.920}{images/B18456_18_21.png}{图 18.21：GitOps}
+
+GitOps 是一种基础设施与应用管理方法，其基础是将 Git 用作唯一事实来源，并持续从中同步。这使得借助持续集成与交付工具实现部署和系统状态管理的自动化成为可能。
+
+\label{idx:2062}
+GitOps 使用声明式配置来简化应用状态管理。Git 仓库中包含以声明方式描述的应用在特定环境中所期望的状态。持续同步的过程是必要的，用以确保环境持续保持期望状态。可观测性在这里起着关键作用，它让你能实时验证应用中的一切是否正常运行。
+
+这样一来，CI/CD 流水线几乎变得透明。它与命令式代码的方式正好相反，后者要处理构建的所有阶段。要达到这种抽象层次，你通常需要以下几样东西：
+
+\begin{itemize}
+\item IaC，用以实现所有必要环境的自动化部署
+\item 一套采用特性分支以及拉取请求或合并请求的 Git 工作流
+\item 声明式的工作流配置，这在 Kubernetes 中已经具备
+\end{itemize}
+
+\subsection{GitOps 的原则}
+
+\label{idx:2063}
+由于 GitOps 建立在成熟的 CI/CD 模式之上，它究竟有何不同可能并不十分清楚。以下是一些将这种方法与通用 CI/CD 区分开来的 GitOps 原则。
+
+\subsubsection{声明式描述}
+
+经典 CI/CD 系统与 GitOps 的主要区别在于运作方式。大多数 CI/CD 系统是命令式的：它们由一系列步骤组成，流水线需要按这些步骤依次执行才能成功。
+
+\label{idx:2064}
+就连流水线这一概念本身也是命令式的，因为它暗含一个具有入口、一组连接和一个汇聚点的对象。有些步骤可以并行执行，但只要有依赖关系，某个过程就必须停下来，等待它所依赖的步骤完成。
+
+在 GitOps 中，配置是声明式的。你系统的整个状态——应用、它们的配置、监控和仪表板——都被当作代码来对待，从而赋予它与普通应用代码相同的特性。
+
+\subsubsection{在 Git 中做版本管理的系统状态}
+
+\label{idx:2065}
+既然系统状态是用代码写成的，你就能从中获得一些好处。诸如更便捷的审计、代码评审和版本控制等功能，如今不再只适用于应用代码。其结果是：一旦出了什么问题，回退到可用状态只需一条 \texttt{git revert} 命令。
+
+\label{idx:2066}
+\label{idx:2067}
+你可以借助 Git 的签名提交以及 \textbf{Secure Shell}（\textbf{SSH}）和 \textbf{GNU Privacy Guard}（\textbf{GPG}）密钥，来实现对不同环境的管控。通过增加一道门禁机制，确保只有符合所需标准的提交才能被推送到仓库，你还能消除许多因使用 \texttt{ssh} 或 \texttt{kubectl} 手动执行命令而可能产生的事故性错误。
+
+\subsubsection{可审计性}
+
+\label{idx:2068}
+凡是你存入版本控制系统的内容都变得可审计。在引入新代码之前，你会进行代码评审。当你发现 bug 时，可以回退引入它的那次变更，或者回到上一个可用的版本。你的仓库成为关于整个系统的唯一事实来源。
+
+\label{idx:2069}
+当它应用于应用代码时就已经很有用了。然而，把审计能力扩展到配置、辅助服务、指标、仪表板乃至部署策略上，会使其更加强大。你不再需要问自己，某个配置为什么会在生产环境中出现。你只需查看 Git 日志即可。
+
+\subsubsection{与成熟组件集成}
+
+\label{idx:2070}
+大多数 CI/CD 工具都引入了专有的配置语法。例如，Jenkins 使用 Jenkins DSL，而各个流行的 SaaS 解决方案都使用 YAML。但这些 YAML 文件彼此并不兼容。如果不重写流水线，你无法从 Travis 切换到 CircleCI，或从 CircleCI 切换到 GitLab CI。
+
+这带来两个缺点。一是显而易见的供应商锁定。二是为了使用某个工具，你必须学习它的配置语法。即便你的流水线大部分已在别处定义好（shell 脚本、Dockerfile 或 Kubernetes 清单），你仍然需要编写一些胶水代码，来指示 CI/CD 工具去使用它们。
+
+GitOps 则不同。在这里，你不编写显式的指令，也不使用专有语法。相反，你复用其他通用标准，例如 Helm 或 Kustomize。要学的东西更少，迁移过程也轻松得多。此外，GitOps 工具通常能与 CNCF 生态中的其他组件良好集成，因此你可以让部署指标存储在 Prometheus 中，并通过 Grafana 进行审计。
+
+\subsubsection{防止配置漂移}
+
+\label{idx:2071}
+当某个系统的当前状态与仓库中所描述的期望状态不一致时，就发生了配置漂移。造成配置漂移的原因可能有多种。
+
+\label{idx:2072}
+举个例子，设想一个配合虚拟机工作负载的 \textbf{配置管理}（\textbf{CM}）工具。所有虚拟机都从相同的状态起步。当 CM 第一次运行时，它会把这些机器带到期望状态。但如果这些机器上默认运行着一个自动更新代理，该代理可能会自行更新某些软件包，而不考虑 CM 给出的期望状态。此外，由于网络连通性可能不稳定，有些机器可能更新到了更新的软件包版本，而另一些则没有。
+
+在极端情况下，某个被更新的软件包可能与应用所需的锁定版本包不兼容。这样的情况会破坏整个 CM 工作流，并使你的机器陷入不可用状态。
+
+使用 GitOps 时，系统内部始终运行着一个 agent，它持续跟踪系统的当前状态和期望状态。如果当前状态突然与期望状态不一致，agent 可以将其修复，或就配置漂移发出告警。
+
+\label{idx:2073}
+防止配置漂移为你的系统增加了又一层自愈能力。如果你运行的是 Kubernetes，那么你在 Pod 层面已经具备了自愈能力。每当一个 Pod 失败，就会有另一个 Pod 在原地重建。如果你在底层使用的是可编程的基础设施（例如云服务商或本地部署的 OpenStack），那么你的节点也具备自愈能力。有了 GitOps，你还能获得针对工作负载及其配置的自愈能力。
+
+\subsection{GitOps 的优势}
+
+\label{idx:2074}
+正如你可以想见的，前面描述的 GitOps 特性带来了若干好处。以下是其中一些。
+
+\subsubsection{提升生产力}
+
+\label{idx:2075}
+CI/CD 流水线已经自动化了许多常规任务。它们通过帮助实现更频繁的部署来缩短交付周期。GitOps 增加了一个反馈回路，既能防止配置漂移，又支持自愈。这意味着你的团队可以快速交付特性，并对引入潜在问题少一些担忧，因为这些改动很容易回退。这反过来又意味着开发吞吐量提高，你能更快、更自信地引入新特性。
+
+\subsubsection{更好的开发者体验}
+
+\label{idx:2076}
+有了 GitOps，开发者不必操心构建容器，也不必使用 \texttt{kubectl} 来控制集群。部署新特性只需使用 Git，而在大多数环境中它都是大家早已熟悉的工具。
+
+\label{idx:2077}
+这也意味着新人上手更快，因为新员工不必为了产出成果而去学习一大堆新工具。GitOps 使用标准且一致的组件，因此对运维侧引入变更不应影响到开发者。
+
+\subsubsection{更高的稳定性与可靠性}
+
+\label{idx:2078}
+使用 Git 存储系统状态意味着你可以访问一份审计日志。这份日志包含所引入的全部变更的描述。如果你的任务跟踪系统与 Git 集成（这是一种很好的做法），你通常就能看出系统的某次变更与哪项业务特性相关。
+
+使用 GitOps 时，允许对节点或整个集群进行手动访问的必要性降低了，从而减少了因执行无效命令而引发事故性错误的机会。那些混入系统的随机错误，也能借助 Git 强大的回退功能轻松修复。
+
+从严重灾难中恢复（例如整个控制平面丢失）也容易得多。你所需要做的，就是搭建一个全新的干净集群，在那里安装一个 GitOps operator（一种 Kubernetes Operator），并将它指向存放你配置的仓库。稍等片刻，你就得到了之前生产系统的精确副本，全程无需人工干预。
+
+\subsubsection{更强的安全性}
+
+授予集群和节点访问权限的需求降低了，意味着安全性得到提升。这降低了密钥丢失或被盗的风险。你还能避免这样一种情况：某人已经不再为团队（或公司）工作，却仍然保留着对生产环境的访问权限。
+
+\label{idx:2079}
+就系统访问而言，唯一事实来源由 Git 仓库来管理。即便有恶意行为者想在你的系统中植入后门，所需的改动也会经过代码评审。当你的仓库使用经过严格验证的 GPG 签名提交时，冒充其他开发者也变得更加困难。
+
+到目前为止，我们主要从开发和运维的角度介绍了各种好处。但 GitOps 同样有利于业务。它带来了系统中的业务可观测性——这在以前是很难实现的。
+
+要跟踪每个发布版本中包含哪些特性很容易，因为它们都存储在 Git 中。由于 Git 会在提交中链接到任务跟踪器，业务人员可以获取预览链接，查看应用在各个开发阶段的样子。
+
+\label{idx:2080}
+它还带来了清晰度，使以下这些常见问题得以解答：
+
+\begin{itemize}
+\item 生产环境中运行着什么？
+\item 上一次发布解决了哪些工单？
+\item 哪项变更可能是导致服务降级的原因？
+\end{itemize}
+
+这些答案甚至可以呈现在一个友好的仪表板上。当然，仪表板本身也可以存储在 Git 中。
+
+\subsection{GitOps 工具}
+
+\label{idx:2081}
+GitOps 领域新兴且仍在发展，但已经有一些可以称得上稳定而成熟的工具。以下是最受欢迎的一些。
+
+\subsubsection{FluxCD}
+
+\label{idx:2082}
+\label{idx:2083}
+FluxCD 是一个面向 Kubernetes 的带有明确主张的 GitOps operator。所选集成提供核心功能。它使用 Helm chart 和 Kustomize 来描述资源。与 Prometheus 的集成让部署过程具备可观测性。为了便于维护，FluxCD 提供了 CLI。
+
+\subsubsection{ArgoCD}
+
+\label{idx:2084}
+\label{idx:2085}
+与 FluxCD 不同，它提供的可选工具更丰富。如果你已经在用 Jsonnet 做配置，这会很有用。和 FluxCD 一样，它与 Prometheus 集成，并提供了 CLI。
+
+\subsubsection{Jenkins X}
+
+\label{idx:2086}
+\label{idx:2087}
+与名称给人的印象相反，Jenkins X 与广为人知的 Jenkins CI 系统并没有太多共同之处。它由同一家公司支持，但 Jenkins 和 Jenkins X 的整套概念截然不同。
+
+\label{idx:2088}
+\label{idx:2089}
+另外两个工具有意做得小而自包含，而 Jenkins X 则是一个包含众多集成、范围更广的复杂方案。它支持触发自定义构建任务，因此看起来像是经典 CI/CD 系统与 GitOps 之间的桥梁。
+
+\section{小结}
+
+恭喜你读完了全书！使用现代 C++ 并不只是理解新近加入的语言特性。你的应用终将在生产环境中运行。作为架构师，确保运行时环境符合需求也是你必须做出的选择。在前几章中，我们介绍了一些分布式应用的流行趋势。希望这些知识能帮助你判断哪一种最适合你的产品。
+
+迈向云原生能带来诸多好处，还能将工作流中的很大一部分自动化。把自制工具换成业界标准，能让软件更具韧性、更易更新。本章中，我们介绍了流行云原生方案的优缺点与用例。
+
+有些技术，例如用 OpenTelemetry 实现的分布式遥测，能立刻给大多数项目带来好处。另一些技术，例如 Istio、Linkerd 或 Kubernetes，则在大规模运维中表现最佳。读完本章后，你应该已经具备足够的知识来判断，为应用引入云原生设计是否值得付出相应的成本。
+
+我们编写本书更宏大的目标，是帮助你就在应用程序和系统设计方面做出明智的决策。书中还有很多内容根本没有涉及，因为它们内容庞杂，超出了本书的范围。要么是我们对相关主题经验太少，要么是我们认为它过于小众。尽管如此，即便本书无法涵盖一切，我们的初衷仍是提供扎实的基础，并激发你的好奇心，让你能够继续探索，并凭借自己的经验把这些想法推进得更远。
+
+\section{问题}
+
+\begin{enumerate}
+\item 把应用运行在云上和把应用做成云原生，两者有什么区别？
+\item 如何在本地部署运行云原生应用？
+\item Kubernetes 实现高可用所需的最小集群规模是多少？
+\item 哪个 Kubernetes 对象表示一个允许网络连接的微服务？
+\item 为什么在分布式系统中仅靠日志是不够的？
+\item 服务网格如何帮助构建安全的系统？
+\item GitOps 如何提高生产力？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Marc Boorshtein、Scott Surovich，\emph{《Kubernetes 企业指南：精通容器化应用部署、集成企业系统并实现可扩展性》（Kubernetes – An Enterprise Guide: Master Containerized Application Deployments, Integrate Enterprise Systems, and Achieve Scalability）}，第三版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/kubernetes-an-enterprise-guide-9781835081754}{https://www.packtpub.com/en-us/product/kubernetes-an-enterprise-guide-9781835081754}
+\item George Hantzaras，\emph{《平台工程实战手册：使用云原生内部开发者平台实施和扩展 DevOps 的实践指南》（The Platform Engineering Playbook: A Practical Guide to Implementing and Scaling DevOps with Cloud Native Internal Developer Platforms）}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/the-platform-engineering-playbook-9781837632695}{https://www.packtpub.com/en-us/product/the-platform-engineering-playbook-9781837632695}
+\item Anand Rai，\emph{《用 Istio 引导服务网格实现：在 Kubernetes 上用服务网格构建可靠、可扩展且安全的微服务》（Bootstrapping Service Mesh Implementations with Istio: Build Reliable, Scalable, and Secure Microservices on Kubernetes with Service Mesh）}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/bootstrapping-service-mesh-implementations-with-istio-9781803235967}{https://www.packtpub.com/en-us/product/bootstrapping-service-mesh-implementations-with-istio-9781803235967}
+\item LM Academy，\emph{《Helm 大师课——从入门到进阶：用 Helm 提升你的 Kubernetes 包管理技能》（Helm Masterclass – From Beginner to Advanced: Elevate Your Kubernetes Package Management Skills with Helm）}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/helm-masterclass-from-beginner-to-advanced-9781837025374}{https://www.packtpub.com/en-us/product/helm-masterclass-from-beginner-to-advanced-9781837025374}
+\item CNCF，\emph{CNCF 全景图}：\href{https://landscape.cncf.io/}{https://landscape.cncf.io/}
+\item Kubernetes，\emph{Kubernetes 组件}：\href{https://kubernetes.io/docs/concepts/overview/components/}{https://kubernetes.io/docs/concepts/overview/components/}
+\item Kubernetes，\emph{用 kubeadm 创建集群}：\href{https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/}{https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/}
+\item Kubernetes，\emph{Operator 模式}：\href{https://kubernetes.io/docs/concepts/extend-kubernetes/operator/}{https://kubernetes.io/docs/concepts/extend-kubernetes/operator/}
+\item Kubernetes，\emph{Ingress 控制器}：\href{https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/}{https://kubernetes.io/docs/concepts/services-networking/ingress-controllers/}
+\item Kubernetes at Home，\emph{简介}：\href{https://k8sh.net/}{https://k8sh.net/}
+\item Ingress-Nginx Controller，\emph{基本用法——基于主机的路由}，GitHub：\href{https://kubernetes.github.io/ingress-nginx/user-guide/basic-usage/}{https://kubernetes.github.io/ingress-nginx/user-guide/basic-usage/}
+\item Zesty，\emph{Kubernetes 中的 cgroups}：\href{https://zesty.co/finops-glossary/cgroups-in-kubernetes/ }{https://zesty.co/finops-glossary/cgroups-in-kubernetes/}
+\item Zesty，\emph{Kubernetes 中的 kube-proxy}：\href{https://zesty.co/finops-glossary/kubernetes-kube-proxy/}{https://zesty.co/finops-glossary/kubernetes-kube-proxy/}
+\item F5，\emph{Kubernetes 网络入门}：\href{https://www.f5.com/company/blog/nginx/kubernetes-networking-101}{https://www.f5.com/company/blog/nginx/kubernetes-networking-101}
+\item Cloud Native Now，\emph{理解 Kubernetes 网络架构}：\href{https://cloudnativenow.com/topics/cloudnativenetworking/understanding-kubernetes-networking-architecture/}{https://cloudnativenow.com/topics/cloudnativenetworking/understanding-kubernetes-networking-architecture/}
+\item Helm，Helm 文档：\href{https://helm.sh/docs/}{https://helm.sh/docs/}
+\item Helmfile，Helmfile 文档：\href{https://helmfile.readthedocs.io/en/latest/}{https://helmfile.readthedocs.io/en/latest/}
+\item ArtifactHUB，\emph{查找、安装和发布云原生软件包}：\href{https://artifacthub.io/}{https://artifacthub.io/}
+\item ChartMuseum，\emph{托管你自己的 Helm Chart 仓库}：\href{https://chartmuseum.com/}{https://chartmuseum.com/}
+\item OpenTelemetry，\emph{Collector 架构}：\href{https://opentelemetry.io/docs/collector/architecture/}{https://opentelemetry.io/docs/collector/architecture/}
+\item OpenTelemetry，\emph{C++ 插桩}：\href{https://opentelemetry.io/docs/languages/cpp/instrumentation/}{https://opentelemetry.io/docs/languages/cpp/instrumentation/}
+\item OpenTelemetry，\emph{通用 SDK 配置}：\href{https://opentelemetry.io/docs/languages/sdk-configuration/general/}{https://opentelemetry.io/docs/languages/sdk-configuration/general/}
+\item OpenTelemetry，\emph{服务}：\href{https://opentelemetry.io/docs/demo/services/}{https://opentelemetry.io/docs/demo/services/}
+\item OpenTelemetry，\emph{OpenTelemetry eBPF 插桩}：\href{https://opentelemetry.io/docs/zero-code/obi/}{https://opentelemetry.io/docs/zero-code/obi/}
+\item W3C，\emph{Trace Context}：\href{https://www.w3.org/TR/trace-context/}{https://www.w3.org/TR/trace-context/}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描此二维码或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始前请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

@@ -1,0 +1,1128 @@
+\label{idx:1303}
+\label{idx:1304}
+分布式系统一种非常常见的架构是\textbf{面向服务的架构}（\textbf{SOA}），它把应用组织成通过网络通信的松耦合服务。这并不是什么新发明，因为这种架构风格几乎和计算机网络一样古老，其架构实现从\textbf{企业服务总线}（\textbf{ESB}）一直到云原生微服务，范围很广。
+
+在本章中，我们聚焦于 SOA 以及作为其实现之一的微服务。鉴于微服务的流行，我们想深入介绍它们。在讨论架构时，你很可能在某个时刻听到这样的问题：“那个我们该用微服务吗？”。本章将为你提供规划向微服务迁移、或设计使用微服务的新应用所需的原则、模式和技术。
+
+\label{idx:1305}
+如果你的应用包含 Web、移动端或\textbf{物联网}（\textbf{IoT}）接口，本章将帮助你理解在注重模块化和可维护性的前提下构建这些接口背后的架构原则。由于当前大多数系统都以客户端—服务器（或其他网络拓扑）方式工作，学习 SOA 原则将有助于你设计和改进这类系统。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 理解 SOA
+\item 深入微服务
+\item 可扩展微服务的设计考量
+\item 利用托管服务和云服务提供商
+\end{itemize}
+
+\section{技术要求}
+
+本章中的大多数示例都不需要任何特定软件。对于 \textbf{Amazon Web Services }（\textbf{AWS}）API 示例，你需要 AWS\textbf{ 软件开发工具包}（\textbf{SDK}）for C++，可在 \href{https://aws.amazon.com/sdk-for-cpp/}{https://aws.amazon.com/sdk-for-cpp/} 找到。
+
+本章展示的代码已放在 GitHub 上：\href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter14}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter14}。
+
+\section{理解 SOA}
+
+\label{idx:1306}
+SOA 是一种软件设计的范例，其特点是松耦合的组件相互提供服务。这些组件使用共享的通信协议，通常是通过网络。在这种设计中，服务指的是可以从源组件外部访问的功能单元。组件的例子之一可以是地图服务，它根据地理坐标返回该区域的地图。
+
+\label{idx:1307}
+根据该定义，服务具有四个特性：
+
+\begin{itemize}
+\item 它是具有明确结果的业务活动的表示
+\item 它是自包含的
+\item 它对其使用者是不透明的，也就是说它的内部实现细节是隐藏的
+\label{idx:1308}
+\item 它可以由其他服务组合而成
+\end{itemize}
+
+\subsection{架构实现}
+
+\label{idx:1309}
+SOA 并不规定应如何处理服务导向。它是一个可以套用于许多不同实现的术语。关于某些做法是否应被视为 SOA，存在一些争论。我们不想参与这些争论，而是将着重介绍一些经常被提及的 SOA 做法。
+
+下面我们来探讨其中一些。
+
+\subsubsection{ESB}
+
+\label{idx:1310}
+\label{idx:1311}
+当有人提到 SOA 时，ESB 往往是第一个浮现于脑海的概念。它是最古老的 SOA 实现途径之一。虽然 ESB 主要用 Java 和 .NET 实现，但在这本专讲 C++ 的书中之所以会涉及这个主题，是因为你可能会遇到 C++ 服务需要与其他语言编写的服务互操作、或在跨平台环境中运行的场景。
+
+\label{idx:1312}
+ESB 从计算机硬件架构中汲取类比，例如\textbf{外围组件互连 }（\textbf{PCI}）——它是一种计算机总线，就像一个复杂的中央电话交换机，或一个用来连接各种电子设备以实现模块化的通用适配器。这样一来，第三方供应商就可以独立于主板制造商来实现模块（如显卡、声卡或 I/O 接口），只要大家都遵循该总线所要求的标准即可。类似地，ESB 管理消息路由、数据转换和通信协议，以连接彼此各异的企业系统，让不同的应用和系统无需直接连接即可交互和交换数据，就像电话接线员在不同人之间接通电话一样。
+
+\label{idx:1313}
+\label{idx:1314}
+与 PCI 非常相似，ESB 架构致力于构建一种标准、通用的方式，以支持松耦合服务之间的交互，如\emph{图 14.1} 所示。这类服务应能独立开发和部署。还应当能够把异构服务组合起来。
+
+\myGraphic{0.490}{images/B18456_14_01.png}{图 14.1：ESB}
+
+\label{idx:1315}
+与 SOA 本身一样，ESB 也并非由任何全球标准所定义。要实现 ESB，就必须在系统中额外建立一个组件，这个组件就是总线本身。经由 ESB 的通信是事件驱动的，通常借助\textbf{面向消息的中间件 }（\textbf{MOM}）和消息队列来实现，我们将在\emph{第 15 章}，\emph{服务间通信}中讨论这一点。
+
+ESB 组件承担以下职责：
+
+\begin{itemize}
+\item 控制服务的部署与版本管理
+\item 维护服务冗余
+\item 在服务之间路由消息
+\item 监控并控制消息交换
+\item 解决组件之间的争用
+\label{idx:1316}
+\item 提供通用服务，例如事件处理、加密或消息排队
+\item 强制实施\textbf{服务质量}（\textbf{QoS}）
+\end{itemize}
+
+\label{idx:1317}
+既有专有的商业产品，也有实现 ESB 功能的开源产品。在异构环境中将 C++ 系统与 ESB 集成时，下面这些列表可能会派上用场。
+
+一些最流行的开源产品如下：
+
+\begin{itemize}
+\label{idx:1318}
+\item \textbf{Apache Camel}：一个开源集成框架，通过预定义的企业集成模式帮助连接各种系统与技术
+\label{idx:1319}
+\item \textbf{Apache ServiceMix}：一个开源的企业级分布式集成平台，统一了 Apache ActiveMQ（消息传递）、Camel（集成模式）、CXF（Web 服务）和 Karaf（运行时）的特性与功能
+\label{idx:1320}
+\item \textbf{Apache Synapse}：一个轻量级、高性能的 ESB，由快速且异步的中介引擎驱动，支持应用层与传输层协议：REST、HTTP/S、Mail（POP3、IMAP 和 SMTP）、JMS、TCP、UDP、VFS、SMS、XMPP 和 FIX
+\label{idx:1321}
+\item \textbf{JBoss ESB}：一个由 Red Hat 开发的开源中间件平台，用于将各个系统连接在一起，尤其是无法互操作的系统
+\label{idx:1322}
+\item \textbf{OpenESB}：为银行、金融、物流和政府领域的组织 24/7 全天候在全世界运行数十亿个复杂流程
+\label{idx:1323}
+\label{idx:1324}
+\item \textbf{Red Hat Fuse}：一个基于 Apache Camel、Apache CXF、Apache ActiveMQ、Fabric8、Switchyard 和\textbf{开放服务网关倡议 }（\textbf{OSGi}）的集成平台
+\label{idx:1325}
+\label{idx:1326}
+\item \textbf{Spring Integration}：一个轻量级框架，用于在基于 Spring 的应用中添加消息传递，并通过使用\textbf{领域特定语言}（\textbf{DSL}）的声明式适配器支持与外部系统的集成
+\end{itemize}
+
+最流行的商业产品如下：
+
+\begin{itemize}
+\label{idx:1327}
+\item \textbf{IBM Integration Bus（取代 IBM WebSphere ESB）}：支持在各种业务应用之间传递消息，范围涵盖大型传统系统到传送带上的传感器等无人设备。
+\label{idx:1328}
+\item \textbf{Microsoft Azure Service Bus}：构成基于 Azure 的 ESB 中消息传递的骨干。它结合 Azure Logic Apps、Azure Functions、Event Grid 和 Event Hubs，支持可靠的消息排队和持久化的发布–订阅消息传递。提供适用于 C\#、C++、C、Java、JavaScript、Go、Python 和 Rust 的客户端库。
+\label{idx:1329}
+\item \textbf{Microsoft BizTalk Server}：一个集成系统，支持以各种格式和协议进行数据交换、数据转换和业务流程执行，并提供完善的开发环境。
+\label{idx:1330}
+\item \textbf{Oracle Enterprise Service Bus}：一个用于快速、轻松实现工业级服务总线的平台，专为解决复杂分布式服务基础设施中的集成、虚拟化和服务管理问题而设计。
+\label{idx:1331}
+\label{idx:1332}
+\item \textbf{SAP Process Integration}：一个企业集成平台，可在 SAP 应用与其他应用之间实现无缝集成，无论是在组织内部（应用到应用），还是在组织外部（\textbf{企业对企业}，即 \textbf{B2B}）。
+\end{itemize}
+
+\label{idx:1333}
+与本书介绍的所有模式和产品一样，在决定采用某种特定架构之前，你必须权衡其优缺点。引入 ESB 的一些好处如下：
+
+\begin{itemize}
+\item 服务具有更好的可扩展性
+\item 分布式工作负载
+\item 可以专注于配置，而无需在服务中实现自定义集成
+\item 设计松耦合服务的一种更简便的方式
+\item 服务可替换
+\item 内置冗余能力
+\end{itemize}
+
+\label{idx:1334}
+另一方面，其缺点主要围绕以下几点：
+
+\begin{itemize}
+\item 单点故障——ESB 组件一旦失效就意味着整个系统中断
+\item 配置更为复杂，从而影响可维护性
+\label{idx:1335}
+\item ESB 提供的消息排队、消息转换等服务可能降低性能，甚至成为瓶颈
+\end{itemize}
+
+\subsubsection{Web 服务}
+
+\label{idx:1336}
+\label{idx:1337}
+\label{idx:1338}
+Web 服务是 SOA 的另一种流行实现。按其定义，Web 服务是一台机器向另一台机器（或操作者）提供的服务，其通信通过万维网协议进行。尽管负责万维网治理的\textbf{万维网联盟 }（\textbf{W3C}）允许使用 FTP 或 SMTP 等其他协议，但大多数 Web 服务通常使用 HTTP 作为传输协议。
+
+尽管可以使用专有方案来实现 Web 服务，但大多数实现都基于开放协议和标准。
+
+\label{idx:1339}
+Web 服务的优势如下：
+
+\begin{itemize}
+\item 使用流行的 Web 标准
+\label{idx:1340}
+\item 丰富的工具生态
+\item 可扩展性
+\end{itemize}
+
+\label{idx:1341}
+以下是其缺点：
+
+\begin{itemize}
+\item 开销很大
+\label{idx:1342}
+\item 某些实现过于复杂（例如 SOAP/WSDL/UDDI 规范）
+\end{itemize}
+
+\subsubsection{消息传递与流处理}
+
+在介绍 ESB 架构时，我们已经提到过消息队列和消息代理。除了作为 ESB 实现的一部分之外，消息系统也可以是独立的架构元素。
+
+\paragraph{消息队列}
+
+\label{idx:1343}
+\label{idx:1344}
+\label{idx:1345}
+消息队列是用于\textbf{服务间通信}（\textbf{ISC}）的组件，我们将在下一章深入探讨。顾名思义，它们使用队列数据结构在不同进程之间传递消息。通常，消息队列是 MOM 设计的一部分。
+
+\myGraphic{0.920}{images/B18456_14_02.png}{图 14.2：MOM 架构}
+
+在最底层，消息队列在 Unix 规范中就已存在，System V 和 POSIX 中均有提供。虽然它们对于在单台机器上实现进程间通信很有用，但我们更想关注适用于分布式计算的消息队列。
+
+为满足分布式环境的需求，已经涌现出若干消息排队标准。下面的列表简要概述了常用的选项（如果目前你的重点是掌握概念，可以快速浏览或跳过这份列表；日后随时可以将其作为参考再回来查阅）：
+
+\begin{itemize}
+\label{idx:1346}
+\label{idx:1347}
+\item \textbf{高级消息队列协议}（\textbf{AMQP}）：一种在七层\textbf{开放系统互连}（\textbf{OSI}）模型的应用层上运行的二进制协议。流行的实现包括 Apache Qpid、Apache ActiveMQ、RabbitMQ、Azure Event Hubs 和 Azure Service Bus。
+\label{idx:1348}
+\item \textbf{面向流文本的消息传递协议}（\textbf{STOMP}）：一种类似 HTTP 的基于文本的协议（使用诸如 \texttt{CONNECT}、\texttt{SEND} 和 \texttt{SUBSCRIBE} 之类的动词）。流行的实现包括 Apache ActiveMQ、RabbitMQ 和 syslog-ng。
+\label{idx:1349}
+\item \textbf{消息队列遥测传输 }（\textbf{MQTT}）：一种面向嵌入式设备的轻量级协议。流行的实现包括 OpenHAB、Adafruit IO、IoT Guru、Node-RED、Home Assistant、Pimatic、AWS IoT 和 Azure IoT Hub 等家庭自动化解决方案。
+\end{itemize}
+
+\paragraph{消息代理}
+
+\label{idx:1350}
+\label{idx:1351}
+消息代理建立在排队概念之上。它管理一个或多个队列，并处理消息系统中的消息转换、校验和路由等高级特性。与消息队列一样，消息代理也是 MOM 的组成部分。
+
+使用消息代理，可以最大限度地减少应用对系统其他部分的感知。由于消息代理承担了消息通用操作的全部负担，这有助于设计出松耦合的系统。这种模式被称为发布–订阅设计模式。
+
+\myGraphic{0.862}{images/B18456_14_03.png}{图 14.3：发布–订阅模式}
+
+代理通常会为接收方管理消息队列，但也能执行以下额外功能：
+
+\begin{itemize}
+\item 将消息从一种表示形式转换为另一种
+\item 校验消息的发送方、接收方或内容
+\item 将消息路由到一个或多个目的地
+\item 在传输过程中聚合、分解和重组消息
+\item 从外部服务检索数据
+\item 通过与外部服务交互来增补和丰富消息
+\item 处理并响应错误及其他事件
+\item 提供不同的路由模式，例如发布–订阅
+\end{itemize}
+
+\label{idx:1352}
+\label{idx:1353}
+流行的消息代理实现如下。与上一节的列表一样，如果你现在的重点是理解概念，可以快速浏览或跳过它，日后将其作为参考再回来查阅：
+
+\begin{itemize}
+\label{idx:1354}
+\label{idx:1355}
+\item \textbf{Apache ActiveMQ}：一个开源的、多协议的、基于 Java 的消息代理。它提供适用于 JavaScript、C、C++、Python 和 .NET 的客户端库，并使用 AMQP、STOMP 和 MQTT 协议以及 \textbf{Jakarta Messaging }（\textbf{JMS}）API 来集成多平台应用
+\label{idx:1356}
+\item \textbf{Apache Kafka}：一个开源、分布式的事件流处理平台，用于处理实时数据，采用 Java 和 Scala 编写，提供适用于 Java、Python、Go、C\#/.NET、C、C++、SQL、D、Rust、Perl、Swift、Lua、PHP、Kotlin 等的客户端库
+\label{idx:1357}
+\item \textbf{Apache Qpid}：一个采用 C++、Java、Ruby、Perl、Python 和 C\# 编写的开源消息系统，实现 AMQP 协议，并提供事务管理、排队、分发、安全、管理、集群、联合以及异构多平台支持
+\label{idx:1358}
+\item \textbf{Eclipse Mosquitto MQTT Broker}：一个采用 C 编写的开源代理，使用 MQTT 协议实现客户端与 IoT 设备之间的通信，提供适用于 C 和 C++ 的客户端库
+\label{idx:1359}
+\item \textbf{NATS}：一个采用 Go 编写的开源消息系统（也称为 MOM），提供适用于 Arduino、C、C++、Elixir、Go、Java、Lua、MicroPython、.NET、Nim、OCaml、Pascal、Python、Rust 等的客户端库
+\label{idx:1360}
+\item \textbf{RabbitMQ}：一个可靠且成熟的消息与流处理代理，实现 AMQP 协议，采用 Erlang 编写，主要以其灵活性、可靠性和易用性著称，提供适用于 .NET、Java、Python、JavaScript、Ruby、PHP、Rust、Swift、Julia、C、C++、Delphi、Erlang、Perl、COBOL 等的客户端库
+\label{idx:1361}
+\item \textbf{远程字典服务器（Redis）及其分支}：一个采用 C 编写的开源、内存中、NoSQL 键/值存储，主要用作应用缓存或快速响应数据库，提供适用于 C\#/.NET、Java、JavaScript、PHP、Go、Python、C、C++、Ruby、Rust、Dart 和 Delphi 的客户端库
+\label{idx:1362}
+\item \textbf{Amazon MQ}：一个采用 Java 编写的托管消息代理服务，面向 Apache ActiveMQ 和 RabbitMQ
+\label{idx:1363}
+\item \textbf{Amazon Kinesis}：一个用于实时收集、存储、捕获和处理来自分布式流的众多日志的服务，提供适用于 .NET、Java、PowerShell、Python、C++、Rust 和 SAP ABAP 的客户端库
+\label{idx:1364}
+\item \textbf{Azure Service Bus}：已在\emph{ESB}一节中介绍
+\label{idx:1365}
+\item \textbf{HiveMQ}：一个经过验证的、采用 Java 编写的 MQTT IoT 数据流平台，用于安全、实时的数据连接，助力更明智的决策和数字化转型，拥有适用于 C\#、C++、Java、Python 等的客户端库
+\label{idx:1366}
+\item \textbf{VerneMQ}：一个采用 Erlang 编写的高性能、低延迟、分布式 MQTT 代理，旨在处理大量并发客户端，拥有适用于 C、C++、Java、Lua、Python、Ruby、JavaScript、PHP、Arduino 等的客户端库
+\label{idx:1367}
+\item \textbf{EMQX}：一个采用 Erlang 编写的大规模、分布式 MQTT 消息平台，专为事件流处理和连接 IoT 设备而设计，提供适用于 C、C++、.NET、Java、Python、JavaScript、Go、Swift、Rust 等的客户端库
+\label{idx:1368}
+\item \textbf{Aedes}：一个采用 JavaScript 编写并运行在 Node.js（一个跨平台的开源 JavaScript 运行时环境）上的 MQTT 代理，为 IoT 应用提供高效的通信
+\label{idx:1369}
+\label{idx:1370}
+\label{idx:1371}
+\item \textbf{ejabberd}：一个采用 Erlang 编写的\textbf{可扩展消息与在线状态协议}（\textbf{XMPP}）服务器、Jabber 服务器、MQTT 代理和\textbf{会话初始协议 }（\textbf{SIP}）网关，用于构建大规模聊天、即时通信和 IoT 等实时服务
+\label{idx:1372}
+\item \textbf{BlazingMQ}：一个采用 C++ 编写的开源、分布式消息排队系统，提供持久、容错、高性能且高可用的队列以及各种消息路由策略，提供适用于 C++、Java 和 Python 的客户端库
+\end{itemize}
+
+\subsubsection{云计算}
+
+\label{idx:1373}
+\label{idx:1374}
+云计算是一个含义丰富、宽泛的术语。最初，\emph{云}这个术语指的是一层抽象，架构不必过多操心它。例如，这可能指由专门的运维团队管理的服务器和网络基础设施。
+
+后来，服务提供商开始将\emph{云计算}这个术语用于他们自己的产品，这些产品将底层基础设施及其全部复杂性抽象掉。这样一来，无需逐个配置每一项基础设施，只需使用一个简单的 \textbf{API} 就能搭建起所有必要的资源。
+
+这体现了从一种内部架构概念向按需服务模式的转变，组织可以从第三方提供商那里租用这种服务。
+
+如今，云计算已发展出许多新颖的应用架构方法。它可能包含以下内容：
+
+\begin{itemize}
+\item 托管服务，例如数据库、缓存层和消息队列
+\item 可扩展的工作负载编排
+\item 容器部署与编排平台
+\item 无服务器计算平台
+\end{itemize}
+
+在考虑采用云时，最重要的一点是要记住：将应用托管在云端，需要专门为云设计的架构。通常，这也意味着专门为给定的云提供商设计的架构。
+
+这意味着，选择云提供商不仅仅是在某一时刻判断某个选择是否优于另一个。它还意味着，未来更换提供商的成本可能高得让人无法承受。在提供商之间迁移需要架构上的改动，而对于一个正在运行的应用来说，这些改动的代价可能超过迁移所预期的节省。
+
+云架构设计还有另一个后果。对于遗留应用而言，这意味着要想利用云的种种好处，应用必须首先重新架构并重写。迁移到云端并不仅仅是把二进制文件和配置文件从本地部署托管复制到云提供商管理的虚拟机上。这种做法只会浪费金钱，因为只有当应用具备可扩展性并且对云有感知时，云计算才具有成本效益。
+
+\label{idx:1375}
+\label{idx:1376}
+云计算并不一定意味着使用外部服务、从第三方提供商那里租用机器。还有 OpenStack、CloudStack、Proxmox 和 MicroCloud 等本地运行的解决方案，它们让你能够利用自己已有的服务器来获得云计算的好处。混合云计算则是将私有云（本地数据中心）与公有云相结合的一种方式。
+
+\subsubsection{微服务}
+
+\label{idx:1377}
+\label{idx:1378}
+关于微服务是否属于 SOA 的一部分，存在一些争论。多数情况下，\emph{SOA}这个术语几乎等同于 ESB 设计。而在很多方面，微服务与 ESB 恰恰相反。由此产生了这样的观点：微服务是一种有别于 SOA 的模式，是软件架构演进过程中的下一步。
+
+我们认为，微服务实际上是一种现代的 SOA 方法，旨在消除 ESB 中出现的某些问题。毕竟，微服务非常契合 SOA 的定义。
+
+\subsection{SOA 的优势}
+
+\label{idx:1379}
+将系统的功能拆分到多个服务上有多项好处。首先，每个服务都可以单独维护和部署。这有助于团队专注于特定任务，而无需理解系统内所有可能的交互。它还支持敏捷开发，因为测试只需覆盖某个特定服务，而非整个系统。
+
+\label{idx:1380}
+第二个好处是，服务的模块化有助于构建分布式系统。以网络（通常基于\textbf{网际协议}，即 \textbf{IP}）作为通信手段，服务可以拆分到不同的机器上，从而提供可扩展性、冗余和更好的资源利用率。
+
+当每个服务都有众多生产者和众多消费者时，实现新功能并维护现有软件就成了一项艰巨的任务。正因如此，SOA 鼓励使用有文档说明且带版本号的 API。
+
+让服务生产者和消费者之间的交互更简便的另一种方式，是使用那些描述不同服务之间如何传递数据和元数据的既有协议。这些协议可以包括 SOAP、REST、GraphQL 或 gRPC。
+
+使用 API 和标准协议，可以轻松创建出在现有服务基础上提供附加价值的新服务。
+
+假设我们有一个服务 \emph{A}，它返回我们所在的地理位置；还有另一个服务 \emph{B}，它提供给定位置的当前温度。那么我们可以调用 \emph{A}，并将其响应用于对 \emph{B} 的请求中。这样，我们无需自行实现整套逻辑，就能获得当前位置的当前温度。
+
+\label{idx:1381}
+这两个服务的全部复杂性和实现细节我们都无从知晓，我们把它们当作\textbf{黑盒}。这两个服务的维护者也可以在不通知我们的情况下引入新功能、发布服务的新版本。
+
+相比单体应用，对 SOA 进行测试和试验也更简单。单个位置的一处小改动不需要重新编译整个代码库。通常还可以使用客户端工具临时调用这些服务。
+
+让我们回到天气和地理位置服务的例子。如果这两个服务都对外暴露 REST API，那么我们只用 cURL 客户端手动发送相应的请求，就能搭建出一个原型。当我们确认响应令人满意后，就可以着手编写代码，将整个操作自动化，并有可能将结果作为另一个服务暴露出去。
+
+\begin{myNotic}{注意}
+
+要获得 SOA 的好处，我们需要牢记：所有服务都必须是松耦合的。如果服务依赖彼此的实现，就意味着它们不再是松耦合的，而是紧耦合的。理想情况下，任何一个给定的服务都应能被另一个功能类似的服务替换，而不会影响整个系统的运行。
+\end{myNotic}
+
+\label{idx:1382}
+在我们天气和位置的例子中，这意味着用另一种语言重新实现位置服务（比如说，从 Go 或 Rust 改用 C++），只要下游消费者使用既定的 API，就不应影响到它们。
+
+通过发布新的 API 版本，仍然可以在 API 中引入破坏性变更。连接到 1.0 版本的客户端会观察到旧有的行为，而连接到 2.0 版本的客户端则能享受到缺陷修复、更好的性能以及其他以牺牲兼容性为代价的改进。
+
+对于依赖 HTTP 的服务，API 版本管理通常发生在 URI 层面。因此，调用 \texttt{https:/\allowbreak{}/\allowbreak{}service.\allowbreak{}local/\allowbreak{}v1/\allowbreak{}customer} 即可访问 1.0、1.1 或 1.2 版本的 API，而 2.0 版本的 API 则位于 \texttt{https:/\allowbreak{}/\allowbreak{}service.\allowbreak{}local/\allowbreak{}v2/\allowbreak{}customer}。随后，API 网关、HTTP 代理或负载均衡器就能将请求路由到相应的服务。
+
+\subsection{SOA 面临的挑战}
+
+\label{idx:1383}
+\label{idx:1384}
+引入抽象层总是要付出代价的。同样的规则也适用于 SOA。从 ESB、Web 服务或消息队列与代理中，可以很容易地看出抽象带来的代价。而不那么显而易见的是，在微服务的情况下，额外的代价来自它们所使用的\textbf{远程过程调用}（\textbf{RPC}）框架，因为网络延迟从来不为零，此外还有与服务冗余和功能重复相关的资源消耗。
+
+与 SOA 相关的另一个批评对象是缺乏统一的测试框架。开发某个应用各个服务的不同团队可能会使用其他团队不熟悉的工具。与测试相关的其他问题在于，组件的异构性和可互换性意味着存在大量需要测试的组合。某些组合可能会引入通常观察不到的边缘情况。
+
+此外，根据康威定律（Conway's Law，在\emph{第 2 章}，\emph{架构风格}中介绍过），系统的架构往往映射出构建它的组织的沟通结构。在 SOA 环境中，由于关于特定服务的知识大多集中在单个团队中，这可能导致知识共享不足以及实践不一致，使得理解整个应用如何运作变得困难得多。
+
+此外，当 SOA 平台在应用的生命周期内不断发展时，可能会带来这样一种需求：所有服务都必须更新版本，以适配平台的最新发展。这意味着，开发者不是去引入新功能，而是要专注于确保自己的应用在平台发生变更后仍能正确运行。在极端情况下，对于那些迟迟没有新版本、却不断被打补丁以符合平台要求的服务而言，维护成本可能会急剧上升。
+
+在现代软件架构中，由于微服务所具有的优势，它已成为一种被广泛采用的方法。因此，我们接下来将讨论微服务。
+
+\section{深入微服务}
+
+\label{idx:1385}
+尽管微服务并不绑定任何特定的编程语言或技术，但在实现微服务时，Go 语言是一个常见的选择。这并不意味着其他语言就不适合微服务开发——恰恰相反。C++ 较低的计算和内存开销，使它成为微服务的理想之选。
+
+在讨论扩展相关的问题之前，我们先来详细看看微服务的一些优缺点。之后，我们会重点关注那些常与微服务联系在一起的设计模式。
+
+\subsection{微服务的优势}
+
+\label{idx:1386}
+你可能经常听到人们用各种溢美之词谈论微服务。它们确实能带来一些好处，下面列举其中一些。
+
+\subsubsection{模块化}
+
+\label{idx:1387}
+\label{idx:1388}
+由于整个应用被拆分成许多相对较小的模块，理解每个微服务做什么就变得更容易。理解之后自然带来了另一个结果：测试单个微服务也更容易。测试还受益于这样一个事实——每个微服务的范围通常都比较有限。毕竟，只测试日历应用要比测试整个\textbf{个人信息管理}（\textbf{PIM}）套件容易得多。
+
+不过，这种模块化也有一定的代价。你的团队或许能更好地理解各个微服务，但与此同时，他们可能更难把握整个应用是如何组成的。虽然并不需要了解构成应用的每个微服务的所有内部细节，但组件之间数量庞大的关系本身就构成了认知上的挑战。采用这种架构方式时，使用微服务 API 契约是一种良好实践，它对于管理分布式系统的复杂性很重要。通过为独立服务之间的交互方式定义清晰且可强制执行的规范，你可以防止破坏性变更、支持独立部署，并促进团队之间的协作。
+
+\label{idx:1389}
+\label{idx:1390}
+另一个需要考虑的问题是如何组织这些服务的代码仓库。对于微服务，你需要在\textbf{单体仓库}（\textbf{mono-repos}）和\textbf{多仓库}（\textbf{multi-repos}）之间做出选择，这会影响这些服务的模块化、开发所需的时间与复杂度、测试、与其他服务的连接、部署复杂度以及团队之间的沟通。
+
+\myGraphic{0.784}{images/B18456_14_04.png}{图 14.4：单体仓库与多仓库}
+
+\label{idx:1391}
+单体仓库并不意味着单体应用；它仍然由可独立部署的服务组成。它指的是在一个源代码仓库中包含多个微服务。这种方式可以简化依赖管理、理顺 CI/CD 流水线、便于重构，并促进代码复用；但当代码库增大时，它会让版本管理变得复杂，并增加项目复杂度和构建时间。此外，当参与者争相向项目提交拉取请求时，也容易出问题。这种方式往往会导致微服务之间产生交叉依赖。
+
+\label{idx:1392}
+多仓库方式则为每个微服务提供各自的仓库。这种方式便于发布、有利于扩展开发规模，但会造成代码重复，并使依赖管理和 CI/CD 流水线变得复杂。
+
+如何选择取决于多种因素，包括项目复杂度、组织需求、团队结构以及地理位置。
+
+仓库策略针对的是后端服务的组织方式，而前端架构同样可以从模块化方式中受益，例如微前端。微前端是一种用于 Web 开发的架构模式，它基于微服务的概念。它不再采用传统的单体应用，而是把前端应用拆分成更小、自包含的组件。
+
+借助 WebAssembly，连前端部分也可以用 C++ 编写。这一可能性使微前端对 C++ 开发者同样有意义，因为后端和前端都可以模块化，并在一种碎片化的架构中协同工作。\emph{图 14.5} 展示了这一演变。
+
+\myGraphic{0.703}{images/B18456_14_05.png}{图 14.5：微服务与微前端}
+
+\label{idx:1393}
+该图展示了前端、后端和存储层的不同组合，以呈现它们从单体架构、经前后端分离，再到微服务和微前端的演变过程。
+
+\subsubsection{可扩展性}
+
+\label{idx:1394}
+\label{idx:1395}
+范围有限的应用更容易扩展。原因之一是这样潜在的性能瓶颈更少。
+
+\label{idx:1396}
+扩展工作流中较小的部分也更划算。设想有一个负责管理展会的单体应用。一旦系统开始出现性能问题，唯一的扩展方式就是换一台更大的机器来运行这个单体应用。这被称为\textbf{垂直扩展}。
+
+使用微服务时，第一个优势在于你可以水平扩展，也就是增加更多机器，而不是换一台更大的机器（这样做通常更便宜）。第二个优势来自这样一个事实：你只需扩展应用中那些出现性能问题的部分。这也有助于节省基础设施方面的开支。
+
+\subsubsection{灵活性}
+
+\label{idx:1397}
+如果设计得当，微服务不太容易受制于供应商锁定。当你决定更换某个第三方组件时，不必一次性进行整个痛苦的迁移。微服务的设计考虑到了接口的使用，因此唯一需要修改的部分就是你的微服务与第三方组件之间的接口。
+
+微服务还支持分阶段迁移，其中一些服务可以继续使用旧供应商的软件，而另一些服务则采用新供应商的软件。这意味着你可以避免在多个地方同时引入破坏性变更的风险。更重要的是，你还可以将其与金丝雀发布模式结合，以更精细的粒度管理风险。
+
+这种灵活性不仅关乎服务，也关乎底层架构。它还可能意味着使用不同的数据库、不同的队列与消息传递方案，甚至完全不同的云平台。不同的云平台通常会提供不同的服务以及使用这些服务的 API，而在微服务架构下，你可以逐个部分地迁移工作负载，并在新平台上独立测试。
+
+\label{idx:1398}
+最后，当出于性能问题、可扩展性或可用依赖而必须重写时，重写一个微服务要比重写一个单体应用快得多。
+
+\subsubsection{与遗留系统集成}
+
+\label{idx:1399}
+微服务并不一定非全即无。如果你的应用经过了充分测试，而迁移到微服务可能带来许多风险，那么完全没有必要把已经可用的方案整个拆掉。
+
+相反，你可以只拆分那些需要进一步开发的部分，把它们作为微服务引入，交由原有的单体应用来使用。但要避免落入过早设计微服务网络的陷阱。
+
+采用这种方式，你将获得与微服务相关的敏捷发布周期所带来的好处，同时避免了从零开始构建新架构、基本上重建整个应用。如果某样东西已经运行良好，那么更好的做法是把精力放在如何在不破坏这些好部分的前提下添加新功能上。这里要小心，因为从零开始往往被用来满足自尊心！
+
+\subsubsection{分布式开发}
+
+\label{idx:1400}
+开发团队规模小、人员集中办公的时代早已过去。即便在传统的坐班制公司里，远程工作和分布式开发也已是既成事实。像 IBM、Microsoft 和 Intel 这样的巨头，都在让来自不同地点的人共同参与同一个项目。
+
+\label{idx:1401}
+\label{idx:1402}
+微服务通过支持更小、更敏捷的团队来顺应这一趋势，从而使分布式开发容易得多。这减少了对 20 人或更多人之间沟通协调的需求，也更容易组建对外部管理依赖更少的自组织团队。
+
+\subsection{微服务的缺点}
+
+\label{idx:1403}
+即便你认为微服务的好处让你可能需要它，也要记住它同样存在一些严重的缺陷。简而言之，它绝对不适合所有人。规模较大的公司通常能够抵消这些缺陷，但规模较小的公司往往没有这种条件。
+
+\subsubsection{依赖成熟的 DevOps 方法}
+
+\label{idx:1404}
+构建和测试微服务应当比在庞大的单体应用上执行类似操作快得多。但为了实现敏捷开发，这类构建和测试需要进行的频率要高得多。
+
+在处理单体应用时，手动部署应用或许还算合理，但如果把同样的做法用到微服务上，就会引发大量问题。
+
+要在开发中拥抱微服务，你必须确保团队具备 DevOps 思维，并理解构建和运行微服务两方面的要求。仅仅把代码交给别人然后就不管了，是远远不够的。
+
+DevOps 思维将帮助你的团队尽可能实现自动化。在没有 CI/CD 流水线的情况下开发微服务，或许是软件架构中最糟糕的想法之一。这种做法会带来微服务的所有其他缺点，却无法获得它的大部分好处。
+
+\subsubsection{更难调试}
+
+\label{idx:1405}
+微服务需要引入可观测性。没有它，当某个东西出故障时，你永远不确定该从哪里开始查找潜在的根本原因，因为微服务是分布式的，而且可以复制（拥有不止一个实例）。可观测性是一种无需运行调试器或登录到工作负载所在机器，就能推断应用状态的方法，因为在分布式系统中，错误的来源往往非常难以确定。
+
+日志聚合、应用指标、监控和分布式追踪的组合，是管理基于微服务的架构的前提条件。一旦考虑到自动扩缩容和自愈机制甚至可能阻止你访问那些开始崩溃的单个服务，这一点就尤为明显。
+
+\subsubsection{额外的开销}
+
+\label{idx:1406}
+微服务应当是精简而敏捷的。通常也确实如此。然而，基于微服务的架构通常会带来额外的开销。第一层开销与用于微服务通信的额外接口有关。RPC 库、API 提供者和消费者不仅要乘以微服务的数量，还要乘以它们副本的数量。此外还有辅助服务，例如数据库、消息队列等等。这些服务还包括可观测性设施，它通常由存储设施和负责收集数据的各个采集器组成。
+
+\label{idx:1407}
+通过更好的扩展所优化的成本，可能会被运行整套并不带来直接业务价值的服务所需的成本所抵消。更重要的是，你可能很难向利益相关者解释这些成本（无论是基础设施方面的还是开发开销方面的）的合理性。
+
+\subsection{微服务的设计模式}
+
+\label{idx:1408}
+许多通用的设计模式同样适用于微服务。此外，还有一些设计模式通常与微服务联系在一起。这里介绍的模式既适用于全新项目，也适用于从单体应用迁移的场景。
+
+\subsubsection{分解模式}
+
+\label{idx:1409}
+这些模式关系到微服务的分解方式。我们希望确保架构稳定、服务之间松散耦合。我们还希望确保服务内聚且可测试。最后，我们希望自治团队能够完全拥有一个或多个服务。
+
+\paragraph{按业务能力分解}
+
+其中一种分解模式要求按业务能力进行分解。业务能力与业务为创造价值而做的事情有关。业务能力的例子包括商户管理和客户管理。业务能力通常按层级组织。
+
+应用这种模式时的主要挑战在于正确识别业务能力。这需要理解业务本身，与业务分析师合作可能会有所帮助。
+
+\paragraph{按子域分解}
+
+\label{idx:1410}
+另一种分解模式与\textbf{领域驱动设计}（\textbf{DDD}）方法有关。要定义服务，必须先识别 DDD 子域。与业务能力一样，识别子域需要了解业务上下文，在我们的例子中就是电子商务。电子商务中的子域示例包括订单履行、支付处理和产品目录管理。
+
+\label{idx:1411}
+这两种方法的主要区别在于：按业务能力分解更关注业务的组织方式（即其结构），而按子域分解则关注业务试图解决的问题。
+
+\subsubsection{每个服务一个数据库模式}
+
+\label{idx:1412}
+存储和处理数据在每一种软件架构中都是一个复杂的问题。错误的选择可能会影响可扩展性、性能或维护成本。对于微服务，还有一层额外的复杂性，来自我们希望微服务之间松散耦合这一事实。
+
+这引出了一个设计模式：每个微服务连接自己的数据库，从而不受其他服务所引入变更的影响。虽然这个模式带来了一些开销，但它的额外好处是你可以针对每个微服务单独优化模式（schema）和索引。
+
+\label{idx:1413}
+由于数据库往往是相当庞大的基础设施，这种做法可能并不可行，因此在微服务之间共享数据库是一种可以理解的折衷。
+
+\subsubsection{部署策略}
+
+\label{idx:1414}
+当微服务运行在多台主机上时，你大概会想知道哪种方式更适合分配资源。我们来比较两种可能的做法。
+
+\paragraph{每台主机单个服务}
+
+\label{idx:1415}
+使用这个模式时，我们让每台主机只承载某一特定类型的微服务。主要好处是你能够调整机器以更好地适配预期的工作负载，而且服务之间隔离良好。当你提供超大内存或高速存储时，可以确保它只被需要它的那个微服务使用。该服务也无法消耗超过其所分配的资源。
+
+这种做法的缺点在于，某些主机可能得不到充分利用。一种可能的变通方法是使用仍然满足微服务要求的最小机器，并在需要时进行扩展。然而，这种变通方法并不能解决主机自身存在额外开销的问题。
+
+\paragraph{每台主机多个服务}
+
+\label{idx:1416}
+相反的做法是在每台主机上承载多个服务。这有助于优化机器的利用率，但也带来一些缺点。首先，不同的微服务可能需要不同的优化，因此把它们放在同一台主机上仍然是不可能的。更重要的是，采用这种做法会让你失去对主机分配的控制，因此一个微服务中的问题可能导致与之共处的另一个微服务出现故障，即便后者原本不会受影响。
+
+另一个问题是微服务之间的依赖冲突。当微服务彼此没有隔离时，部署就必须考虑各种可能的不同依赖。这种模型的安全性也更差。
+
+\label{idx:1417}
+\label{idx:1418}
+既然你已经了解了一些重要的优缺点和模式，接下来我们来看看扩展应用时的设计考量，其中有一些同时适用于单体架构和微服务架构。这些方法中有一些——即那些关于解决瓶颈的方法——不仅能改善可扩展性，还能让从单体到微服务的增量迁移更为容易。
+
+\section{可扩展微服务的设计考量}
+
+\label{idx:1419}
+\label{idx:1420}
+在深入探讨具体的可扩展性相关技术之前，值得注意的是，关于单体应用和微服务哪个在扩展上天生更胜一筹，人们的看法并不一致。一些架构师认为单体应用本身就是不好的，因为它们扩展性差、紧耦合且难以维护。也有人声称，单体应用带来的性能优势能够抵消其缺点。事实上，紧耦合组件在网络、处理能力和内存方面的开销，要比松耦合组件小得多。
+
+由于每个应用都有独特的业务需求，而且在利益相关者方面处于独特的环境之中，因此并没有关于哪种方式更合适的通用规则。更令人困惑的是，在最初从单体迁移到微服务之后，一些公司又开始把微服务整合成宏服务（macroservice）。这是因为维护成千上万个独立软件实例的负担被证明大得难以承受。
+
+在一种架构和另一种架构之间做出选择，应当始终源于业务需求以及对不同备选方案的仔细分析。把意识形态放在务实之前，通常会在组织内部造成大量浪费。当一个团队试图不惜一切代价坚持某种既定方法，而不考虑不同的解决方案或不同的外部意见时，这个团队就不再履行其为适当的工作提供适当工具的职责了。
+
+如果你正在开发或维护一个单体应用，你仍然可以从那些改善可扩展性的技术中受益。下一节中的方法既可以帮助你扩展单体应用，也可以帮助扩展基于微服务的应用，同时还能让单体应用在你选择迁移时更容易迁移到微服务。不过，为简洁起见，我们的讨论将聚焦于微服务。
+
+\subsection{解决可扩展性瓶颈}
+
+\label{idx:1421}
+在单体和微服务中，可扩展性瓶颈的三个主要来源如下：
+
+\begin{itemize}
+\item 内存
+\item 存储
+\item 计算
+\end{itemize}
+
+我们将探讨解决这些瓶颈的方法，采用既适用于微服务也适用于单体的技术。
+
+\subsubsection{外包内存管理}
+
+\label{idx:1422}
+帮助微服务扩展的方法之一，是把它们的一些任务外包出去。其中一项可能妨碍扩展工作的任务就是内存管理和数据缓存。
+
+对于单个单体应用而言，把缓存数据直接存储在进程内存中并不是问题，因为反正只有该进程会访问这个缓存。但当某个进程有多个副本时，这种做法就开始暴露出一些问题。
+
+如果某个副本已经计算完成了某部分工作负载并把它存入了本地缓存，会怎么样呢？另一个副本对此一无所知，必须再计算一次。这样一来，你的应用既浪费了计算时间（因为同一个任务必须执行多次），也浪费了内存（因为结果也在每个副本中分别存储）。
+
+为了缓解这类挑战，可以考虑改用外部内存存储，而不是在应用内部自行管理缓存。使用外部解决方案的另一个好处是，缓存的生命周期不再与应用的生命周期绑定。你可以重启应用并部署新版本，而已经存入缓存中的值仍会保留。
+
+这还可能缩短启动时间，因为你的应用不再需要在启动期间执行计算。两种流行的内存缓存解决方案是 Memcached 和 Redis。
+
+\paragraph{Memcached}
+
+\label{idx:1423}
+Memcached 于 2003 年发布，是两者中较老的产品。它是一个通用的分布式键值存储。该项目最初的目标是通过把缓存值存储在内存中，来减轻 Web 应用所用数据库的负担。
+
+Memcached 从设计上就是分布式的。在其早期版本中，服务器重启时所有缓存数据都会丢失。不过，从 1.5.18 版本起，Memcached 支持\emph{热重启}功能。这使缓存能够在\emph{干净关闭}之后重新加载。这是通过把 RAM 磁盘用作临时存储空间来实现的。该系统的主要用例包括数据库查询缓存、会话存储、API 响应缓存和内容缓存。
+
+\label{idx:1424}
+\label{idx:1425}
+\label{idx:1426}
+\label{idx:1427}
+该系统使用一套简单的 API，可以通过 Telnet（一种提供对远程系统虚拟终端访问的网络协议）来操作，也可以经由 \texttt{netcat}（常缩写为 \texttt{nc}，一种使用\textbf{传输控制协议}（\textbf{TCP}）和\textbf{用户数据报协议}（\textbf{UDP}）在网络中读写数据的网络工具）来操作，或者使用许多流行编程语言的绑定。由于该项目是用 C 编写的，因此并不存在官方的 C++ 客户端库，但可以使用 C/C++ 的 \texttt{libmemcached} 库。
+
+\paragraph{Redis}
+
+\label{idx:1428}
+Redis 是比 Memcached 更新的项目，其初始版本于 2009 年发布。自那以后，Redis 在许多场景中取代了 Memcached 的使用。与 Memcached 一样，它是一个分布式的、通用的内存键值存储。
+
+\label{idx:1429}
+与 Memcached 不同，Redis 还具备可选的数据持久化能力。Memcached 处理的是简单字符串形式的键和值，而 Redis 还支持其他数据类型，例如以下这些：
+
+\begin{itemize}
+\item 字符串列表
+\item 字符串集合
+\item 字符串有序集合
+\item 键和值均为字符串的哈希表
+\item 地理空间数据（自 Redis 3.2 起）
+\item HyperLogLogs
+\end{itemize}
+
+Redis 的设计使其非常适合缓存会话数据、缓存网页以及实现排行榜。除此之外，它还可以用于消息队列。流行的 Python 分布式任务队列库 Celery 就把 Redis 作为可选的代理（broker）之一，与 RabbitMQ 和 Apache SQS 并列。
+
+Microsoft、Amazon、Google 和阿里巴巴都在各自的云平台中提供基于 Redis 的托管服务。
+
+\label{idx:1430}
+\label{idx:1431}
+\label{idx:1432}
+\label{idx:1433}
+C++ 中有许多 Redis 客户端的实现。比较有意思的有 \texttt{Hiredis }（\href{https://github.com/redis/hiredis}{https://github.com/redis/hiredis}）、\texttt{redis-plus-plus }（\href{https://github.com/sewenew/redis-plus-plus}{https://github.com/sewenew/redis-plus-plus}）、使用 C++17 编写的 \texttt{ redis-cpp} 库（\href{https://github.com/tdv/redis-cpp}{https://github.com/tdv/redis-cpp}），以及 Boost.Redis（\href{https://github.com/boostorg/redis}{https://github.com/boostorg/redis}）。
+
+下面这个 \texttt{redis-plus-plus} 的用法示例演示了如何在该存储中设置和获取一些数据。首先，我们连接到 Redis 服务器并存储一个键值对：
+
+\begin{codebox}[cpp]
+#include <sw/redis++/redis++.h>
+#include <algorithm>
+#include <iostream>
+#include <iterator>
+using namespace sw::redis;
+int main() {
+  try {
+    auto redis = Redis("tcp://127.0.0.1:6379");
+    redis.set("poem", "late goodbye");
+    if (const auto val = redis.get("poem")) {
+      std::cout << *val << std::endl;
+    }
+\end{codebox}
+
+\label{idx:1434}
+如果事先没有删除该列表，后续操作会把新值追加到已有的值之后：
+
+\begin{codebox}[text]
+    redis.del("students");
+\end{codebox}
+
+接着，我们把多个值推入该列表：
+
+\begin{codebox}[text]
+    redis.rpush("students", {"Allison", "John", "Brian", "Andrew", 
+                "Claire"});
+\end{codebox}
+
+最后，我们从列表中读取并打印其内容：
+
+\begin{codebox}[cpp]
+    std::vector<std::string> vec;
+    redis.lrange("students", 0, -1, std::back_inserter(vec));
+    std::copy(vec.begin(), vec.end(),
+              std::ostream_iterator<std::string>(std::cout, " "));
+  } catch (const Error& e) {
+    std::cerr << "Error: " << e.what() << std::endl;
+  }
+  return 0;
+}
+\end{codebox}
+
+\begin{myTip}{提示}
+借助\textbf{AI 代码解释器}和\textbf{快速复制}功能，提升你的编码体验。在下一代 Packt Reader 中打开本书。点击\textbf{复制}按钮
+
+（\textbf{1}）即可快速把代码复制到你的编码环境中，或者点击\textbf{解释}按钮
+
+（\textbf{2}）让 AI 助手为你讲解一段代码。
+
+\myGraphic{0.92}{images/image__2_.png}{}
+
+\textbf{下一代 Packt Reader }随本书的购买免费附赠。扫描二维码，或者访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按书名查找本书。仔细核对所显示的版本，确保你获取的是正确的那一版。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/Latest_QR.png}\end{center}
+\end{myTip}
+
+如你所见，\texttt{redis-plus-plus} 让设置单个值和列表都变得很容易。
+
+\paragraph{哪种内存缓存更好？}
+
+\label{idx:1435}
+对大多数应用而言，如今 Redis 会是更好的选择。它拥有庞大的用户社区和众多客户端库，因而得到了良好的支持。除此之外，它还提供快照、复制、事务以及发布—订阅模型。Redis 中还可以嵌入 Lua 脚本，而对地理空间数据的支持使它成为地理相关 Web 和移动应用的绝佳选择。
+
+\begin{myNotic}{注意}
+
+Redis 的直接替代品是 Redis 更改许可证、不再开源之后出现的分支：KeyDB（由 Snapchat 支持）、Redict 和 Valkey（由 Aiven、Amazon、ByteDance、Ericsson、Google、NetApp Instaclustr、Oracle、Percona、UpCloud 和 k0rdent 支持）。其他流行的替代品还有 ScyllaDB（基于 Seastar 框架）、Dragonfly（完全兼容 Redis 和 Memcached API）、RocksDB（由 Meta 开发和维护）、GridDB（面向物联网的 NoSQL/SQL 数据库）、RaimaDB（面向关键任务应用的嵌入式数据库）、Tarantool（内存计算平台）、Couchbase（NoSQL 分布式文档数据库）以及 Aerospike（实时、高性能的 NoSQL 数据库）。
+\end{myNotic}
+
+不过，如果你的主要目标是在 Web 应用中缓存数据库查询的结果，那么 Memcached 是更简单的方案，开销也小得多。由于无需存储类型元数据，也无需在不同类型之间进行转换，较低的开销意味着它能更好地利用资源。
+
+\subsubsection{外包存储}
+
+\label{idx:1436}
+\label{idx:1437}
+\label{idx:1438}
+引入和扩展微服务时的另一个可能的限制是存储。传统上，人们使用本地块设备来存储不属于数据库的对象（例如静态 PDF 文件、文档或图像）。即便在如今，块存储依然非常流行，无论是通过本地块设备，还是通过诸如\textbf{网络文件系统}（\textbf{NFS}）或\textbf{服务器消息块}（\textbf{SMB}）这样的网络文件系统。
+
+\label{idx:1439}
+\label{idx:1440}
+\label{idx:1441}
+\label{idx:1442}
+\label{idx:1443}
+NFS 和 SMB 属于\textbf{网络附加存储}（\textbf{NAS}）的范畴（NAS 是一种在多个用户之间存储和共享文件的集中式服务器），此外还有一些协议与在另一层面运作的概念相关：\textbf{存储区域网络}（\textbf{SAN}）（一种提供对存储设备网络访问的专用高速网络）。其中一些流行的协议有\textbf{互联网小型计算机系统接口}（\textbf{iSCSI}）、\textbf{网络块设备}（\textbf{NBD}）、\textbf{ATA}（\textbf{高级技术附件}）\textbf{基于以太网}（\textbf{AoE}）、光纤通道协议以及以太网光纤通道。
+
+另一种方案采用为分布式计算设计的集群文件系统：GlusterFS、CephFS 或 Lustre。不过，这些系统都以块设备的形式运行，向用户暴露相同的 POSIX 文件 API。
+
+\label{idx:1444}
+AWS 提出了一种关于存储的全新视角。Amazon \textbf{简单存储服务}（\textbf{S3}）引入了对象存储。API 提供对存储在桶（bucket）中的对象的访问。这与传统文件系统不同，因为文件、目录和 inode 之间不再有区分；只有桶和键，它们指向由该服务存储的二进制对象。
+
+\subsubsection{外包计算}
+
+\label{idx:1445}
+微服务的原则之一是，一个进程只应负责完成工作流中的一小部分。从单体应用迁移到微服务时，一个自然的步骤是识别出可能长时间运行的任务，并将它们拆分成独立的进程。
+
+这正是任务队列背后的概念。任务队列负责管理任务的整个生命周期。与其自己实现线程或多进程，不如借助任务队列，把要执行的任务委托出去，由任务队列异步处理。任务既可以在产生它的进程所在的同一台机器上执行，也可以运行在具有特定要求的机器上。
+
+任务及其结果是异步的，因此主进程不会发生阻塞。Web 开发中流行的任务队列有：用 Python 编写的 Celery、用 Ruby 编写的 Sidekiq、用 TypeScript 为 Node.js 编写的 BullMQ，以及用 Go 编写的 Machinery。它们都可以将 Redis 用作消息代理（broker）。遗憾的是，目前还没有用 C++ 编写的类似成熟方案。
+
+如果你认真考虑走这条路，一种可行的做法是直接利用 Redis 的列表和集合数据结构，在 Redis 中实现一个任务队列。不过，由于 Redis 主要在内存中处理消息，一旦 Redis 服务器故障，就有可能丢失尚未处理的消息。
+
+另一种可行的做法是使用现有的某个任务队列，例如 Go Machinery，并通过直接调用 Redis 来驱动它们。不过，不建议这样做，因为它依赖的是任务队列的实现细节，而不是有文档记录的公共 API。
+
+\label{idx:1446}
+\label{idx:1447}
+还有一种做法是使用\textbf{简化包装器与接口生成器}（\textbf{SWIG}）提供的绑定来对接任务队列，从而把用 C 或 C++ 编写的计算机程序或库与脚本语言（如 JavaScript、Perl、PHP、Python、Tcl 和 Ruby）或非脚本语言（如 C\#、D、Go、Java、Lua、OCaml、Octave、Scilab 和 R）连接起来。不过，这种方法引入了额外的复杂性，因为它需要谨慎处理跨语言的内存管理。此外，由于错误可能跨语言传播，调试也会变得更困难。
+
+\subsection{扩展微服务}
+
+\label{idx:1448}
+微服务的一大显著优势是它们比单体应用扩展得更高效。在相同的硬件基础设施下，理论上微服务能比单体应用发挥出更高的性能。
+
+然而在实践中，这些优势并没有那么直接。微服务及其相关辅助组件也会带来开销，对于规模较小的应用而言，其性能可能还不如一个经过优化的单体应用。
+
+请记住，即使某样东西“看上去”不错，也不代表它真的行得通。如果你想根据可扩展性或性能来制定架构决策，最好先做好计算和实验。这样，你就能基于数据而非仅凭感觉来行动。
+
+在扩展方面，你选择的策略往往取决于你的部署模型。本章前面已经介绍过两种部署策略。我们了解了这些策略的具体内容及其优缺点；现在，我们将在扩展的语境下讨论同样的这些策略。
+
+\subsubsection{扩展“每主机单服务”部署}
+
+\label{idx:1449}
+对于“每主机单服务”部署，扩展微服务需要增减承载该微服务的机器。如果你的应用运行在云架构（公有云或私有云）上，许多提供商都提供一种称为自动扩展组（autoscaling group）的概念。
+
+自动扩展组定义一个基础虚拟机镜像，该镜像会在组内所有实例上运行。每当达到某个临界阈值（例如 CPU 使用率达到 80\%）时，就会创建一个新实例并加入组中。由于自动扩展组运行在负载均衡器之后，增加的流量会分摊到现有实例和新实例上，从而降低每个实例的平均负载。当流量高峰消退后，扩展控制器会关闭多余的机器，以保持较低的成本。
+
+不同的指标都可以作为触发扩展事件的条件。CPU 负载是最容易使用的指标之一，但它可能不是最准确的。其他指标，例如队列中的消息数量，可能更适合你的应用。
+
+下面是一段用于设置扩缩容策略的 Terraform 配置节选：
+
+\begin{codebox}[text]
+autoscaling_policy {
+    max_replicas = 5
+    min_replicas = 3
+ 
+    cooldown_period = 60
+ 
+    cpu_utilization {
+      target = 0.8
+    }
+}
+\end{codebox}
+
+\label{idx:1450}
+这意味着在任何时刻，都会至少有三个实例在运行，最多有五个实例。当组内所有实例的平均 CPU 负载至少达到 80\% 时，扩缩容器就会触发。这时，会启动一个新实例。新机器的指标只有在它已运行至少 60 秒（冷却期）之后才会被采集。
+
+\subsubsection{扩展“每主机多服务”部署}
+
+\label{idx:1451}
+\label{idx:1452}
+刚描述的自动扩展方案也可以应用于“每主机多服务”部署。不过，你大概能想象得到，在给定场景下这并不是最高效的方法。仅根据单个服务吞吐量的下降就扩展整组服务，这类似于扩展单体应用。
+
+如果你使用“每主机多服务”部署模式，那么扩缩微服务的更好方式是使用编排器。如果你不想使用容器，Nomad 是个很棒的选择，它能与许多不同的执行驱动（execution driver）配合工作。对于容器化的工作负载，Docker Swarm 或 Kubernetes 都可以帮到你。编排器是一个我们将在\emph{第 16 章}，\emph{容器}中重新讨论的话题。
+
+\section{利用托管服务与云提供商}
+
+\label{idx:1453}
+\label{idx:1454}
+SOA 可以扩展到当前的云计算趋势。ESB 所承载的服务通常由企业内部开发，而借助云计算，则可以使用由一家或多家云提供商提供的服务。
+
+在为云计算设计应用架构时，在实现其他方案之前，你应始终先考虑托管服务（由云提供商完全提供并维护的服务）。例如，在你决定自建并托管带有所选插件的 PostgreSQL 数据库之前，务必弄清楚它与提供商所提供的托管数据库托管服务相比，在权衡取舍和成本上的差异。
+
+当前的云生态提供了大量旨在应对常见用例的服务，例如以下几种：
+
+\begin{itemize}
+\item 存储
+\item 关系型数据库
+\item 文档（NoSQL）数据库
+\item 内存缓存
+\item 电子邮件
+\item 消息队列
+\item 容器编排
+\item 计算机视觉
+\item 自然语言处理
+\item 文本转语音与语音转文本
+\item 遥测：监控、日志记录与追踪
+\item 大数据
+\item 内容分发网络
+\item 数据分析
+\item 任务管理与调度
+\item 身份管理
+\label{idx:1455}
+\label{idx:1456}
+\item 密钥与机密管理
+\end{itemize}
+
+鉴于可用的第三方服务选择极为丰富，云计算与 SOA 能够自然契合也就不言而喻了。
+
+\subsection{云计算作为 SOA 的延伸}
+
+\label{idx:1457}
+\label{idx:1458}
+云计算是虚拟机托管的一种延伸。让云计算提供商区别于传统\textbf{虚拟专用服务器}（\textbf{VPS}）提供商的有两点：
+
+\begin{itemize}
+\item 云计算可通过 API 访问，这使它本身就成为一项服务。
+\label{idx:1459}
+\item 除了虚拟机实例之外，云计算还提供存储、托管数据库、可编程网络等众多附加服务。它们也都可以通过 API 访问。
+\end{itemize}
+
+在探讨如何在你的应用中使用云提供商 API 的具体方式之前，我们先来了解一下如何访问这些 API。
+
+\subsection{访问云 API}
+
+\label{idx:1460}
+通过 API 访问云计算资源，是云计算区别于传统托管的最重要特征之一。使用 API 意味着你无需运维人员介入即可随意创建和删除实例。这样一来，实现诸如基于负载的自动扩展、高级部署方式（金丝雀发布或蓝绿部署），以及应用自动化的开发与测试环境等功能就变得非常容易。
+
+云提供商通常将其 API 以 RESTful 服务的形式对外提供。除此之外，它们往往还针对多种编程语言提供客户端库。虽然三家最流行的提供商都支持 C++ 客户端库，但规模较小的厂商所提供的支持则可能参差不齐。
+
+如果你打算把 C++ 应用部署到云端，并计划使用云 API，那么务必确认你的提供商已经发布了 C++ SDK。即使没有官方 SDK，也仍然可以使用云 API，例如借助 Boost.Beast 或 Seastar 库，但要记住，这样做在实现上需要投入多得多的精力。
+
+\label{idx:1461}
+要访问\textbf{云 SDK}，你还需要进行访问控制。通常，你的应用可以通过两种方式通过身份验证以使用云 API。
+
+第一种方式是通过提供 API 令牌。API 令牌应当保密，绝不能作为版本控制系统的一部分存储，也不能存于编译后的二进制文件中。为防止被盗，它还应当在静态存储时加密。
+
+安全地将 API 令牌传递给应用的方法之一，是借助诸如 HashiCorp Vault 这样的安全框架。这是一种可编程的机密存储，内置了租期管理与密钥轮换功能。
+
+第二种方式是将应用托管在具有相应访问权限的实例上。许多云提供商允许为特定的虚拟机实例授予访问权限。这样，托管在此类实例上的应用无需使用单独的令牌进行身份验证。访问控制则基于发起云 API 请求的实例来进行。
+
+这种方式更易于实现，因为它无需考虑机密管理的需求。缺点是，一旦该实例被攻陷，这些访问权限将对该实例上运行的所有应用可用，而不仅仅是你部署的那个应用。
+
+\label{idx:1462}
+有几种方式可以在你的应用中使用云提供商的 API，下面我们逐一介绍。
+
+\subsection{使用云提供商的 API}
+
+\label{idx:1463}
+在本节中，我们将了解与云提供商 API 交互的不同方式。
+
+\subsubsection{直接使用 API 调用}
+
+\label{idx:1464}
+如果你的云提供商提供了可用你所用语言访问的 API，那么你就可以直接从应用与云资源交互。
+
+下面两个示例都涉及直接使用 C++ 进行 API 调用，来完成同一项任务——为每个新注册的用户创建一个专用的存储桶，从而让用户可以上传自己的图片。第一个示例依赖 AWS 的厂商专用 SDK，而第二个示例使用 MinIO 的厂商中立 SDK，它可与任何兼容 S3 的服务配合使用。
+
+\paragraph{示例 1}
+
+本示例使用适用于 C++ 的 AWS SDK，为每个新注册的用户创建一个 S3 存储桶：
+
+\begin{codebox}[cpp]
+#include <aws/core/Aws.h>
+#include <aws/core/utils/UUID.h>
+#include <aws/s3/S3Client.h>
+#include <aws/s3/model/CreateBucketRequest.h>
+#include <spdlog/spdlog.h>
+#include <string>
+\end{codebox}
+
+每个 AWS 区域（Region）代表一个独立的地理区域，但本示例中创建的桶位于欧洲（\texttt{eu-central-1}）区域。你必须自行获取凭证，相关说明见网站（\href{https://docs.aws.amazon.com}{https://docs.aws.amazon.com}），但这超出了本书的范围：
+
+\begin{codebox}[cpp]
+constexpr auto region = Aws::S3::Model::BucketLocationConstraint::eu_central_1;
+bool create_user_bucket(const std::string& username) {
+  Aws::S3::Model::CreateBucketRequest request;
+\end{codebox}
+
+\label{idx:1465}
+\texttt{create\_\allowbreak{}user\_\allowbreak{}bucket} 函数为给定的用户名创建一个桶。S3 桶名长度必须在 3（最小）到 63（最大）个字符之间。
+
+在我们的示例中，名称经过随机化处理，因此每个创建的桶都是唯一的：
+
+\begin{codebox}[text]
+  const Aws::String unique_prefix = Aws::Utils::UUID::RandomUUID();
+  const Aws::String bucket_name("games-" + username);
+  const Aws::String full_name = unique_prefix + bucket_name;
+\end{codebox}
+
+桶名和区域设置是在创建桶时由 Amazon S3 客户端发送的请求中设定的：
+
+\begin{codebox}[text]
+  request.SetBucket(Aws::Utils::StringUtils::ToLower(full_name.c_str()));
+  Aws::S3::Model::CreateBucketConfiguration bucket_config;
+  bucket_config.SetLocationConstraint(region);
+  request.SetCreateBucketConfiguration(bucket_config);
+  const Aws::S3::S3Client s3_client;
+  if (const auto outcome = s3_client.CreateBucket(request);
+      !outcome.IsSuccess()) {
+    const auto& err = outcome.GetError();
+    spdlog::error("ERROR:  CreateBucket:  {}:  {}", err.GetExceptionName(),
+                  err.GetMessage());
+    return false;
+  }
+  return true;
+}
+\end{codebox}
+
+这里的用户名只是语义上的，因为所有创建的桶都属于你的账户：
+
+\begin{codebox}[cpp]
+int main() {
+  const std::string username = "david-lightman";
+  const Aws::SDKOptions options;
+  Aws::InitAPI(options);
+  if (create_user_bucket(username)) {
+    std::cout << "The bucket for " << username << " is ready" << std::endl;
+  }
+  ShutdownAPI(options);}
+}
+\end{codebox}
+
+\label{idx:1466}
+这里我们有一个 C++ 函数，它创建一个以所传用户名（作为参数）命名的 Amazon S3 桶。该桶被配置为位于指定的区域（Region）。如果操作失败，我们希望获取错误消息，并使用 \texttt{spdlog} 将其记录下来。
+
+\paragraph{示例 2}
+
+\label{idx:1467}
+同样的功能也可以用 MinIO（兼容 Amazon S3 的开源云存储）来实现。这个对象存储系统支持任何兼容 Amazon S3 的对象存储，以及不同的凭证提供程序：
+
+\begin{codebox}[cpp]
+#include <miniocpp/client.h>
+#include <sole.hpp>
+#include <spdlog/spdlog.h>
+#include <string>
+\end{codebox}
+
+在真实的应用中，凭证多半不会被硬编码到程序代码里，但这里只是一个演示。这些凭证取自 MinIO 网站：
+
+\begin{codebox}[cpp]
+std::string access_key = "Q3AM3UQ867SPQQA43P2F";
+std::string secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG";
+bool create_user_bucket(const std::string& username) {
+\end{codebox}
+
+\texttt{create\_\allowbreak{}user\_\allowbreak{}bucket} 函数为给定的用户名创建一个桶。
+
+\label{idx:1468}
+MinIO playground 部署在 \href{https://play.min.io:9443}{https://play.min.io:9443}。我们的客户端应用连接到该地址，创建的桶也位于那里：
+
+\begin{codebox}[yaml]
+    minio::s3::BaseUrl base_url("play.min.io");
+    minio::creds::StaticProvider provider(access_key, secret_key);
+    minio::s3::Client client(base_url, &provider);
+\end{codebox}
+
+\label{idx:1469}
+每个创建的桶的名称中都带有一个\textbf{通用唯一标识符}（\textbf{UUID}）前缀：
+
+\begin{codebox}[cpp]
+    std::string unique_prefix = sole::uuid4().str();
+    std::string bucket_name{"petticoat-acres-" + username};
+    std::string full_name{unique_prefix + bucket_name};
+    minio::s3::MakeBucketArgs args;
+    args.bucket = full_name;
+    if (const minio::s3::MakeBucketResponse resp =client.MakeBucket(args))
+    {
+        spdlog::info("{} bucket is created successfully", args.bucket);
+    } else {
+        spdlog::error("Unable to create bucket {}: {}", args.bucket, 
+                      resp.Error().String());
+        return false;
+   }
+    return true;
+}
+\end{codebox}
+
+\label{idx:1470}
+在这种情况下，用户名除了在语义上用作桶名的后缀之外，并没有其他意义：
+
+\begin{codebox}[cpp]
+int main() {
+    if (const std::string username = "prayerincpp";
+          create_user_bucket(username)) {
+        spdlog::info("The bucket for {} is ready", username);
+    }
+    return 0;
+}
+\end{codebox}
+
+许多云服务提供商，包括 Amazon、Google 和 Microsoft，都为其平台提供 SDK。
+
+\subsubsection{通过 CLI 工具使用 API 调用}
+
+\label{idx:1471}
+\label{idx:1472}
+\label{idx:1473}
+\label{idx:1474}
+有些操作不必在应用的运行时执行。它们通常在部署期间运行，因此可以（例如）用 shell 脚本自动化。其中一个用例是调用\textbf{命令行界面}（\textbf{CLI}）工具来创建一个新的\textbf{虚拟私有云}（\textbf{VPC}）：
+
+\begin{codebox}[text]
+gcloud compute networks create database --description "A VPC to access the database from private instances"
+\end{codebox}
+
+我们使用来自 Google Cloud Platform 的 \texttt{gcloud} CLI 工具，创建一个名为 \texttt{database} 的网络，用于处理从私有实例到数据库的流量。
+
+\subsubsection{使用与云 API 交互的第三方工具}
+
+\label{idx:1475}
+下面来看一个运行 HashiCorp Packer 的示例，它用于构建一个预先配置好你的应用的虚拟机实例镜像：
+
+\begin{codebox}[text]
+{
+   variables : {
+     do_api_token : {{env `DIGITALOCEAN_ACCESS_TOKEN`}} ,
+     region : fra1 ,
+     packages : "customer"
+     version : 1.0.3
+  },
+  builders : [
+    {
+       type : digitalocean ,
+       api_token : {{user `do_api_token`}} ,
+       image : ubuntu-25-04-x64 ,
+       region : {{user `region`}} ,
+       size : 512mb ,
+       ssh_username : root
+    }
+  ],
+  provisioners: [
+    {
+       type : file ,
+       source : ./{{user `package`}}-{{user `version`}}.deb ,
+       destination : /home/ubuntu/
+    },
+    {
+       type : shell ,
+       inline :[
+         dpkg -i /home/ubuntu/{{user `package`}}-{{user `version`}}.deb
+      ]
+    }
+  ]
+}
+\end{codebox}
+
+\label{idx:1476}
+在上述代码中，我们提供所需的凭证和区域，并使用一个 builder 从 Ubuntu 镜像为我们准备一个实例。我们所需的实例需要有 512 MB 内存。然后，我们先向该实例发送一个 \texttt{.deb} 软件包，再执行一条 shell 命令来安装这个包。
+
+\subsubsection{使用云 CLI}
+
+\label{idx:1477}
+云 CLI 通常由运维人员用来与云 API 交互。此外，它也可以用于编写脚本，或用于以官方不支持的语言使用云 API。
+
+举个例子，下面这个 Bourne shell 脚本在 Microsoft Azure 云中创建一个资源组，然后创建一台属于该资源组的虚拟机：
+
+\begin{codebox}[text]
+#!/bin/sh
+RESOURCE_GROUP=dominicanfair
+VM_NAME=dominic
+REGION=germanynorth
+az group create --name $RESOURCE_GROUP --location $REGION
+az vm create --resource-group $RESOURCE_GROUP --name $VM_NAME --image UbuntuLTS --ssh-key-values dominic_key.pub
+\end{codebox}
+
+\label{idx:1478}
+在查找有关如何管理云资源的文档时，你会看到大量使用云 CLI 的示例。即使你平时并不使用 CLI，而更倾向于 Terraform 或 OpenTofu 之类的方案，手头备有云 CLI 也可能有助于你调试基础设施问题。
+
+\subsubsection{使用与云 API 交互的工具}
+
+\label{idx:1479}
+你已经了解到使用云提供商产品时厂商锁定的危险。通常，每家云提供商都会提供自己的 API 和 CLI，它们与其他提供商的有所差异。在某些情况下，规模较小的提供商会提供抽象层，让你可以通过与知名提供商类似的 API 来访问其产品。这种做法旨在帮助将应用从一个平台迁移到另一个平台。
+
+不过，这种情况很少见，一般而言，用于与某家提供商的服务交互的工具与另一家提供商的工具并不兼容。这不仅在你考虑从一个平台迁移到另一个平台时会成为问题。如果你想在多家提供商上托管应用，这也可能会带来麻烦。
+
+\label{idx:1480}
+为此，出现了一套新的工具，统称为\textbf{基础设施即代码}（\textbf{IaC}）工具，它们在不同提供商之上提供了一层抽象。这些工具也未必局限于云提供商。它们通常是通用的，有助于自动化你应用架构中的许多不同层次。
+
+在\emph{第 11 章}，\emph{持续集成与持续部署}中，我们简要介绍过其中一些。
+
+\begin{myNotic}{注意}
+
+\textbf{云原生工具}
+
+\label{idx:1481}
+IaC 工具侧重于自动化基础设施，而云原生工具则让架构师和开发者能够进一步抽象基础设施，并首先以云为核心来构建。Kubernetes 和 OpenShift 等流行方案正在推动这一趋势，但这一领域也包含许多较小的参与者。本书的最后一章专门讨论云原生设计，并探讨如何使用这些工具构建应用。
+\end{myNotic}
+
+\section{小结}
+
+在本章中，我们考察了 SOA 作为实现分布式系统的一种关键方法，并探讨了微服务作为其现代实现之一，同时还简要介绍了其他几种实现。我们还讨论了 SOA 相关的优势与挑战。
+
+微服务是软件架构中的一大趋势。只要你确保了解其中的风险并为之做好准备，它们就可能是合适的选择。我们讨论了微服务的优势与不足，介绍了一系列微服务特有的设计模式，并研究了如何通过外包内存管理、存储或计算来构建微服务。最后，我们探讨了扩展微服务的技术。
+
+我们看到了托管服务和云计算如何通过提供广泛的即用型能力来扩展 SOA。
+
+在下一章中，我们将转向分布式系统的通信层，考察 ISC 模式与技术。
+
+\section{问题}
+
+\begin{enumerate}
+\item SOA 中服务的属性有哪些？
+\item Web 服务有哪些优势？
+\item 微服务在什么时候不是好的选择？
+\item 微服务如何帮助你更好地利用系统资源？
+\item 在（不断演进的）系统中，微服务和单体应用如何共存？
+\item 哪种类型的团队从微服务中获益最多？
+\item 引入微服务时，为什么必须有一套成熟的 DevOps 方法？
+\item 微服务有哪些部署策略？每种策略各有什么优势？
+\item 云平台与传统托管有何不同？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item 吉吉·赛凡（Gigi Sayfan），\emph{Hands-On Microservices with Kubernetes: Build, Deploy, and Manage Scalable Microservices on Kubernetes}，Packt Publishing：\href{https://www.packtpub.com/product/hands-on-microservices-with-kubernetes/9781789805468}{https://www.packtpub.com/product/hands-on-microservices-with-kubernetes/9781789805468}
+\item 吉吉·赛凡（Gigi Sayfan），\emph{Mastering Kubernetes: Dive into Kubernetes and Learn How to Create and Operate World-Class Cloud-Native Systems}，第四版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/mastering-kubernetes-9781804614754}{https://www.packtpub.com/en-us/product/mastering-kubernetes-9781804614754}
+\item 吉尼什·马达帕兰巴斯（Gineesh Madapparambath）与拉斯·麦肯德里克（Russ McKendrick），\emph{The Kubernetes Bible: The Definitive Guide to Deploying and Managing Kubernetes across Cloud and On-Prem Environments}，第二版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/the-kubernetes-bible-9781835468241}{https://www.packtpub.com/en-us/product/the-kubernetes-bible-9781835468241}
+\item 阿南德·拉伊（Anand Rai），\emph{Bootstrapping Service Mesh Implementations with Istio:} \emph{Build Reliable, Scalable, and Secure Microservices on Kubernetes with Service Mesh}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/bootstrapping-service-mesh-implementations-with-istio-9781803235967}{https://www.packtpub.com/en-us/product/bootstrapping-service-mesh-implementations-with-istio-9781803235967}
+\item 亚历山德罗·阿里基耶洛（Alessandro Arrichiello）与詹尼·萨利内蒂（Gianni Salinetti），\emph{Podman for DevOps: Containerization Reimagined with Podman and Its Companion Tools}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/podman-for-devops-9781803248967}{https://www.packtpub.com/en-us/product/podman-for-devops-9781803248967}
+\item Lonneke Dikmans 与 Ronald van Luttikhuizen，\emph{SOA Made Simple}，Packt Publishing：\href{https://www.packtpub.com/product/soa-made-simple/9781849684163}{https://www.packtpub.com/product/soa-made-simple/9781849684163}
+\item Martin Fowler，\emph{Microservices—A Definition of This New Architectural Term}：\href{https://martinfowler.com/articles/microservices.html}{https://martinfowler.com/articles/microservices.html}
+\item Chris Richardson，\emph{Microservice Architecture}：\href{https://microservices.io/}{https://microservices.io/}
+\item \emph{Micro Frontends}：\href{https://micro-frontends.org/}{https://micro-frontends.org/}
+\item MinIO，\emph{Exascale Object Store for AI Data, Agentic Computing, and Analytics}：\href{https://min.io/}{https://min.io/}
+\item MinIO，\emph{MinIO C++ SDK}：\href{https://minio-cpp.min.io/}{https://minio-cpp.min.io/}
+\item MinIO，\emph{Software Development Kits (SDKs)}：\href{https://miniodocs.cc/developers/minio-drivers}{https://miniodocs.cc/developers/minio-drivers}
+\item TrueNAS，\emph{TrueNAS Apps}：\href{https://www.truenas.com/apps/}{https://www.truenas.com/apps/}
+\item Redis，\emph{Connect with Redis Client API Libraries}：\href{https://redis.io/docs/latest/develop/clients/}{https://redis.io/docs/latest/develop/clients/}
+\item Luigi Fugaro 与 Mirko Ortensi，\emph{Redis Stack for Application Modernization: Build Real-Time Multi-Model Applications at Any Scale with Redis}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/redis-stack-for-application-modernization-9781837637591}{https://www.packtpub.com/en-us/product/redis-stack-for-application-modernization-9781837637591}
+\item Redis，\emph{Redis Queue}：\href{https://redis.io/glossary/redis-queue/}{https://redis.io/glossary/redis-queue/}
+\item Dragonfly，\emph{SDKs}：\href{https://www.dragonflydb.io/docs/development/sdks}{https://www.dragonflydb.io/docs/development/sdks}
+\item Valkey，\emph{Valkey GLIDE}，GitHub：\href{https://github.com/valkey-io/valkey-glide}{https://github.com/valkey-io/valkey-glide}
+\item Chris Richardson，\emph{Pattern: Decompose by Subdomain}：\href{https://microservices.io/patterns/decomposition/decompose-by-subdomain.html}{https://microservices.io/patterns/decomposition/decompose-by-subdomain.html}
+\item Chris Richardson，\emph{Pattern: Decompose by Business Capability}：\href{https://microservices.io/patterns/decomposition/decompose-by-business-capability.html}{https://microservices.io/patterns/decomposition/decompose-by-business-capability.html}
+\item AWS，\emph{AWS SDK for C++}：\href{https://aws.amazon.com/sdk-for-cpp/}{https://aws.amazon.com/sdk-for-cpp/}
+\item Azure SDK，\emph{Azure SDK for C++}：\href{https://azure.github.io/azure-sdk-for-cpp/}{https://azure.github.io/azure-sdk-for-cpp/}
+\item Google Cloud，\emph{Cloud SDK: Libraries and Command Line Interface}：\href{https://cloud.google.com/sdk}{https://cloud.google.com/sdk}
+\item Boost，\emph{Boost.Beast}：\href{https://www.boost.org/doc/libs/1_87_0/libs/beast/doc/html/index.html}{https://www.boost.org/doc/libs/1\_87\_0/libs/beast/doc/html/index.html}
+\item \emph{Seastar}：\href{https://seastar.io/}{https://seastar.io/}
+\item \emph{Enterprise Integration Patterns}：\href{https://www.enterpriseintegrationpatterns.com/patterns/messaging/toc.html}{https://www.enterpriseintegrationpatterns.com/patterns/messaging/toc.html}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描此二维码或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

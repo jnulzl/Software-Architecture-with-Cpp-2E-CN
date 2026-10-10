@@ -1,0 +1,520 @@
+\begin{myQuote}
+模块化是所有成功的大型程序的基本要素。
+
+——Bjarne Stroustrup，《The C++ Programming Language》特别版，\emph{1998}
+
+\end{myQuote}
+
+C++ 程序员一直面对着通过 \texttt{\#include} 系统包含头文件这种基于预处理器的做法的种种缺陷，包括封装性薄弱、大量使用宏以及编译缓慢。C++ 模块改变了代码的组织与编译方式，有助于解决这些问题。它们用结构化的二进制接口取代了文本包含，从而改善了代码隔离、提升了编译速度，并提供了清晰定义的接口。
+
+然而，很难预测 C++ 社区何时会用模块取代头文件，因为对旧项目的向后兼容仍在延缓这一转变。因此，对于尚未完全迁移到使用 C++ 模块、以及出于向后兼容考虑的项目而言，C++ 库同时提供头文件和模块接口的做法，可能会成为事实上的标准。
+
+模块化的概念并不新鲜，它建立在关注点分离与信息隐藏这两条原则之上。根据关注点分离原则，程序应当被划分为若干模块，每个模块只执行一项明确定义的任务。按照信息隐藏原则，模块的内部结构应当对外界隐藏，与模块的交互只能通过明确定义的接口进行。只要接口保持不变，程序就能免遭无意的改动；而且，由于模块的内部实现不影响程序的其他部分，程序的后续开发也会变得更加简单。
+
+\begin{myQuote}
+区分一个设计良好的模块与一个设计糟糕的模块，最重要的单一因素就是该模块对其内部数据及其他实现细节的隐藏程度。
+
+——Joshua Bloch，《Effective Java》，\emph{2001}
+
+\end{myQuote}
+
+因此，可以说模块化编程建立在分而治之的范式之上，它能简化软件设计、代码复用与可替换性，使不同团队能够并行开发并提升项目的可扩展性，降低出错的概率，并改善可测试性。
+
+\begin{myNotic}{注意}
+
+模块化的概念由加拿大程序员 David Parnas 在其 1972 年那篇开创性的论文 \emph{On the Criteria to Be Used in Decomposing Systems into Modules} 中率先提出。他提出，要创建一个模块，只需掌握关于其他模块内容的最小一组知识就足够了。他还说过：“\emph{调用某个给定例程所必需的那一串指令与该例程本身属于同一个模块}。”
+
+在当时，模块被理解为按一定规则编写的任意过程或函数。然而，20 世纪 70 年代编程语言中可用的过程与函数等语法结构，由于全局变量的存在，无法提供可靠的信息隐藏，从而造成了隐藏的依赖与副作用。
+
+模块的第一个专门语法构造由 Niklaus Wirth 于 1975 年提出，并被纳入他的新语言 Modula。此后，Modula-2 于 20 世纪 70 年代末问世，深受他 1976 年在 Xerox PARC 休假期间所见的 MESA 语言影响，同时也建立在他早期 Pascal 语言的基础之上。这座研究中心是现代计算众多基石的诞生地：\textbf{窗口、图标、菜单与指点设备}（\textbf{WIMP}）、\textbf{图形用户界面}（\textbf{GUI}）、\textbf{模型–视图–控制器}（\textbf{MVC}）模式、以太网网络、计算机鼠标、激光打印机、位图显示、\textbf{所见即所得}（\textbf{WYSIWYG}）范式，以及 Xerox Alto（第一台个人计算机）。
+
+模块结构包含一个接口，用于定义对其他模块可见且可访问的公开声明；而实现部分则包含仅在模块自身内部可访问的私有代码和数据。
+
+如今，大多数现代编程语言都支持模块化编程，包括 C++、C\#、Ada、Erlang、Haskell、Go、Java、JavaScript、Perl、Python、Ruby 和 Zig 等语言。
+
+即使不显式地为模块命名，也可以进行模块化编程，因为模块化的原则在于把程序划分为逻辑上相互独立的部分（单元或模块）。
+
+在 C++ 中，模块化还能借助命名空间进一步提升：通过把标识符（类型、函数、变量等的名称）归入单个命名空间并为其提供内部作用域，可以更高效地组织代码，防止可能出现的命名冲突，尤其是在代码库包含多个库时。
+\end{myNotic}
+
+\begin{myNotic}{注意}
+
+当然，模块化架构这一术语并非只用于软件开发。模块化系统的例子包括模块化建筑、太阳能电池板、模块化风力发电机、模块化 PC 和智能手机等消费电子产品，以及交通运输领域的模块化汽车平台。
+\end{myNotic}
+
+传统上，C++ 中的模块化通过头文件（\texttt{.h}）和源代码文件（\texttt{.cpp}）把代码划分为独立单元（模块）来实现。自 C++20 起，还可以使用内置的模块系统达到这一目的，它改进了依赖管理并缩短了编译时间。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item C++ 模块简介
+\item 使用模块
+\item 创建自己的模块
+\item 将现有代码库迁移到模块
+\item 在 CMake 中使用模块
+\item 在 Conan 中使用模块
+\end{itemize}
+
+\section{技术需求}
+
+构建本章代码需要以下工具：
+
+\begin{itemize}
+\item \textbf{支持 C++23 的编译器：}推荐使用 GCC 15、Clang 20 和 MSVC 19.50（VS 2026）。示例也兼容较早版本的 C++ 编译器（GCC 14、Clang 19 和 MSVC 19.44），但并非全部兼容，尤其是实验性功能。
+\item CMake 4.0+。
+\item Ninja（一种构建系统）。
+\end{itemize}
+
+本章的源代码可在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter09}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter09} 找到。
+
+\section{C++ 模块简介}
+
+\label{idx:746}
+C++ 自 1985 年问世以来一直使用头文件包含机制。最初，C++ 被称为 \emph{带类的 C}，但这个名字很快改成了 C++，因为 C 中的自增运算符象征着为语言增添新特性。头文件对 C 语言而言本是固有之物，自 20 世纪 70 年代初 C 语言发展之初，程序员就开始用头文件来组织和复用代码。头文件允许把函数、类、结构体、宏和变量的声明包含进源文件；通过分离接口与实现，这使代码变得模块化、可维护且可复用。
+
+然而，这种经典的文本包含方式存在缺陷，列举如下：
+
+\label{idx:747}
+由于需要处理大量文本，编译速度很慢。即使是简单的 \emph{Hello World}，在编译前由 C++ 预处理器把头文件包含进源文件之后，也会变成约五十万行代码。这种方式还可能导致违反\textbf{单一定义规则}（\textbf{ODR}）、宏带来的冲突以及命名冲突。
+
+ODR 是 C++ 语言的一条基本原则，它要求任何实体（如变量、函数、类类型、枚举类型、概念（自 C++20 起）或模板）在整个程序中恰好只有一处定义，尽管它可以在不同文件中拥有多个声明。若违反 ODR 而未在编译和链接程序时被发现，就会导致未定义行为。如果在头文件中定义的实体被包含进多个源文件，而不是定义在某个源文件中，就可能违反 ODR 规则——例如，某个函数或类根据宏的不同而在不同翻译单元中被以不同方式包含。C++ 中的命名冲突通常使用命名空间和作用域解析运算符来解决。
+
+\texttt{\#include} 指令的顺序很重要，但本不该如此。由于宏定义、头文件保护符和条件编译的存在，包含的顺序确实可能产生影响。Google C++ Style Guide 建议按以下顺序包含 C++ 头文件，以确保头文件自包含并能发现隐藏的依赖：与某个 C++ 源文件相关的头文件、C 系统头文件、C++ 标准库头文件、第三方库头文件以及项目头文件。
+
+\label{idx:748}
+要封装那些必须放在头文件里的东西是很难的。即使把这类代码放进一个命名详尽的命名空间，也总会有人去用它，正如海勒姆定律（Hyrum's law）——又称隐式接口定律（Law of Implicit Interfaces）——所阐述的那样。随着时间推移，用户会依赖 API 的所有可观察行为，而不仅仅是其契约中明确规定的那部分。这一定律凸显了在系统成长和演进过程中维护向后兼容性与管理预期的种种挑战。该定律的要点在于：随着一个 API 吸引越来越多的用户，人们开始依赖开发者未曾设想或记录的行为。最终，即使是一些微小且未记录的功能或边界情况，也会变成用户所依赖的功能，使得在不损害某些人利益的前提下对 API 做出更改或改进变得困难。当用户依赖某个系统未记录的功能时，该系统的顺利开发就会变得困难得多。C++20 模块是定义公开 API 的一种方式。因此，它通过用结构化的二进制接口取代文本包含，并允许开发者显式隐藏实现细节，缓解了这一问题，但并不能消除海勒姆定律。
+
+\begin{myQuote}
+当一个 API 拥有足够多的用户时，你在契约中承诺了什么并不重要：你系统的所有可观察行为都会成为某些人所依赖的对象。
+
+——Hyrum Wright，Hyrum's Law，hyrumslaw.com，\emph{2012}
+
+\end{myQuote}
+
+下图展示了构建可执行文件的过程。第一阶段是用预处理器把头文件包含进源文件。随后，预处理后的源文件被编译成目标文件。可以生成许多这样的目标文件。链接器将它们与外部库合并成一个可执行文件。
+
+\myGraphic{0.920}{images/B18456_09_01.png}{图 9.1：C++ 构建过程}
+
+幸运的是，模块正是在此时登场。它们解决了上述部分缺陷，加快了构建速度，并在构建方面提供了更好的 C++ 可扩展性，因为模块取代了预处理器和 C/C++ 的 \texttt{\#include} 指令——后者会用指定文件的内容替换指令行。模块还通过显式控制符号的可见性改进了封装，让大型项目更易于管理。
+
+\myGraphic{0.920}{images/B18456_09_02.png}{图 9.2：传统的与模块化的 C++ 项目架构（使用 Clang）}
+
+模块对公开什么内容是有选择性的，因为默认情况下一切都是私有的。使用模块时，你只导出想导出的内容，这天然地带来了良好的封装。这一点同样适用于第三方库：模块只导出必要的库实体，并将模块实现对导入方隐藏，从而帮助解决名称冲突和 ODR 违规问题。
+
+\label{idx:749}
+C++ 标准并不要求模块单元的名称与模块名一致，因为 C++ 把模块组织成逻辑单元。这些单元由公开的模块接口单元和私有的模块实现单元组成。由于这些模块单元是作为逻辑实体进行编译的，C++ 模块每次构建只需解析一次代码，从而避免了文本包含，这与头文件不同。
+
+依赖包含需要特定顺序也不再是问题，因为模块可以按任意顺序导入，但模块会按依赖顺序编译。因此，模块不支持循环依赖，而这在 C++ 中也并非标准做法。循环依赖根本无法编译，因为依赖模块会先于其他模块编译。
+
+下面来看看模块在实际中是如何使用的。使用模块无非是两种情况：使用他人提供的模块，或者创建你自己的模块。
+
+\section{使用模块}
+
+每个模块在编译之后，不仅会被编译成目标文件，还会被编译成模块接口文件。
+
+\label{idx:750}
+目标文件是编译器生成的中间文件，采用机器可读的格式，包含机器码以及符号表等元数据；链接器需要借助这些元数据把该目标文件与其他目标文件和库合并成最终的可执行文件。
+
+在功能上，模块接口文件与头文件类似，但它通过预编译并复用模块接口文件，显著加快了编译速度并缩短了构建时间。接口文件是二进制的，只导出公开实体，例如类型、函数、模板和变量。因此，编译器会快速扫描这个已预先解析好的文件，而不必反复重新解析源代码及其依赖。
+
+这种方式分离了关注点，因为目标文件包含编译后的实现，而接口文件则包含其他源文件导入（使用）该模块所需的声明和定义，如下所示：
+
+\begin{codebox}[python]
+import module;
+\end{codebox}
+
+\label{idx:751}
+在 Clang 和 GCC 工具链中，模块最常用的扩展名是 \texttt{.cppm}，即在传统 C++ 文件扩展名 \texttt{.cpp} 后面加上后缀 \texttt{m}（表示 module）。在 MSVC 工具链中，C++20 模块的扩展名是 \texttt{.ixx}，代表 \emph{interface}。目前没有标准的命名约定。Clang 的约定是：可导入的模块单元文件应使用扩展名 \texttt{.cppm}（或 \texttt{.ccm}、.\texttt{cxxm}、\texttt{.c++m}），而模块实现单元文件应使用扩展名 \texttt{.cpp}（或 \texttt{.cc}、\texttt{.cxx}、\texttt{.c++}）。扩展名 .\texttt{mxx} 和 \texttt{.mpp} 很少使用。
+
+\section{创建自己的模块}
+
+\label{idx:752}
+除了基本的 \texttt{export} 和 \texttt{import} 关键字之外，C++20 还新增了诸如\textbf{模块单元}、\textbf{模块分区}、\textbf{模块链接}和\textbf{头文件单元}等概念。
+
+\label{idx:753}
+\label{idx:754}
+\label{idx:755}
+\label{idx:756}
+模块单元有两种类型：模块接口单元和模块实现单元。一个具名模块由一个或多个共享同一模块名的模块单元组成。
+
+模块接口单元在其声明中使用 \texttt{export} 关键字导出一个模块名或模块分区名；而模块实现单元不导出任何内容，只实现该模块所导出的东西。此外，主模块接口单元导出模块名，一个具名模块只能有一个这样的单元。一个完整的模块可以在单个源文件中定义。
+
+\label{idx:757}
+C++ 中的模块接口单元可以包含若干个称为片段（fragment）的区段。
+
+可选的全局模块片段以 \texttt{module} 关键字开始，以 \texttt{export module} 关键字结束。该片段用于放置任何预处理器指令，包括 \texttt{\#include} 以及必须在模块本身定义之前处理的宏定义。对于那些需要与依赖预处理器的代码交互的模块来说，这是必要的，但这里定义的宏不会影响该片段之后被包含进模块的头文件。因此，非模块单元被视为全局模块的一部分；全局模块是匿名的，没有接口，包含常规的非模块代码。
+
+可选的私有模块片段以 \texttt{module :private} 声明开始。它向导入方完全隐藏模块的实现细节。这一选项常用于在单个文件中把主接口模块实现为一个完整的模块。
+
+全局片段位于模块作用域（module purview）之前，函数、类型、模板等正是在模块作用域中从模块导出。模块作用域可以看作模块单元的整体范围，从模块声明一直延伸到翻译单元的末尾。
+
+C++ 模块分区把大型模块划分为更小、更易管理的内部部分，从而简化开发并有助于管理复杂性。它们只能在具名模块自身内部访问。因此，具名模块之外的翻译单元无法直接导入其模块分区。
+
+C++20 为应对代码复杂性提供的另一种方法是子模块。与模块分区不同，子模块创建的是相互独立的模块层级结构，既可以单独导入，也可以一起导入。例如，一个庞大的 math 模块可以拆分成 \texttt{math.\allowbreak{}algebra}、\texttt{math.\allowbreak{}calculus}、\texttt{math.\allowbreak{}geometry}、\texttt{math.\allowbreak{}trigonometry} 等。
+
+因此，模块分解（把大模块拆分成更小的模块）可以通过分区和子模块两种方式实现。
+
+\label{idx:758}
+头文件单元旨在有效取代传统的头文件。与文本包含方式不同，它们会被编译成二进制格式。这加快了编译速度，有助于避免重复包含，并提供更强的封装。头文件单元不受其自身之外的宏定义影响。在你依赖头文件中定义的宏的情况下（因为 C++ 具名模块不会导出宏），头文件单元是从头文件平滑过渡到具名模块的一种方式。它们像模块一样被导入：
+
+\begin{codebox}[cpp]
+//之前
+#include <iostream>
+//之后
+import <iostream>;
+\end{codebox}
+
+长期以来，C++ 有两种主要的链接类型：内部链接和外部链接。具有内部链接的实体只在单个翻译单元（一个源文件及其包含的头文件）内对链接器可见；而具有外部链接的实体在程序的所有翻译单元中都可见。C++20 引入了模块链接，这是一种新的链接类型，其中的实体在所有属于同一具名模块的翻译单元中都可见。
+
+\label{idx:759}
+当两个不同模块中存在两个名称和签名都相同、且被导出到全局命名空间的实体时，会导致\textbf{不规范的、无需诊断}（\textbf{IFNDR}）的情况，这与 ODR 违规几乎相同。之所以会这样，是因为与其他某些语言不同，C++ 在导入 C++ 模块时不会隐式创建命名空间。因此，导出声明（包括变量、类、结构体、函数、命名空间、模板函数/类以及概念）必须在命名空间层级进行。建议引入与模块同名的命名空间。
+
+闲话少叙，让我们回到之前的交易会（trade fair）示例，演示一下如何在实际中使用模块。首先，为顾客相关代码创建我们的第一个模块，从下面这条指令开始：
+
+\begin{codebox}[text]
+module;
+\end{codebox}
+
+这条语句开启了一个全局模块片段，这是放置包含指令和其他不会被导出的内容的好地方。
+
+接下来，我们指定模块的名称：
+
+\begin{codebox}[text]
+export module customer;
+\end{codebox}
+
+这将是我们稍后导入该模块时使用的名称。它必须出现在被导出的内容之前。
+
+\label{idx:760}
+现在，我们来指定模块将导出什么，给这些定义加上 \texttt{export} 关键字前缀。可选地，导出声明和定义可以分离，命名空间也是如此。这样做有助于提升可读性，或者把实现移到模块实现单元或私有模块片段中，以拆分接口与实现：
+
+\begin{codebox}[cpp]
+export namespace trade_fair {
+using CustomerId = int;
+CustomerId get_current_customer_id() { return 42; }
+}
+\end{codebox}
+
+\begin{myTip}{提示}
+借助 \textbf{AI Code Explainer} 和 \textbf{Quick Copy} 功能提升你的编码体验。在下一代 Packt Reader 中打开本书。点击 \textbf{Copy} 按钮
+
+（\textbf{1}）即可快速把代码复制到你的编码环境中，或者点击 \textbf{Explain} 按钮
+
+（\textbf{2}）让 AI 助手为你解释一段代码。
+
+\myGraphic{0.92}{images/image__2_.png}{}
+
+购买本书即可免费获得\textbf{下一代 Packt Reader }。扫描二维码，或者访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按书名查找本书。请仔细核对所显示的版次，确保你拿到的是正确的版本。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/Latest_QR.png}\end{center}
+\end{myTip}
+
+搞定！我们的第一个模块已经可以使用了。
+
+再来为商家创建一个模块：
+
+\begin{codebox}[cpp]
+module;
+export module merchant;
+export namespace trade_fair {
+struct Merchant {
+  int id;
+};
+}
+\end{codebox}
+
+和第一个模块一样，这里我们指定了名称以及要导出的类型（第一个模块导出的是类型别名和一个函数，与此不同）。你也可以导出其他定义，比如模板。不过，宏就比较棘手了，因为你需要导入 \texttt{<header\_\allowbreak{}file>} 才能让它们可见。
+
+\label{idx:761}
+顺便说一句，模块的一个很大优势是它们不允许宏传播到被导入的模块中。这意味着，当你编写如下代码时，该模块中不会定义 \texttt{MY\_MACRO}：
+
+\begin{codebox}[python]
+#define MY_MACRO
+import my_module;
+\end{codebox}
+
+在模块中具备确定性是有益的，因为它能保护你不去破坏其他模块中的代码。
+
+现在，我们来为商店以及商店中的商品定义第三和第四个模块。我们不再讨论导出其他函数、枚举和其他类型，因为它们与前两个模块并无不同。有意思的是模块文件是如何开始的。首先，我们把商店所需的内容放入一个为 C++ 头文件准备的全局模块片段中：
+
+\begin{codebox}[cpp]
+module;
+#include <vector>
+\end{codebox}
+
+现在，来看看接下来会发生什么：
+
+\begin{codebox}[text]
+export module store;
+export import merchant;
+\end{codebox}
+
+我们的 \texttt{store} 模块导入了先前定义的 \texttt{merchant} 模块，然后将其作为商店接口的一部分重新导出。如果某个模块是其他模块的外观（facade），这种做法会很方便。这一技术同样适用于模块分区的接口单元，用于从模块接口单元中重新导出它们所导出的实体。例如，\texttt{store:item} 分区导出了 \texttt{Item} 结构体，以及一个针对该结构体的 \texttt{operator<<} 函数重载：
+
+\begin{codebox}[cpp]
+export module store:item;
+export namespace trade_fair {
+struct Item {
+  ...
+};
+std::ostream &operator<<(std::ostream &os, const Item &item) {
+  ...
+}
+}
+\end{codebox}
+
+随后，这些来自分区的实体在 store 模块的主模块接口单元中被重新导出，如下所示：
+
+\begin{codebox}[text]
+export module store;
+export import :item;
+\end{codebox}
+
+\label{idx:762}
+在 C++20 中，标准库头文件并不是模块，但 C++23 引入了标准具名模块 \texttt{std} 和 \texttt{std.\allowbreak{}compat}，不过它们是否可用取决于编译器的支持，并且可能仍处于实验阶段：
+
+\begin{codebox}[cpp]
+export module store:item;
+import std;
+using namespace std::chrono;
+export namespace trade_fair {
+struct Item {
+  ...
+};
+...
+}
+\end{codebox}
+
+这个版本不需要包含全局模块片段，因为具名模块 \texttt{std} 和 \texttt{std.\allowbreak{}compat} 会从 C++ 标准库的 \texttt{std} 命名空间中导出声明。在本书写作时，这还是一项实验性功能。
+
+正如本章前文所述，向 C++ 模块的迁移进展得并不顺利，一段时间内它们还不会被广泛采用。此外，这类事情不会一蹴而就，而且由于模块向后兼容，它们会以混合方案的形式用于现有的 C++ 代码中。这正是我们下一个主题要做的——展示这样的迁移可以如何发生。
+
+\section{将现有代码库迁移到模块}
+
+\label{idx:763}
+\label{idx:764}
+理想情况下，最好的选择是在新项目中使用 C++ 模块，但这并非总是可行，尤其是在面对现有代码库时。因此，许多 C++ 库同时提供 C++ 头文件和模块接口单元，以免破坏兼容性。这种方式通过使用 C++ 模块接口单元来包含 C++ 头文件并重新导出其中的实体，保证了渐进式迁移。
+
+\label{idx:765}
+下面这段来自 \texttt{customer.\allowbreak{}h} 的代码展示了这种方式在实践中是如何运作的。这些头文件和源文件对 C++ 程序而言相当传统：
+
+\begin{codebox}[text]
+namespace trade_fair {
+using CustomerId = int;
+CustomerId get_current_customer_id();
+}
+\end{codebox}
+
+下面这段来自 \texttt{customer.\allowbreak{}cpp} 的代码定义了在 \texttt{customer.\allowbreak{}h} 中声明的函数：
+
+\begin{codebox}[text]
+trade_fair::CustomerId trade_fair::get_current_customer_id() { return 42; }
+\end{codebox}
+
+\label{idx:766}
+\texttt{customer.\allowbreak{}cppm} 重新导出了 customer 头文件中的声明。\texttt{export} 块用于把许多声明分组：
+
+\begin{codebox}[cpp]
+module;
+#include "stores/customer.h"
+export module customer;
+//重新导出
+export {
+  using trade_fair::CustomerId;
+  using trade_fair::get_current_customer_id;
+}
+\end{codebox}
+
+因此，\texttt{main.cpp} 既可以包含头文件，也可以导入模块。后者更可取，但程序也可能使用早于 C++20 的 C++ 标准：
+
+\begin{codebox}[cpp]
+...
+//#include "stores/customer.h"
+import customer;
+\end{codebox}
+
+在我们的实现中，模块接口单元和头文件是可以互换的。C++ 库中经常使用条件编译的方式来支持使用不同 C++ 标准的客户端。同样地，这里有两个版本：一个支持 C++ 模块，供使用模块的人使用；另一个是基于头文件的更传统的版本。
+
+\section{在 CMake 中使用模块}
+
+\label{idx:767}
+\label{idx:768}
+这段 CMake 代码同时支持两种方式：头文件和模块接口。如前所述，这是一种混合方案，下面是一个如何构建此类程序的示例：
+
+\begin{codebox}[cmake]
+add_library(libstores)
+add_library(stores::libstores ALIAS libstores)
+set_target_properties(libstores PROPERTIES OUTPUT_NAME stores)
+target_compile_options(libstores PUBLIC ${BASE_COMPILE_FLAGS})
+\end{codebox}
+
+\label{idx:769}
+这个配置把模块单元，以及源文件连同其头文件，都链接到 \texttt{libstores} 库中。相应地，在完全模块化的实现中，既不需要这个源文件，也不需要它的头文件：
+
+\begin{codebox}[cmake]
+target_sources(
+  libstores
+  PRIVATE src/stores/customer.cpp
+  PUBLIC FILE_SET
+         CXX_MODULES
+         BASE_DIRS
+         src/stores
+         FILES
+         src/lib/customer.cppm
+         src/lib/merchant.cppm
+         src/lib/store.cppm
+         src/lib/store_item.cppm)
+target_sources(libstores PUBLIC FILE_SET HEADERS BASE_DIRS include FILES
+                                include/stores/customer.h)
+add_executable(stores src/main.cpp)
+target_link_libraries(stores PRIVATE libstores) target_compile_options(stores PRIVATE ${BASE_COMPILE_FLAGS})
+...
+\end{codebox}
+
+\label{idx:770}
+除了与模块相关的关键字（例如 \texttt{CXX\_\allowbreak{}MODULES}）以及向目标添加源文件的 \texttt{target\_\allowbreak{}sources} 命令之外，这段代码与 \emph{第 7 章} \emph{构建与打包} 中描述的代码几乎没有区别。
+
+配置好目标之后，下一步是安装并导出头文件和模块接口单元，以便使用方能够复用它们：
+
+\begin{codebox}[cmake]
+...
+install(
+ TARGETS libstores stores
+ EXPORT StoresTargets
+ FILE_SET HEADERS
+ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+ FILE_SET CXX_MODULES
+ DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+ RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(
+ EXPORT StoresTargets
+ FILE StoresTargets.cmake
+ NAMESPACE stores::
+ DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Stores)
+\end{codebox}
+
+\label{idx:771}
+与头文件不同，\texttt{CXX\_\allowbreak{}MODULES} 没有默认的目的地。许多项目把模块接口单元当作类头文件来处理，将它们安装到 \texttt{\$\{\allowbreak{}CMAKE\_\allowbreak{}INSTALL\_\allowbreak{}INCLUDEDIR\}\allowbreak{}} 下或专门的 modules 目录中。另一些项目则把它们安装到 \texttt{\$\{\allowbreak{}CMAKE\_\allowbreak{}INSTALL\_\allowbreak{}LIBDIR\}\allowbreak{}} 下，如示例所示。
+
+\label{idx:772}
+由于本书中的示例使用 Conan 包管理器，并且有一章专门介绍该包管理器，下面的主题将说明如何为使用 C++ 模块的项目发布 Conan 包，以及撰写本书时这方面存在哪些问题。
+
+\section{在 Conan 中使用模块}
+
+\label{idx:773}
+\label{idx:774}
+Conan 本身并不了解模块，因此 C++ 模块的构建与集成由构建系统来处理——通常是 CMake。CMake 从 3.28 版起支持 C++ 模块，并从 3.29 版起以实验方式导入 \texttt{std }模块。在撰写本书时，还没有通过 CMake 分发 C++ 模块的官方做法。因此，我们采用一种变通方法来达到这一目的。其他构建系统——尤其是 Xmake、Build2、Meson 和 MSVC Build Tools——也在不同程度上支持 C++ 模块。
+
+创建和测试 Conan 包的方法在 \emph{第 8 章} \emph{包管理}中有介绍。我们的 Conan 脚本采用几乎相同的做法，只是有几处关键差异——本示例不需要外部库，而且只有 Ninja 和 Visual Studio 生成器支持扫描 C++ 模块所需的源文件以查找其依赖项：
+
+\begin{codebox}[python]
+class StoresConan(ConanFile):
+    name = "stores"
+    ...
+    def generate(self):
+        deps = CMakeDeps(self)
+        deps.generate()
+        tc = CMakeToolchain(self, generator="Ninja")
+        tc.generate()
+    ...
+    def package_info(self):
+        self.cpp_info.libs = ["stores"]
+};
+\end{codebox}
+
+该配置适用于 GCC、Clang 和 MSVC 编译器。为了验证发布出去的 Conan 包行为正确，我们使用一个测试包，它类似于上一章介绍的测试包：
+
+\begin{codebox}[python]
+class StoresTestConan(ConanFile):
+    ...
+    def generate(self):
+        deps = CMakeDeps(self)
+        deps.generate()
+        tc = CMakeToolchain(self, generator="Ninja")
+        tc.generate()
+    ...
+    def test(self):
+        if can_run(self):
+            cmd = os.path.join(self.build_folder, "example")
+            self.run(cmd, env="conanrun")
+    ...
+\end{codebox}
+
+\label{idx:775}
+\label{idx:776}
+由于 \texttt{find\_\allowbreak{}package(\allowbreak{})\allowbreak{}} 命令不提供任何模块元数据，下面是从外部库链接 C++ 模块的变通方法。该方案不大可能成为一种便捷且长期的策略，这也限制了 C++ 模块的广泛使用：
+
+\begin{codebox}[cmake]
+find_package(stores CONFIG REQUIRED)
+string(TOUPPER "${CMAKE_BUILD_TYPE}" config_suffix)
+set(stores_lib_base_dir ${stores_LIB_DIRS_${config_suffix}})
+set(stores_lib_files "${stores_lib_base_dir}/customer.cppm" "${stores_lib_base_dir}/merchant.cppm" "${stores_lib_base_dir}/store.cppm" "${stores_lib_base_dir}/store_item.cppm")
+add_library(stores_lib)
+target_sources(
+  stores_lib PUBLIC FILE_SET CXX_MODULES BASE_DIRS ${stores_lib_base_dir} FILES
+                    ${stores_lib_files})
+target_compile_features(stores_lib PUBLIC cxx_std_20)
+target_link_libraries(stores_lib PUBLIC stores::stores)
+add_executable(example example.cpp)
+target_compile_features(example PUBLIC cxx_std_20)
+target_link_libraries(example stores_lib)
+\end{codebox}
+
+这段 CMake 代码从 \texttt{stores\_\allowbreak{}LIB\_\allowbreak{}DIRS\_\allowbreak{}<CONFIG> }这个 CMake 变量中获取 \texttt{stores} 库的路径，定义新的 \texttt{stores\_\allowbreak{}lib} 库，添加模块接口单元，并将 \texttt{stores} 库链接到新定义的库。随后，合并后的库再链接到可执行文件。
+
+\label{idx:777}
+之所以采用这种变通方法，是因为编译器生成的模块接口——俗称\textbf{二进制模块接口}（\textbf{BMI}）——与具体实现相关，因此可能在不同编译器版本之间不兼容，而且在不同 C++ 编译器之间也不兼容。所以，分发 BMI 是一种糟糕的做法，这与已经标准化的 C++ 目标文件不同。
+
+\label{idx:778}
+\label{idx:779}
+为了进行依赖扫描，模块接口单元必须对构建系统可见，以便它在编译期间生成兼容的 BMI。C++ 编译器使用 C++ 模块及其在源代码中用法之间的映射。因此，模块映射器（module mapper）将导入的模块与其声明和定义进行匹配，高效地处理模块之间的依赖关系，并使模块能够作为头文件更快、更健壮的替代方案，从而可以有效利用 C++ 语言的这一特性。
+
+\label{idx:780}
+\label{idx:781}
+\label{idx:782}
+每个 C++ 编译器处理模块都有各自的实现策略。例如，除了 BMI 之外，GCC 在编译具名模块接口、模块分区或头文件单元时还会使用临时的二进制\textbf{已编译模块接口}（\textbf{CMI}）文件；在导入模块时会读取这些文件。出于同样的目的，MSVC 生成模块\textbf{接口}（\textbf{IFC}）文件，Clang 生成包含预构建模块信息的\textbf{预编译模块}（\textbf{PCM}）文件。这些文件加快了编译过程，因为编译器在构建时无需重新处理每个源代码模块。Clang、MSVC 和 GCC 等工具链仍在不断改进对 C++ 模块的支持，但截至 2025 年，完全互操作仍是一项进行中的工作。
+
+至此，本章计划的模块以及主要的 C++ 特性就介绍完了。
+
+\section{小结}
+
+在本章中，我们探讨了 C++20 模块如何解决传统头文件所面临的局限。我们讨论了如何消费和创建 C++ 模块。我们还研究了迁移现有代码库的实用策略，在此过程中头文件与模块共存以保持向后兼容。接着，我们演示了如何使用 CMake 和 Conan 构建和分发模块，包括针对当前局限（例如 \texttt{find\_\allowbreak{}package(\allowbreak{})\allowbreak{}} 中缺少原生模块元数据）的变通方法。总体而言，我们看到了 C++ 模块如何融入现代 C++ 工作流。
+
+在下一章中，我们将讨论如何编写可测试的代码，其中包含一些重要方面，例如测试金字塔中不同类型测试的层级关系，因为选择合适的策略既会影响用于测试的时间、尤其是其成本，也会影响用于查找项目中错误原因的时间。本章还会介绍不同测试框架的特性，并解释测试替身的益处。
+
+\section{问题}
+
+\begin{enumerate}
+\item 头文件有哪些缺陷，模块又是如何解决这些缺陷的？
+\item 模块支持哪些代码组织方式？
+\item \texttt{import X} 与 \texttt{import <X>} 有何不同？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Are We Modules Yet? \emph{Are We Modules Yet?}（主页）：\href{https://arewemodulesyet.org/}{https://arewemodulesyet.org/}
+\item CMake，\emph{cmake-cxxmodules(7)}：\href{https://cmake.org/cmake/help/latest/manual/cmake-cxxmodules.7.html}{https://cmake.org/cmake/help/latest/manual/cmake-cxxmodules.7.html}
+\item CMake，\emph{CMake Experimental Features Guide}，GitHub：\href{https://github.com/Kitware/CMake/blob/master/Help/dev/experimental.rst}{https://github.com/Kitware/CMake/blob/master/Help/dev/experimental.rst}
+\item Princeton University，\emph{A Brief History of Modularity in} \emph{Programming}：\href{https://www.cs.princeton.edu/courses/archive/spr16/cos217/lectures/09_ModularityHistory.pdf}{https://www.cs.princeton.edu/courses/archive/spr16/cos217/lectures/09\_ModularityHistory.pdf}
+\item LLVM，\emph{Clang: Transitioning to Modules}：\texthref{https://clang.llvm.org/docs/StandardCPlusPlusModules.html\#transitioning-to-modules}
+\item LLVM，\emph{Clang: Modules}：\href{https://clang.llvm.org/docs/Modules.html}{https://clang.llvm.org/docs/Modules.html}
+\item GCC，\emph{C++ Modules}：\href{https://gcc.gnu.org/onlinedocs/gcc/C_002b_002b-Modules.html}{https://gcc.gnu.org/onlinedocs/gcc/C\_002b\_002b-Modules.html}
+\item Microsoft，\emph{Header Units/Modules}：\texthref{https://learn.microsoft.com/en-us/cpp/build/reference/compiler-options-listed-by-category?view=msvc-170\#header-unitsmodules}
+\item Microsoft，\emph{SDK for the IFC Specification}，GitHub：\href{https://github.com/microsoft/ifc}{https://github.com/microsoft/ifc}
+\item Phil Nash，\emph{C++20 Modules: The Packaging and Binary Redistribution Story}，GitHub：\href{https://github.com/philsquared/cpponsea2024-slides/blob/main/Presentations/Cpp_Modules_the_packaging_story.pdf}{https://github.com/philsquared/cpponsea2024-slides/blob/main/Presentations/Cpp\_Modules\_the\_packaging\_story.pdf}
+\item Alibaba Cloud Community\emph{, 42\% Boost in Compilation Efficiency! A Practical Analysis of C++ Modules}：\href{https://www.alibabacloud.com/blog/42\%25-boost-in-compilation-efficiency-a-practical-analysis-of-c\%2B\%2B-modules_601974}{https://www.alibabacloud.com/blog/42\%25-boost-in-compilation-efficiency-a-practical-analysis-of-c\%2B\%2B-modules\_601974}
+\item CppCat，\emph{C++ Modules in Embedded Systems: A Comprehensive Guide}：\href{https://cppcat.com/c-modules-in-embedded-systems/}{https://cppcat.com/c-modules-in-embedded-systems/}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描此二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前请先准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

@@ -1,0 +1,460 @@
+在上一章中，我们简要提到了包管理器，指出它们可以简化依赖管理并确保跨环境的一致性。本章我们将更详细地探讨它们，重点介绍 Conan——一个专为 C 和 C++ 打造的包管理器。Conan 功能丰富，能与 CMake 顺畅集成，并支持多种平台和编译器，因此值得深入讨论。
+
+包管理的应用是一种被广泛采用的实践，因为在目标系统上从源代码编译和安装程序很容易导致版本冲突，甚至导致系统无法在不破坏应用的情况下更新。包有助于解决这些问题，因为它们把源代码、二进制文件、脚本、设置和文档连同版本要求一起打包。
+
+包管理器让生活更轻松，尤其是与手动安装项目依赖相比。然而，虽然 CMake 脚本多年来一直保持向后兼容，但 Conan 包管理器却并非如此。Conan 1 和 Conan 2 不向后兼容，而且这种情况将来有再次发生的风险。因此，在选择这个包管理器时，你应该意识到，从一个版本迁移到另一个版本需要付出一些努力。
+
+本章你将学习以下主题：
+
+\begin{itemize}
+\item 包管理简介
+\item 使用 Conan 包管理器
+\item 使用 Conan 打包
+\end{itemize}
+
+读完本章后，你还将了解如何安装项目依赖、使用 Conan 构建产物、创建 Conan 包并分享它们。
+
+\section{技术要求}
+
+构建本章代码需要以下工具：GCC14+ 或 Clang19+、CMake 3.28 或更高版本，以及 Conan。
+
+本章的源代码片段可在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter08}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter08} 找到。
+
+有关设置 Conan 包管理器的说明，请参阅此链接：\href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/devenv_readme}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/devenv\_readme}。
+
+Conan 本身在此提供了针对各平台的安装程序：\href{https://conan.io/downloads}{https://conan.io/downloads}。
+
+\section{包管理简介}
+
+\label{idx:721}
+包管理是指系统地安装、更新、配置和移除软件包的过程。包管理器自动完成这些任务，确保安装所需版本的包，并可靠地解析它们的依赖关系。
+
+\label{idx:722}
+包管理通过促进库、工具和框架在项目之间的共享与集成，增强了代码复用和协作。它还简化了项目维护，节省了成本和时间，提供了轻松的环境搭建，并确保跨环境的一致性。此外，包管理器必须确保软件来自可信来源且未被篡改。为此，会验证包的加密签名以确认包的完整性。另外，建议定期更新包，以缓解已发现的漏洞。
+
+对包和包管理器进行分类有两种常见方式。在包的层面，有普通包和开发包。前者包含运行软件所需的文件，而后者还包含构建、测试和发布软件所需的头文件、库和其他文件。因此，可以说这种区分并不是非常重要。它主要是为了向最终用户隐藏内部细节，但由于操作系统和软件生态系统很复杂，这种区分无法完全取消。
+
+不同的操作系统以不同方式处理这种区分。许多 Linux 发行版带有独立的开发包，用于从源代码构建软件并将该软件与发行版集成。在 macOS 上，Homebrew（macOS 上一款流行的包管理器）不区分这些类型的包，因为两者默认都已包含。相比之下，Windows 安装程序通常没有开发包，因为应用主要是面向最终用户而非开发者分发的。
+
+\label{idx:723}
+在包管理器的层面，我们区分系统级和应用级包管理器。系统级包管理器（如 RPM、\textbf{Debian Package}（\texttt{dpkg}）、pacman、WinGet 和 Homebrew）用于在操作系统内安装和管理软件、库和工具。应用级包管理器（如用于 Python 的 \texttt{pip}、用于 JavaScript 运行时 Node.js 的 \texttt{npm}、.NET 的 NuGet、Rust 的 Cargo，以及 Ada 的 Alire）打算在项目层面管理依赖和库。Conan 在 C 和 C++ 中扮演这一角色，是专为这两种语言打造的应用级包管理器。
+
+下一节我们将学习如何高效地使用 Conan。
+
+\section{使用 Conan 包管理器}
+
+\label{idx:724}
+\label{idx:725}
+Conan 是一个面向 C 与 C++ 的开源、去中心化包管理器，用于存储源代码与预编译的二进制文件。去中心化意味着客户端既可以从不同的服务器获取包，也可以向不同的服务器上传包。相比之下，中心化系统依赖一个集中式仓库来存储所有包。
+
+这个包管理器支持多种平台（Linux、FreeBSD、macOS、Solaris、Windows、Android、iOS、STM32 和 ESP32）与多种编译器（GCC、Clang 和 MSVC Compiler）。官方文档宣称，Conan 可以集成到多种构建系统（CMake、Bazel、Meson 和 Premake）与 IDE（CLion、Visual Studio、Android Studio、Xcode 和 Qt Creator）中。
+
+任何 \textbf{集成开发环境}（\textbf{IDE}）只要支持自定义 CMake 参数，就可以与 Conan 集成。这之所以可行，是因为 CMake 3.24 引入了依赖提供者（dependency provider），从而扩展了包管理器的适用范围。你只需按如下方式配置该变量：
+
+\begin{codebox}[text]
+CMAKE_PROJECT_TOP_LEVEL_INCLUDES=[path-to-cmake-conan]/conan_provider.cmake 
+\end{codebox}
+
+这个依赖提供者会自动获取并安装 Conan 包。
+
+一旦集成到工作流中，Conan 就依赖仓库来分发包。Conan 从现有仓库获取包。包构建完成后，也可以上传到公有或私有的 Conan 仓库。如果你需要部署自己的仓库，有两种选择：\texttt{conan\_\allowbreak{}server}（适合基本使用）和 JFrog Artifactory 服务器（适合企业级工作流）。上传二进制文件并共享它们很有用，因为这样可以加快开发速度——其他任何人（包括你自己）都不必再花时间重新编译这些二进制文件。
+
+\subsection{准备 Conan 配置档案}
+
+\label{idx:726}
+如果这是你第一次运行 Conan，它会根据你的环境创建一个默认配置档案。你可能想修改其中某些设置，既可以新建一个配置档案，也可以更新默认的那个。假设我们使用 Linux，并且希望用 GCC 14 编译所有内容，那么可以运行下面这条命令来创建一个 Conan 配置档案并调整自动检测到的值：
+
+\begin{codebox}[text]
+conan profile detect --name hosacpp
+conan profile detect --name ./hosacpp
+conan profile detect --name ../hosacpp
+\end{codebox}
+
+这些配置档案可以位于不同的文件夹中，既可以是绝对路径、相对路径，也可以位于 \texttt{[CONAN\_\allowbreak{}HOME]/\allowbreak{}profiles} 目录内。默认情况下，\texttt{CONAN\_\allowbreak{}HOME} 指向 \texttt{<username>/\allowbreak{}.\allowbreak{}conan2} 目录，配置档案的设置会写入 \texttt{<username>/\allowbreak{}.\allowbreak{}conan2/\allowbreak{}profiles/\allowbreak{}hosacpp} 文件。一个示例配置可能如下所示（注意 \texttt{libstdc++} 是旧的 ABI，而 \texttt{libstdc+\allowbreak{}+\allowbreak{}11} 是新的）：
+
+\begin{codebox}[text]
+[settings]
+arch=x86_64
+build_type=Release
+compiler=gcc
+compiler.cppstd=gnu23
+compiler.cstd=gnu17
+compiler.libcxx=libstdc++11
+compiler.version=14
+os=Linux
+\end{codebox}
+
+Conan 配置档案是 Jinja2 模板，也就是包含标签块、变量和指令的结构化文件，用于动态生成各项设置。Jinja2 是一个用 Python 编写的模板引擎，它让 Conan 配置档案可以使用变量，并在需要时导入 Python 模块或包含其他文件。
+
+\label{idx:727}
+例如，假设有一个名为 \texttt{Linux-x86\_\allowbreak{}64-gcc-14} 的 Conan 配置档案。与其手动编写它的各项设置，我们可以定义一个这样的模板：
+
+\begin{codebox}[text]
+{% set os, arch, compiler, compiler_version = profile_name.split('-') %}
+[settings]
+os={{ os }}
+arch={{ arch }}
+compiler={{ compiler }}
+compiler.version={{ compiler_version }}
+\end{codebox}
+
+\texttt{conan profile show --profile Linux-x86\_\allowbreak{}64-gcc-14} 命令会使用 Jinja2 模板生成这些 Conan 配置档案：
+
+\begin{codebox}[text]
+Host profile:
+[settings]
+arch=x86_64
+compiler=gcc
+compiler.version=14
+os=Linux
+Build profile:
+[settings]
+arch=x86_64
+build_type=Release
+compiler=gcc
+compiler.cppstd=gnu17
+compiler.libcxx=libstdc++11
+compiler.version=14
+os=Linux
+\end{codebox}
+
+上面的输出表明，Conan 有两种用于交叉编译应用的配置档案模型：\texttt{build}，即二进制文件被构建的地方；以及 \texttt{host}，即构建出的二进制文件运行的地方。
+
+\label{idx:728}
+如果依赖来自默认仓库之外的仓库，可以用 \texttt{conan remote add <repo> <repo\_\allowbreak{}url>} 命令将其添加进来。
+
+既然已经配置好了 Conan，下面来看看如何用 Conan 定义我们的依赖，并将它们集成到 CMake 脚本中。
+
+\subsection{指定 Conan 依赖}
+
+\label{idx:729}
+我们的项目依赖 Drogon Web 框架和 GoogleTest——一个测试与 mock 框架。要让 Conan 知道这一点，我们需要创建一个 \texttt{conanfile.\allowbreak{}txt} 配方文件，或者一个 \texttt{conanfile.\allowbreak{}py} 配方脚本，但两者不能放在同一目录下，因为它们是互斥的，同时存在会导致无法确定该用哪一个。
+
+下面是一个 \texttt{conanfile.\allowbreak{}txt} 的示例：
+
+\begin{codebox}[text]
+[requires]
+drogon/1.9.10
+[test_requires]
+gtest/1.16.0
+[generators]
+CMakeDeps
+\end{codebox}
+
+在这里你可以指定任意数量的依赖。每个依赖都可以有固定版本、版本范围或特定的配方修订版（recipe revision）。
+
+\label{idx:730}
+\texttt{[generators]} 区段用于指定你想使用哪些构建系统。对于 CMake 项目，应当使用 \texttt{CMakeDeps}。你还可以生成许多其他内容，包括用于生成编译器参数、CMake 工具链文件、虚拟环境等等的生成器。
+
+\label{idx:731}
+在我们的例子中，还禁用了未使用的 Boost 和数据库 \textbf{对象关系映射}（\textbf{ORM}）：
+
+\begin{codebox}[text]
+[options]
+drogon/*:with_boost=False
+drogon/*:with_orm=False
+\end{codebox}
+
+如前面的代码所示，只需添加一个 \texttt{[options]} 区段，就能轻松为你的包配置变量和依赖。
+
+\texttt{conanfile.\allowbreak{}txt} 文件是更灵活的 \texttt{conanfile.\allowbreak{}py} 脚本的简化版本。前者适合基本的依赖管理与消费，而后者则用于创建包并表达带条件的依赖需求。\texttt{conanfile.\allowbreak{}py} 这种方式很灵活，因为 Conan 包可以针对不同条件进行定制：操作系统、编译器及其版本、包版本、可选依赖等等。这种灵活性常被用来保持 Conan 包的向后兼容性。
+
+下面是一个 \texttt{conanfile.\allowbreak{}py} 的示例。每个 Conan 配方都由若干逻辑块组成。下面这个块定义元数据、默认配置、设置以及包的其余属性：
+
+\begin{codebox}[python]
+from conan import ConanFile
+from conan.tools.build import can_run
+from conan.tools.cmake import cmake_layout, CMake, CMakeDeps, CMakeToolchain
+class CustomerConan(ConanFile):
+    name = "customer"
+    version = "0.0.1"
+    license = "MIT"
+    author = "Authors"
+    homepage = "https://example.com"
+    url = "https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E"
+    description = "Library and app for the Customer microservice"
+    topics = ("Customer", "tradefair")
+    settings = "os", "compiler", "build_type", "arch"
+    default_options = {"drogon/*:with_boost": "False", "drogon/*:with_orm": "False"}
+    # 导出源码以生成包
+    exports_sources = "CMakeLists.txt", "LICENSE", "README.md", "cmake/*", "include/*", "src/*", "test/*"
+\end{codebox}
+
+\label{idx:732}
+在前面的代码中，除了 \texttt{topics} 和 \texttt{exports\_\allowbreak{}sources} 之外，其余属性的含义都很明显。\texttt{topics} 属性用于把相关的包归为一组，并充当搜索过滤条件。\texttt{exports\_\allowbreak{}sources} 属性（或函数）用于在运行 \texttt{conan export} 和 \texttt{conan create} 命令时，把文件从用户文件夹复制到 Conan 缓存文件夹。在我们的示例中，\texttt{default\_\allowbreak{}options} 属性禁用了 Drogon 框架的一些依赖：即用于映射数据库表和类的 Boost 库以及 ORM 支持。
+
+下面这个块定义包的依赖需求：
+
+\begin{codebox}[python]
+    def requirements(self):
+        # 指定依赖项
+        self.requires("drogon/1.9.10")
+    def build_requirements(self):
+        # 指定测试依赖与构建工具
+        self.test_requires("gtest/1.15.0")
+\end{codebox}
+
+下面这个块定义项目布局并准备构建：
+
+\begin{codebox}[python]
+    def layout(self):
+        # 定义项目布局
+        cmake_layout(self)
+    def generate(self):
+        # 准备构建
+        deps = CMakeDeps(self)
+        deps.generate()
+        tc = CMakeToolchain(self)
+        tc.generate()
+\end{codebox}
+
+\label{idx:733}
+下面这个块负责构建、安装和测试包：
+
+\begin{codebox}[python]
+    def build(self):
+        # 调用构建系统
+        cmake = CMake(self)
+        cmake.configure()
+        cmake.build()
+        if can_run(self):
+            # 运行测试，尤其是 CTest
+            cmake.test()
+    def package(self):
+        # 把文件从构建目录复制到包文件夹
+        cmake = CMake(self)
+        cmake.install()
+\end{codebox}
+
+最后一个块定义其他方如何消费这个包：
+
+\begin{codebox}[python]
+    def package_info(self):
+        # 向此包的消费方提供信息
+        self.cpp_info.libs = ["customer"] # the lib to link
+\end{codebox}
+
+\label{idx:734}
+既然 \texttt{conanfile.\allowbreak{}py} 已经就位，下面就让 Conan 安装这些依赖，以便 Conan 能在我们的项目中使用它们。
+
+\subsection{安装 Conan 依赖}
+
+\label{idx:735}
+要在 CMake 代码中使用我们的 Conan 包，必须先安装它们。在 Conan 中，这意味着下载源代码并构建包，或者下载预编译的二进制文件。此外，Conan 还会生成配置文件，我们将在 CMake 中用它们来查找由 Conan 提供的包。
+
+要让 Conan 替我们处理这些，应当创建 Conan 配置档案，然后直接运行下面这条命令（\texttt{hosacpp} 是本章前面介绍过的一个 Conan 配置档案）：
+
+\begin{codebox}[text]
+conan install . --build=missing -s build_type=Release -pr:a=hosacpp
+\end{codebox}
+
+默认情况下，Conan 希望把所有依赖都作为预编译二进制文件下载下来。如果服务器上没有这些预编译文件，因为我们传入了 \texttt{--build=\allowbreak{}missing} 标志，Conan 会转而自行构建它们，而不是直接放弃。我们让它获取用与我们配置档案中相同的编译器和环境构建出的发行版。你可以通过再用其他 CMake 构建类型设置 \texttt{build\_\allowbreak{}type} 并再次调用命令，来为不止一种构建类型安装包。这在需要时可以帮你快速在它们之间切换。如果你想使用默认配置档案（即 Conan 能自动为你检测到的那个），那就不要传入 \texttt{-pr} 标志。
+
+如果没有在 \texttt{conanfile.\allowbreak{}txt} 中指定 CMake 生成器，我们可以把它追加到上面的命令中。例如，要使用 \texttt{CMakeDeps} 生成器，应当把 \texttt{--generator=\allowbreak{}CMake\allowbreak{}Deps} 追加到上面的命令上。
+
+\subsection{在 CMake 中使用 Conan 目标}
+
+\label{idx:736}
+当 Conan 完成依赖的下载、构建和配置之后，我们需要告诉 CMake 去使用它们。
+
+如果你配合 \texttt{CMakeDeps} 生成器使用 Conan，务必指定一个 \texttt{CMAKE\_\allowbreak{}BUILD\_\allowbreak{}TYPE} 值。否则，CMake 将无法使用由 Conan 配置的包。下面是一个调用我们 CMake 项目的示例（在运行 Conan 的同一目录下执行）：
+
+\begin{codebox}[text]
+cmake –S path/to/source/directory/containing/CMakeLists.txt 
+      -B path/to/build/directory/containing/Conan/dependencies
+      -DCMAKE_BUILD_TYPE=Release
+\end{codebox}
+
+这样，我们就会以 release 模式构建项目。\texttt{CMAKE\_\allowbreak{}BUILD\_\allowbreak{}TYPE} 的值必须与我们用 Conan 安装的某种构建类型一致。
+
+要查找依赖，我们可以直接使用 CMake 的 \texttt{find\_\allowbreak{}package(\allowbreak{})\allowbreak{}}：
+
+\begin{codebox}[text]
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}")
+find_package(Drogon REQUIRED)
+\end{codebox}
+
+首先，我们把根构建目录加入 CMake 用来查找包文件的路径。然后，我们查找由 Conan 生成的包文件。
+
+要把 Conan 定义的目标作为我们自己目标的依赖传入，最好使用带命名空间的目标名：
+
+\begin{codebox}[text]
+ target_link_libraries(libcustomer PUBLIC Drogon::Drogon)
+\end{codebox}
+
+这样一来，当找不到该包时，我们会在 CMake 配置阶段就得到错误。而没有这个别名的话，错误要到尝试链接时才会出现。
+
+既然已经按我们需要的方式编译并链接好了各个目标，接下来就该测试、打包并发布我们的 Conan 包了。
+
+\section{使用 Conan 打包}
+
+\label{idx:737}
+Conan 中打包的核心步骤是创建一个包。不过在实践中，这一步之前通常先做测试，之后则要发布。在本节中，我们将介绍完整的流程：测试、创建并发布一个 Conan 包。
+
+包在发布之前应当先经过验证，因为出故障的包可能会破坏开发工作。Conan 通过一个测试包来支持这一验证过程，该测试包仅在测试期间使用。因此，创建一个 Conan 包会涉及两个脚本：其中一个会被发布，另一个则不会被发布，只在测试该包时需要用到。
+
+\subsection{测试我们的 Conan 包}
+
+\label{idx:738}
+当 Conan 构建好一个包之后，它应当测试该包是否构建正确、是否能被消费者在自己的项目中正确链接和复用。为此，我们先创建一个 \texttt{test\_\allowbreak{}package} 子目录。它里面会包含一个 \texttt{conanfile.\allowbreak{}py} 脚本，不过这次是一个更短的版本。它应当以如下内容开头：
+
+\begin{codebox}[python]
+import os
+from conan import ConanFile
+from conan.tools.build import can_run
+from conan.tools.cmake import CMake, cmake_layout
+class CustomerTestConan(ConanFile):
+    settings = "os", "compiler", "build_type", "arch"
+    generators = "CMakeDeps", "CMakeToolchain"
+\end{codebox}
+
+这里没有什么特别复杂的东西。现在，我们应当提供构建测试包的逻辑：
+
+\begin{codebox}[python]
+    def layout(self):
+        cmake_layout(self)
+    def build(self):
+        cmake = CMake(self)
+        cmake.configure()
+        cmake.build()
+\end{codebox}
+
+\label{idx:739}
+接下来是包测试逻辑的核心，即 \texttt{test\_\allowbreak{}package/\allowbreak{}conanfile.\allowbreak{}py} 中的 \texttt{test} 方法：
+
+\begin{codebox}[python]
+    def test(self):
+        if can_run(self):
+            cmd = os.path.join(self.cpp.build.bindir, "example")
+            self.run(cmd, env="conanrun")
+\end{codebox}
+
+如果我们是针对本机架构进行构建，就希望运行它。否则，我们很可能无法运行编译出的可执行文件。
+
+下面来定义我们的 \texttt{CMake\allowbreak{}Lists.\allowbreak{}txt} 文件：
+
+\begin{codebox}[cmake]
+cmake_minimum_required(VERSION 3.12)
+project(PackageTest CXX)
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}")
+find_package(customer CONFIG REQUIRED)
+add_executable(example example.cpp)
+target_link_libraries(example customer::customer)
+# 可以在这里添加 CTest 测试
+\end{codebox}
+
+就这么简单。我们链接到所有提供的 Conan 库（在我们的例子中，只有我们的 \texttt{customer} 库）。
+
+最后，我们来编写 \texttt{example.\allowbreak{}cpp} 文件，其中只包含刚好够用的逻辑，用于检查包是否创建成功：
+
+\begin{codebox}[cpp]
+#include <customer/responder.h>
+int main() { responder{}.prepare_response("Conan"); }
+\end{codebox}
+
+\label{idx:740}
+在诸如 \texttt{conan create }和 \texttt{conan export-pkg} 之类的命令结束时，会自动调用这个测试，以验证包是否创建正确。不过，也可以运行 \texttt{conan test test\_\allowbreak{}package customer/\allowbreak{}0.\allowbreak{}0.\allowbreak{}1} 来显式地测试 \texttt{customer} 库。
+
+现在，让我们深入了解 Conan 包的创建与发布吧。
+
+\subsection{创建并发布我们的 Conan 包}
+
+\label{idx:741}
+在 Conan 中，包首先在本地缓存中创建，构建系统可以在那里找到它们。要把文件从包文件夹导出到那些 Conan 文件夹，在执行 \texttt{conan create} 和 \texttt{conan export} 命令之前，你应当声明可互换的 \texttt{exports\_\allowbreak{}sources} 属性或 \texttt{export\_\allowbreak{}sources} 方法，但不能同时声明两者；这两个命令分别用于创建包和导出配方。
+
+一旦定义好该属性或方法，只需运行一条命令即可创建包：
+
+\begin{codebox}[text]
+conan create . --build=missing -pr:a=hosacpp
+\end{codebox}
+
+这条命令会在 Conan 缓存文件夹中、而不是在当前项目文件夹中执行配方的所有阶段，唯一的例外是在 \texttt{test\_\allowbreak{}package} 目录中运行包测试——这些测试从项目文件夹运行，用于验证构建出的包。
+
+\label{idx:742}
+也可以在不指定 \texttt{exports\_\allowbreak{}sources/\allowbreak{}export\_\allowbreak{}sources} 的情况下创建 Conan 包。在这种情况下，你需要先安装依赖，然后通过运行若干条命令来构建并导出包。开发 Conan 包时也会用到这种情形：
+
+\begin{codebox}[text]
+conan install . --build=missing -pr:a=hosacpp
+conan build . -pr:a=hosacpp
+conan export-pkg . -pr:a=hosacpp
+\end{codebox}
+
+\label{idx:743}
+包一旦创建并存储在 Conan 本地缓存中，就可以上传到某个 Conan 仓库，以便在其他项目或不同机器上复用。Conan 包会经过签名，签名也会被验证，但该功能目前仍在开发之中。
+
+假设已经部署好一个 Conan 服务器，并在该服务器上创建了本地仓库（\texttt{conan-local}）。要把你的包上传到这个服务器，你需要把这个远程仓库添加到本地 Conan 配置中，并使用你的凭据登录。在我们的例子中，本地服务器的地址是 \texttt{localhost:8081}。默认凭据是 \texttt{admin:password}：
+
+\begin{codebox}[text]
+conan remote add hinrg-tapps  http://localhost:8081/artifactory/api/conan/conan-local
+conan remote login hinrg-tapps admin -p password
+\end{codebox}
+
+然后，把构建好的 customer 包上传到已添加的远程仓库，并搜索这个包：
+
+\begin{codebox}[text]
+conan upload customer -r=hinrg-tapps
+conan search "customer" -r=hinrg-tapps
+\end{codebox}
+
+你可以在 Linux、macOS 和 Windows 上部署面向 C 与 C++ 的 JFrog Artifactory \textbf{Community Edition}（\textbf{CE}）服务器，用于托管、管理和分发二进制文件与构建产物，也可以选择商业版本。如果一切配置正确，并且在服务器上能找到上传的包，那么你将看到最后一条命令的输出，就像这样：
+
+\begin{codebox}[text]
+Connecting to remote 'hinrg-tapps' with user 'admin'
+Found 1 pkg/version recipes matching customer in hinrg-tapps
+hinrg-tapps
+  customer
+    customer/0.0.1
+\end{codebox}
+
+\label{idx:744}
+这段输出确认了包已上传，现在可以在远程仓库中获取。
+
+你也可以通过 JFrog Artifactory 的 Web 界面来验证已上传的包，如 \emph{图 8.1} 所示：
+
+\myGraphic{0.920}{images/B18456_08_1.png}{图 8.1：面向 C/C++ 的 JFrog Artifactory CE 概览}
+
+\begin{myTip}{提示}
+想查看这张图片的高分辨率版本？请在下一代 Packt Reader 中打开本书，或在 PDF/ePub 版本中查看。
+
+购买本书即可获赠 \textbf{下一代 Packt Reader} 以及本书的 \textbf{免费 PDF/ePub 版本}。扫描二维码，或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后用搜索栏按名称查找本书。请再次核对所显示的版本，确保你拿到的是正确的那一版。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/01.png}\end{center}
+\end{myTip}
+
+\label{idx:745}
+Conan 还支持基于预定义模板或用户自定义模板创建新的配方、管理共享配置，以及计算依赖图。C 与 C++ 领域能出现 vcpkg（Microsoft）、xrepo 和 Conan（JFrog）这样的包管理器，确实令人赞叹，但使用它们也各有取舍。
+
+虽然拥有经过测试、彼此兼容的库版本显然是必要的，但由于仓库的中心化，更新与缺陷修复——包括严重缺陷乃至安全漏洞——往往要等很久：可能需要几天、几周甚至几个月。
+
+此外，Conan 提供的受支持版本是有限的。因此，你的项目可能需要自建一个 Conan 仓库。
+
+另一个取舍在于学习曲线，因为使用包管理器会引入额外的工具，而你需要去学习它们。
+
+\section{小结}
+
+在本章中，你学习了使用 Conan 包的基本要点。现在你已经能够消费现有的 Conan 包，创建、测试并共享你自己的包，用 Conan 安装项目的依赖，在 CMake 脚本中使用 Conan 目标，以及创建你自己的构建产物。
+
+在下一章中，你将认识 C++ 模块——一种现代的代码复用方式——并了解它们是如何被使用的。此外，你还将学习如何把它们与 CMake 和 Conan 集成，从而在本章所学技能的基础上更进一步。
+
+\section{问题}
+
+\begin{enumerate}
+\item 如何配合 Conan 使用多种编译器？
+\item 如果你想用 C++11 之前的 GCC ABI 编译 Conan 依赖，该怎么办？
+\item 使用 \texttt{conanfile.\allowbreak{}txt} 和 \texttt{conanfile.\allowbreak{}py} 的目的是什么？
+\item Conan 使用哪种方式来测试包？
+\item 为什么要在 \texttt{conanfile.\allowbreak{}py} 中声明 \texttt{exports\_\allowbreak{}sources} 属性或 \texttt{export\_\allowbreak{}sources} 方法？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Conan Center，\emph{Conan Recipes}，JFrog：\href{https://conan.io/center/recipes}{https://conan.io/center/recipes}
+\item Conan Documentation，\emph{Local Package Development Flow}（教程），JFrog：\href{https://docs.conan.io/2/tutorial/developing_packages/local_package_development_flow.html}{https://docs.conan.io/2/tutorial/developing\_packages/local\_package\_development\_flow.html}
+\item Conan Documentation，\emph{Testing Conan Packages}（教程），JFrog：\href{https://docs.conan.io/2/tutorial/creating_packages/test_conan_packages.html}{https://docs.conan.io/2/tutorial/creating\_packages/test\_conan\_packages.html}
+\item Conan Extensions，\emph{Migration Commands}，Conan，GitHub：\href{https://github.com/conan-io/conan-extensions/tree/main/extensions/commands/migrate}{https://github.com/conan-io/conan-extensions/tree/main/extensions/commands/migrate}
+\item JFrog，\emph{Conan Package Manager}（JFrog Integrations）：\href{https://jfrog.com/integrations/conan-package-manager/}{https://jfrog.com/integrations/conan-package-manager/}
+\item JFrog，\emph{JFrog \& Conan}（JFrog Integrations）：\href{https://jfrog.com/integrations/conan-xray/}{https://jfrog.com/integrations/conan-xray/}
+\item JFrog，\emph{JFrog Artifactory Open Source for Artifact Life-Cycle Management}（JFrog Community）：\href{https://jfrog.com/community/download-artifactory-oss/}{https://jfrog.com/community/download-artifactory-oss/}
+\item JFrog，\emph{Downloads}（JFrog Community）：\href{https://jfrog.com/community/open-source/}{https://jfrog.com/community/open-source/} 立即解锁本书的专属权益 扫描此二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按名称搜索本书。 \emph{注意：开始之前请准备好你的购买发票。}
+\end{itemize}

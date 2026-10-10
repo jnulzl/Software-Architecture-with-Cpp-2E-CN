@@ -1,0 +1,1639 @@
+C++ 由 Bjarne Stroustrup 在 AT\&T 贝尔实验室创建，作为 C 语言的一种扩展，是一门高级的、通用的、编译型的、静态类型的编程语言，支持过程式、面向对象和泛型编程。
+
+这门语言被用于各种各样的场景，构建从底层到高层的系统，涵盖固件和操作系统、桌面和移动应用，直到服务器软件、框架和服务。C++ 代码可以在各种硬件上运行，被大规模部署在计算云上，甚至还能在外太空见到它的身影。若没有这门多范式语言所具备的丰富特性，这样的成功是不可能实现的。
+
+在上一章中，我们介绍了一些架构模式，用于解决可扩展性、可用性、部署以及分布式环境中的集成等高层系统设计难题。本章把关注点下移到 C++ 语言层面，展示如何使用现代、安全且高效的 C++ 特性来实现这些系统的核心组件。
+
+尽管 C++ 允许你使用标准库中那些众所周知的面向对象 API——如果你用 C\# 或所谓的“咖啡语言”（一个对 Java 及其相关语言的诙谐称呼，源于 Java 的咖啡杯标志和名称）如 Java 和 Kotlin 编写过代码，可能对这些 API 很熟悉——但 C++ 还藏着一些超越面向对象设计的其他技巧。本章将提及其中几个。
+
+在这一过程中，我们将演示确保类型安全、避免内存问题以及编写高效代码的业界最佳实践。你将了解 C++ 各个标准（从 C++98 一直到 C++23）中可用的特性和技术，包括声明式编程、RAII、\texttt{constexpr}、\texttt{constinit}、\texttt{consteval}、单子（monadic）接口、模板、范围和概念。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 使用 RAII
+\item 在 C++ 中指定容器的接口
+\item 在接口中使用裸指针和智能指针
+\item 指定前置条件和后置条件
+\item 使用内联命名空间
+\item 应用 std::optional
+\item 使用单子接口
+\item 编写声明式代码
+\item 把计算移到编译期
+\item 利用安全类型的威力
+\end{itemize}
+
+闲话少说，让我们开始这段旅程。
+
+\section{技术要求}
+
+构建本章代码需要以下工具：
+
+\begin{itemize}
+\item 支持 C++23 的编译器（推荐 GCC 14+）
+\item CMake 3.28+
+\end{itemize}
+
+本章的源代码可在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter05}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter05} 找到。
+
+\section{使用 RAII}
+
+\textbf{RAII}（\textbf{资}\textbf{源获取即初始化}）是由 C++ 之父 Bjarne Stroustrup 推广的一个至关重要的惯用法。它利用基于栈的对象、构造函数和析构函数来管理所有资源，包括堆内存、套接字、文件、互斥量、磁盘空间和网络连接。
+
+\label{idx:435}
+当在栈上声明一个类对象时，会通过调用其构造函数来初始化它，构造函数获取资源，或者在发生错误时抛出异常。当对象离开作用域时，它会被弹出栈，但在被弹出之前会先调用对象的析构函数来释放所获取的资源。
+
+下面的代码展示了一个 RAII 包装器类，它在构造函数中为数组分配动态内存，并在析构函数中释放该内存：
+
+\begin{codebox}[cpp]
+template <typename T>
+class Array final {
+public:
+    explicit Array(std::size_t size) : sz_{size}, data_{new T[size]} {
+    std::cout << "Resource acquired\n";
+    }
+    Array(std::initializer_list<T> list) : Array(list.size()) {
+        std::copy(list.begin(), list.end(), data_);
+    }
+    ~Array() {
+        delete[] data_;
+        std::cout << "Resource released\n";
+    }
+    //拷贝构造函数和赋值运算符被删除，以防止浅拷贝和同一块动态内存被多次释放。
+    //关于拷贝和移动语义的更多内容，参见第 6 章。
+    Array(const Array&) = delete;
+    Array& operator=(const Array&) = delete;
+    T& operator[](std::size_t idx) { return data_[idx]; }
+    const T& operator[](std::size_t idx) const { return data_[idx]; }
+    [[nodiscard]] std::size_t size() const noexcept { return sz_; }
+    std::span<const T> span() { return std::span{data_, sz_}; }
+private:
+    std::size_t sz_;
+    T* data_;
+};
+\end{codebox}
+
+在这个实现中，拷贝构造函数和拷贝赋值运算符被显式删除，以防止浅拷贝和对同一块动态内存的潜在双重释放。如果没有这些删除，编译器会生成这些函数的隐式版本。隐式提供的拷贝赋值运算符可能导致程序崩溃，因为当从一个临时 \texttt{Array} 对象赋值时，它会对内部指针执行浅拷贝。当临时对象被销毁时，它会释放这块动态内存，使原对象留下一个悬垂指针，从而导致双重释放：
+
+\begin{codebox}[text]
+Array<int> array{};
+array = {1, 2, 3, 4, 5};
+Array copy_array{array};
+\end{codebox}
+
+拷贝和移动构造函数、赋值运算符，以及浅拷贝和深拷贝，将在下一章更详细地讲解。下面这个辅助函数用于打印 \texttt{Array} 类内部数组的元素，这些元素无法被修改，因为 \texttt{std::span} 是底层数据的只读视图：
+
+\begin{codebox}[cpp]
+template <typename T> void print_span(std::span<T> s) {
+    std::copy(s.begin(), s.end(), std::ostream_iterator<T>(std::cout));
+    std::cout << std::endl;
+}
+\end{codebox}
+
+现在来看看 RAII 的实际效果。在下面的代码中，动态内存作为一种资源，会在 \texttt{arr} 对象离开 \texttt{main()} 函数的作用域时被自动释放：
+
+\begin{codebox}[cpp]
+Array<char> a{0x74, 0x68, 0x65, 0x20, 0x64, 0x6f, 0x6f, 0x72, 0x20, 0x69, 0x6e, 0x74, 0x6f, 0x20, 0x73, 0x75, 0x6d, 0x6d, 0x65, 0x72};
+print_span(a.span());
+for (std::size_t i{}; i < a.size(); ++i) {
+    a[i] = static_cast<char>(i + 65);
+}
+print_span(a.span());
+\end{codebox}
+
+这段代码片段会在资源被创建和销毁时打印消息。\texttt{for} 循环会把数组中的字符替换为大写字母：
+
+\begin{codebox}[text]
+Resource acquired
+the door into summer
+ABCDEFGHIJKLMNOPQRST
+Resource released
+\end{codebox}
+
+\label{idx:436}
+RAII 是 C++ 中的核心里惯用法，它实现了确定性的资源管理。与 Java、Python 或 Go 等带有垃圾回收的语言不同，C++ 通过析构函数确保立即清理。Rust 和 Ada 等语言也采用了类似的模式。
+
+\label{idx:437}
+C++ \textbf{标准模板库}（\textbf{STL}）提供了许多实现 RAII 的类：\texttt{std::\allowbreak{}unique\_\allowbreak{}ptr}、\texttt{std::\allowbreak{}shared\_\allowbreak{}ptr}、\texttt{std::\allowbreak{}string}、\texttt{std::\allowbreak{}vector}、\texttt{std::\allowbreak{}lock\_\allowbreak{}guard}、\texttt{std::\allowbreak{}unique\_\allowbreak{}lock} 和 \texttt{std::\allowbreak{}shared\_\allowbreak{}lock}。STL 中充满了经过精心设计、能帮助开发者编写整洁且可复用代码的特性。下面我们来考察 \texttt{std::\allowbreak{}array} 等标准容器，它是该库的一个基础组成部分。
+
+\section{在 C++ 中指定容器的接口}
+
+\label{idx:438}
+标准库的实现是寻找地道且高性能 C++ 代码的绝佳去处。例如，如果你想读一些真正有趣的模板代码，不妨看看 \texttt{std::\allowbreak{}chrono}，它展示了一些有用的技巧，并在这一点上采用了新颖的思路。libstdc++ 实现的链接可以在 \emph{延伸阅读} 一节找到。
+
+\label{idx:439}
+至于库的其他部分，即使只是快速瞥一眼其中的容器，也能看出：尽管 C++ 容器在语法和实现上可能与其他语言中的容器不同，但它们遵循一致的数据结构。例如，许多 C++ 标准容器都共享一些常见的类型别名。为了说明这一点，我们来看标准库中一个相当直观的类——\texttt{std::\allowbreak{}array}——以分析这种模式：
+
+\begin{codebox}[cpp]
+template <class T, size_t N>
+struct array {
+    //类型：
+    typedef T& reference;
+    typedef const T& const_reference;
+    typedef /*implementation-defined*/ iterator;
+    typedef /*implementation-defined*/ const_iterator;
+    typedef size_t size_type;
+    typedef ptrdiff_t difference_type;
+    typedef T value_type;
+    typedef T* pointer;
+    typedef const T* const_pointer;
+    typedef reverse_iterator<iterator> reverse_iterator;
+    typedef reverse_iterator<const_iterator> const_reverse_iterator;
+\end{codebox}
+
+\label{idx:440}
+\label{idx:441}
+\label{idx:442}
+当你开始阅读这个类定义时，首先看到的是它为某些类型创建了别名。这在标准容器中很常见，而且其中许多容器的这些别名名称都相同。这样做有几个原因。原因之一是“最不意外原则”——采用这种写法可以减少开发者挠头琢磨你到底想表达什么、以及某个别名是如何命名的所花费的时间。另一个原因是，你的类的使用者和库作者在编写自己的代码时，往往会依赖这类类型萃取（type trait）。如果你的容器不提供这样的别名，就会加大它与其他一些标准工具或类型萃取配合使用的难度，于是你的 API 使用者就不得不绕过这个问题，甚至干脆改用另一个完全不同的类。
+
+即使你在自己的模板中并没有用到这些类型别名，提供它们也是有用的。把函数参数和类成员字段声明为这些类型是相当常见的做法，所以如果你在编写一个可能被他人使用的类，一定要记得提供它们。例如，如果你在编写一个分配器（allocator），它的许多使用者都会依赖特定的类型别名是否存在。
+
+再来看看 \texttt{std::\allowbreak{}array} 还给我们带来了什么：
+
+\begin{codebox}[text]
+ // no explicit construct/copy/destroy for aggregate type
+\end{codebox}
+
+那么，\texttt{std::\allowbreak{}array} 下一个有趣的地方是它没有定义任何构造函数，包括复制/移动构造函数、赋值运算符和析构函数。原因很简单：加入这些并不会带来任何价值。在不必要时添加这类成员，往往会损害性能。如果 \texttt{std::\allowbreak{}array} 使用了非默认构造函数（而 \texttt{T() \{\}} 已经属于非默认，不同于 \texttt{T(\allowbreak{})\allowbreak{} =\allowbreak{} default;\allowbreak{}}），你的类就不再是平凡的（trivial）或可平凡构造的，从而阻止编译器对它施加优化。
+
+下面来看看我们的类还有哪些其他声明：
+
+\begin{codebox}[cpp]
+  constexpr void fill(const T& u);
+  constexpr void swap(array<T, N>&) noexcept(is_nothrow_swappable_v<T&>);
+\end{codebox}
+
+现在，我们可以看到两个成员函数，其中包括一个成员 swap。很多时候，不依赖 \texttt{std::swap} 的默认行为、而是提供自己的版本更有利。例如，对 \texttt{std::\allowbreak{}vector} 来说，底层存储是整体交换的，而不是逐个元素交换。在编写成员 swap 函数时，一定要同时提供一个名为 \texttt{swap} 的自由函数，这样针对你的类型的自定义 swap 才能通过 \textbf{实参依赖查找}（\textbf{ADL}）被找到。这个自由函数只需调用你的成员 \texttt{swap} 函数即可。
+
+\label{idx:443}
+\label{idx:444}
+关于 swap 函数还有一点值得一提：它是有条件 \texttt{noexcept} 的。如果存储的类型可以不抛异常地交换，那么数组的 \texttt{swap} 函数也会是 \texttt{noexcept} 的。对于把我们的类型作为成员存储的类来说，这种不抛异常的 swap 惯用法可以帮助你在复制操作中实现强异常安全保证。
+
+如下面的代码块所示，接下来是一大批函数，它们向我们展示了 C++ 众多容器类的另一个重要方面——迭代器：
+
+\begin{codebox}[text]
+// iterators:
+constexpr iterator begin() noexcept;
+constexpr const_iterator begin() const noexcept;
+constexpr iterator end() noexcept;
+constexpr const_iterator end() const noexcept;
+constexpr reverse_iterator rbegin() noexcept;
+constexpr const_reverse_iterator rbegin() const noexcept;
+constexpr reverse_iterator rend() noexcept;
+constexpr const_reverse_iterator rend() const noexcept;
+constexpr const_iterator cbegin() const noexcept;
+constexpr const_iterator cend() const noexcept;
+constexpr const_reverse_iterator crbegin() const noexcept;
+constexpr const_reverse_iterator crend() const noexcept;
+\end{codebox}
+
+迭代器对每个容器都至关重要。如果你的类不提供迭代器访问，就无法在基于范围的 \texttt{for} 循环中使用它，也无法与标准库中所有有用的算法兼容。这并不意味着你必须编写自己的迭代器类型——如果你的存储是连续的，直接使用一个简单的指针即可。提供 const 迭代器可以帮助你以不可变的方式使用你的类，而提供反向迭代器则有助于为容器开启更多用例。
+
+在继续之前，我们先退一步，理解迭代器究竟是什么、如何分类，以及如何实现。
+
+C++ 中的迭代器按所支持的操作分为六个类别，构成一个层次结构。它们通常声明在所属的类内部。从层次结构中的最低层到最高层，依次如下：
+
+\begin{itemize}
+\item 输入迭代器是一种单向迭代器，用于访问值
+\item 输出迭代器同样是一种单向迭代器，用于赋值
+\item 前向迭代器结合了输入迭代器和输出迭代器
+\item 双向迭代器可以向前和向后移动
+\item 随机访问迭代器具备双向迭代器的全部特性，并支持随机访问
+\label{idx:445}
+\item 连续迭代器与上一种相同，此外还要求逻辑上相邻的元素在内存中同样物理相邻
+\end{itemize}
+
+\myGraphic{0.724}{images/B18456_05_01.png}{图 5.1：C++ 中迭代器的层次结构}
+
+传统上，迭代器借助标签（tagging）和一些公共属性来实现：\texttt{iterator\_\allowbreak{}category}、\texttt{difference\_\allowbreak{}type}、\texttt{value\_\allowbreak{}type}、\texttt{pointer} 和 \texttt{reference}。这些属性让标准库算法能够推断出迭代器的能力并恰当地使用它。
+
+\label{idx:446}
+虽然许多标准容器已经自带迭代器，但在设计自定义容器类（例如我们基于 RAII 的 \texttt{Array}）时，编写自己的迭代器是必不可少的。这能使其兼容基于范围的循环和 STL 算法。下面的示例展示了如何为我们之前示例中的 \texttt{Array} 类实现一个自定义前向迭代器：
+
+\begin{codebox}[cpp]
+template<typename T> class Array final {
+public:
+  ...
+    struct Iterator {
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = T;
+        using pointer = T*;
+        using reference = T&;
+        Iterator() = default;
+        explicit Iterator(pointer ptr) : ptr_{ptr} {}
+        reference operator*() const { return *ptr_; }
+        pointer operator->() { return ptr_; }
+        Iterator& operator++() {
+            ++ptr_;
+            return *this;
+        }
+        Iterator operator++(int) {
+            Iterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+        friend bool operator==(const Iterator& a, const Iterator& b) {
+            return a.ptr_ == b.ptr_;
+        };
+        friend bool operator!=(const Iterator& a, const Iterator& b) {
+            return a.ptr_ != b.ptr_;
+        };
+    private:
+        pointer ptr{nullptr};
+    };
+    [[nodiscard]] Iterator begin() { return Iterator(&data[0]); }
+    [[nodiscard]] Iterator end() { return Iterator(&data[sz]); }
+    [[nodiscard]] const Iterator begin() const { return Iterator(&data[0]); }`
+    [[nodiscard]] const Iterator end() const { return Iterator(&data[sz]); }
+private:
+  ...
+};
+\end{codebox}
+
+\label{idx:447}
+\label{idx:448}
+这个实现为 \texttt{Array} 类配备了一个自定义前向迭代器，使其可用于基于范围的 \texttt{for} 循环以及需要迭代器的标准算法。它同时提供了 \texttt{begin()} 和 \texttt{end()} 的 const 与非 const 版本，既支持可变访问元素，也支持不可变访问。迭代器本身支持解引用、递增和比较，从而满足前向迭代器的最低要求。
+
+在 C++20 中，concept（概念）提供了一种更清晰的方式来表达迭代器的要求。关于迭代器 concept 的资料，请参见 \emph{延伸阅读} 一节。现在，我们不再依赖标签，而是可以用 \texttt{static\_\allowbreak{}assert} 在编译期检查我们的 \texttt{Iterator} 类型是否满足 \texttt{std::\allowbreak{}forward\_\allowbreak{}iterator} concept，如下所示：
+
+\begin{codebox}[cpp]
+template<typename T> class Array final {
+public:
+  ...
+    struct Iterator {
+        using difference_type = std::ptrdiff_t;
+        using value_type = T;
+        using pointer = T*;
+        using reference = T&;
+  ...
+    static_assert(std::forward_iterator<Iterator>);
+private:
+  ...
+};
+\end{codebox}
+
+这里，我们有一个辅助函数，使用该迭代器打印数组的元素：
+
+\begin{codebox}[cpp]
+template <typename T> void print_array(const Array<T> &arr) {
+    for (auto it = arr.begin(); it != arr.end(); ++it) {
+        std::cout << *it;
+    }
+    std::cout << std::endl;
+}
+\end{codebox}
+
+\label{idx:449}
+\label{idx:450}
+下面是一个把数组中所有字符转换为小写的 \texttt{for} 循环，展示了基于范围的 \texttt{for} 循环的用法：
+
+\begin{codebox}[text]
+for (auto &c : arr) {
+    c += 32;
+}
+print_array(arr);
+\end{codebox}
+
+完整示例会打印这些消息：
+
+\begin{codebox}[text]
+Resource acquired
+the door into summer
+ABCDEFGHIJKLMNOPQRST
+abcdefghijklmnopqrst
+Resource released
+\end{codebox}
+
+下面来看看接下来的内容：
+
+\begin{codebox}[cpp]
+//容量：
+constexpr size_type size() const noexcept;
+constexpr size_type max_size() const noexcept;
+constexpr bool empty() const noexcept;
+//元素访问：
+constexpr reference operator[](size_type n);
+constexpr const_reference operator[](size_type n) const;
+constexpr const_reference at(size_type n) const;
+constexpr reference at(size_type n);
+constexpr reference front();
+constexpr const_reference front() const;
+constexpr reference back();
+constexpr const_reference back() const;
+constexpr T * data() noexcept;
+constexpr const T * data() const noexcept;
+private:
+    //实际的存储，形如 T elements[N];
+};
+\end{codebox}
+
+在迭代器之后，我们有一些检查和修改容器数据的方法。对 \texttt{Array} 而言，它们全都被标记为 \texttt{constexpr}。这意味着如果我们要编写一些编译期代码，就可以使用我们的 \texttt{Array} 类。我们将在本章后面 \emph{把计算搬到编译期} 一节中更详细地讨论这一点。
+
+\label{idx:451}
+\label{idx:452}
+最后，我们终于看完了 \texttt{Array} 的整个定义。不过，它的接口并没有就此结束。从 C++17 开始，你会发现类似下面这样的代码行：
+
+\begin{codebox}[cpp]
+template<class T, class... U>
+    array(T, U...) -> array<T, 1 + sizeof...(U)>;
+\end{codebox}
+
+\label{idx:453}
+\label{idx:454}
+这类语句称为 \textbf{推导指引}（deduction guide）。它们属于一项名为 \textbf{类模板实参推导}（\textbf{CTAD}）的特性，该特性在 C++17 中引入。它允许你在声明变量时省略模板参数。现在，使用 \texttt{std::\allowbreak{}array}，你可以直接这样写：
+
+\begin{codebox}[cpp]
+auto ints = std::array{1, 2, 3};
+\end{codebox}
+
+不过，对于更复杂的类型（例如 map），它可能更加方便，如下所示：
+
+\begin{codebox}[cpp]
+auto legCount = std::unordered_map{ std::pair{"cat", 4}, {"human", 2}, {"mushroom", 1} };
+\end{codebox}
+
+不过，这里有一个陷阱：在传入第一个实参时，我们需要指明自己传入的是键值对。注意，我们也为此使用了一个推导指引。推导指引为编译器提供提示，告诉它如何推断那些并非直接相关的类型。借助 CTAD，你可以自己编写这样的推导指引。
+
+既然谈到了接口这个话题，我们再指出它们的其他一些方面。
+
+\section{在接口中使用裸指针和智能指针}
+
+\label{idx:455}
+你在接口中使用的类型，很大程度上传达了 API 应当如何使用。即使有文档，好的 API 也应当让人一眼就能看明白。这一点同样适用于指针，因为传给函数的指针决定了接口的用法。
+
+下面来看看向函数传递资源参数的不同方式——按值、按引用还是按指针——会向 API 使用者传达怎样不同的含义。
+
+但在演示这些差异之前，我们需要一个包装 \texttt{std::\allowbreak{}string} 类型的辅助类：
+
+\begin{codebox}[cpp]
+class Resource final {
+    std::string m_s;
+public:
+    explicit Resource(std::string s) : m_s{std::move(s)} {
+        std::cout << "Resource constructor " << m_s << '\n';
+    }
+    ~Resource() {
+        std::cout << "Resource destructor " << m_s << '\n';
+    }
+    //用户定义转换函数
+    explicit operator std::string() const { return m_s; }
+};
+std::ostream& operator<<(std::ostream& os, const Resource& r) {
+    os << static_cast<std::string>(r);
+    return os;
+}
+\end{codebox}
+
+\texttt{Resource} 类包装一个字符串，只是为了在资源被捕获或释放时打印消息，这对于跟踪智能指针中的资源所有权很有用。相应地，用户定义的 \texttt{std::\allowbreak{}string(\allowbreak{})\allowbreak{}} 转换函数会返回被包装的字符串。
+
+\begin{myNotic}{注意}
+
+可以针对不同的 C++ 类型定义这类转换函数，以替代隐式类型转换，从而实现更安全的类型转换。关于这一概念的更多内容，将在 \emph{第 12 章} \emph{代码与部署安全} 中介绍。
+\end{myNotic}
+
+现在，考虑下面的函数声明（为简洁起见省略了 \texttt{const} 关键字）：
+
+\begin{codebox}[cpp]
+void unique_ptr_val(std::unique_ptr<Resource>);
+void unique_ptr_ref(std::unique_ptr<Resource>&);
+void unique_ptr_raw(std::unique_ptr<Resource>*);
+void shared_ptr_val(std::shared_ptr<Resource>);
+void shared_ptr_ref(std::shared_ptr<Resource>&);
+void shared_ptr_raw(std::shared_ptr<Resource>*);
+void val(Resource);
+void ref(Resource&);
+void raw(Resource*);
+void weak_ptr_val(std::weak_ptr<Resource>);
+void weak_ptr_ref(std::weak_ptr<Resource>&);
+void weak_ptr_raw(std::weak_ptr<Resource>*);
+\end{codebox}
+
+\label{idx:456}
+这些函数分别在什么时候使用？当被调用的函数返回一个指向动态分配内存的裸指针时，并不总是清楚应该由哪段代码来释放内存：调用方还是被调用方。智能指针优雅地解决了这个问题，它拥有指针，并在指针离开作用域时自动释放内存。使用智能指针与使用裸指针并不冲突，只要后者只是 \emph{使用} 对象而非 \emph{拥有} 它们。
+
+在智能指针中，\texttt{std::\allowbreak{}unique\_\allowbreak{}ptr} 是默认选择。它可移动但不可复制，因为在同一时刻只能存在一个所有者。因此，这个智能指针的复制构造函数被删除了。资源的可以通过 \texttt{std::move} 来转移所有权，这会触发移动构造函数：
+
+\begin{codebox}[cpp]
+void unique_ptr_val(std::unique_ptr<Resource> p) {
+    std::cout << "unique_ptr_val: value = " << *p << std::endl;
+}
+int main() {
+    auto p = std::make_unique<Resource>("candy apple");
+    //编译错误：复制构造函数已被删除
+    //unique_ptr_val(p);
+    //不可复制，但可移动
+    unique_ptr_val(std::move(p));
+    //资源被移动并在 unique_ptr_val() 中被销毁
+    std::cout << "unique_ptr_main: value = "
+              << (p != nullptr ? static_cast<std::string>(*p) : "null")
+              << std::endl;
+}
+\end{codebox}
+
+以下是终端输出：
+
+\begin{codebox}[text]
+Resource constructor candy apple
+unique_ptr_val: value = candy apple
+Resource destructor candy apple
+unique_ptr_main: value = null
+\end{codebox}
+
+我们看到，一个 \texttt{Resource} 对象被创建并包装在一个 unique 智能指针中。所有权被转移给了 \texttt{unique\_\allowbreak{}ptr\_\allowbreak{}val} 函数，因此最后原来的指针为空。
+
+\label{idx:457}
+unique 指针和任何其他对象一样，因此可以按引用或指针传递。不过，这样做违反了独占所有权原则：
+
+\begin{codebox}[cpp]
+void unique_ptr_ref(std::unique_ptr<Resource>& p) {
+    std::cout << "unique_ptr_ref: value = " << *p << std::endl;
+}
+void unique_ptr_raw(std::unique_ptr<Resource>* p) {
+    std::cout << "unique_ptr_raw: value = " << **p << std::endl;
+}
+int main() {
+    auto p = std::make_unique<Resource>("jet town");
+    //违反：独占所有权
+    unique_ptr_ref(p);
+    unique_ptr_raw(&p);
+    //所有权未被移动
+    std::cout << "unique_ptr_main: value = " << *p << std::endl;
+}
+\end{codebox}
+
+以下是终端输出：
+
+\begin{codebox}[text]
+Resource constructor jet town
+unique_ptr_ref: value = jet town
+unique_ptr_raw: value = jet town
+unique_ptr_main: value = jet town
+Resource destructor jet town
+\end{codebox}
+
+这一次，资源所有权没有被转移，因此指针不为空。
+
+所有权可以从 unique 指针转移到 shared 指针，但无法反向转移，因为共享资源不能被独占，因此 unique 指针会被置空。当 \texttt{std::\allowbreak{}shared\_\allowbreak{}ptr} 按值传递时，意味着被调用方也会成为一个所有者。因此，这会在复制构造函数和析构函数中触发引用计数的原子递增/递减，与裸指针和智能指针相比会带来性能开销：
+
+\begin{codebox}[cpp]
+void shared_ptr_val(std::shared_ptr<Resource> p) {
+    std::cout << "shared_ptr_val: value = " << *p << std::endl;
+}
+int main() {
+    auto up = std::make_unique<Resource>("walkman on");
+    std::shared_ptr<Resource> sp = std::move(up);
+    //共享所有权
+    shared_ptr_val(sp);
+    std::cout << "unique_ptr_main: value = "
+              << (up != nullptr ? static_cast<std::string>(*up) : "null")
+              << std::endl;
+    std::cout << "shared_ptr_main: value = " << *sp << std::endl;
+}
+\end{codebox}
+
+我们得到如下终端输出：
+
+\begin{codebox}[text]
+Resource constructor walkman on
+shared_ptr_val: value = walkman on
+unique_ptr_main: value = null
+shared_ptr_main: value = walkman on
+Resource destructor walkman on
+\end{codebox}
+
+\label{idx:458}
+shared 指针同样和任何其他对象一样，因此可以按引用或指针传递。这种做法不假设拥有所有权，用于避免复制的开销，尤其是在关注性能的时候：
+
+\begin{codebox}[cpp]
+void shared_ptr_ref(std::shared_ptr<Resource>& p) {
+  std::cout << "shared_ptr_ref: value = " << *p << std::endl;
+}
+void shared_ptr_raw(std::shared_ptr<Resource>* p) {
+  std::cout << "shared_ptr_raw: value = " << **p << std::endl;
+}
+int main() {
+  auto p = std::make_shared<Resource>("playback");
+  //没有共享所有权
+  shared_ptr_ref(p);
+  shared_ptr_raw(&p);  //意义不大
+  std::cout << "shared_ptr_main: value = " << *p << std::endl;
+}
+\end{codebox}
+
+以下是终端输出：
+
+\begin{codebox}[text]
+Resource constructor playback
+shared_ptr_ref: value = playback
+shared_ptr_raw: value = playback
+shared_ptr_main: value = playback
+Resource destructor playback
+\end{codebox}
+
+智能指针通常按常量引用传递给其他函数，因为类类型参数应当按引用传递，最好是按 const 引用传递。但如果你并不需要智能指针、也不需要传递所有权，那就使用裸指针，因为它们更快，也能让代码更易读。理想情况下，如果你能避免动态内存分配，那就更好了。
+
+显然，裸指针在 C++ 中是可以接受的。这可能出现在第三方库或对性能要求苛刻的代码中。但是，当你在智能指针上调用 \texttt{get()} 以获取裸指针时，存在指针被删除的风险，或者另一个智能指针会接管这个裸指针，从而导致未定义行为或悬空指针，因为这个裸指针已经脱离了你那个智能指针的控制。\emph{不要让多个智能指针拥有同一个资源}。裸指针应当用在作用域有限的小段代码、辅助函数和循环中：
+
+\begin{codebox}[cpp]
+void val(Resource p) {
+    std::cout << "val: value = " << p << std::endl;
+}
+void ref(Resource& p) {
+    std::cout << "ref: value = " << p << std::endl;
+}
+void raw(Resource* p) {
+    std::cout << "raw: value = " << *p << std::endl;
+}
+int main() {
+    auto p = std::make_unique<Resource>("tonight");
+    //脱离控制
+    val(*p.get());
+    ref(*p.get());
+    raw(p.get());
+    std::cout << "unique_ptr_main: value = "
+              << (p != nullptr ? static_cast<std::string>(*p) : "null")
+              << std::endl;
+}
+\end{codebox}
+
+以下是我们得到的终端输出：
+
+\begin{codebox}[text]
+Resource constructor tonight
+val: value = tonight
+Resource destructor tonight
+ref: value = tonight
+raw: value = tonight
+unique_ptr_main: value = tonight
+Resource destructor tonight
+\end{codebox}
+
+\label{idx:459}
+弱指针很少使用，但它们是为需要循环引用的场景而设计的。有时循环引用无法避免，因为 shared 指针可以相互引用，导致彼此都无法释放内存。为避免这种情况，\texttt{std::\allowbreak{}weak\_\allowbreak{}ptr} 被用作对强引用 \texttt{std::\allowbreak{}shared\_\allowbreak{}ptr} 的弱引用。等到对 shared 指针加锁时，对该 shared 指针的引用可能已经失效，从而打破循环引用。对 shared 指针加锁可以确保在访问对象之前它仍然有效：
+
+\begin{codebox}[cpp]
+void weak_ptr_val(std::weak_ptr<Resource> wp) {
+    if (std::shared_ptr<Resource> sp = wp.lock()) {
+        std::cout << "weak_ptr_val: value = " << *sp << std::endl;
+    } else {
+        std::cout << "weak_ptr_val: expired" << std::endl;
+    }
+}
+void weak_ptr_ref(std::weak_ptr<Resource>& wp) {
+    if (std::shared_ptr<Resource> sp = wp.lock()) {
+        std::cout << "weak_ptr_ref (shared_ptr): value = " << *sp << std::endl;
+    } else {
+        std::cout << "weak_ptr_ref: expired" << std::endl;
+    }
+}
+void weak_ptr_raw(std::weak_ptr<Resource>* wp) {
+    if (std::shared_ptr<Resource> sp = wp->lock()) {
+        std::cout << "weak_ptr_ref (shared_ptr): value = " << *sp << std::endl;
+    } else {
+        std::cout << "weak_ptr_ref: expired" << std::endl;
+    }
+}
+\end{codebox}
+
+\label{idx:460}
+按值、按引用或按常量传递这样的弱指针没有实际区别，因为弱指针不会以任何方式影响 shared 指针的引用计数：
+
+\begin{codebox}[cpp]
+auto sp = std::make_shared("synth samurai");
+std::weak_ptr wp = sp;
+weak_ptr_val(wp);
+weak_ptr_ref(wp); //意义不大
+weak_ptr_val(wp); //意义不大
+std::cout << "shared_ptr_main: value = " << *sp << std::endl;
+sp.reset();  //置空
+weak_ptr_val(wp);
+std::cout << "shared_ptr_main: value = "
+          << (sp != nullptr ? static_cast<std::string>(*sp) : "null")
+          << std::endl;
+\end{codebox}
+
+终端输出如下：
+
+\begin{codebox}[text]
+Resource constructor synth samurai
+weak_ptr_val: value = synth samurai
+weak_ptr_ref (shared_ptr): value = synth samurai
+weak_ptr_val: value = synth samurai
+shared_ptr_main: value = synth samurai
+Resource destructor synth samurai
+weak_ptr_val: expired
+shared_ptr_main: value = null
+\end{codebox}
+
+我们已经了解了如何使用指针，接下来看看健壮代码的另一个重要方面——清晰地规定函数期望什么、保证什么。
+
+\section{规定前置条件和后置条件}
+
+\label{idx:461}
+\label{idx:462}
+函数对其参数提出一些要求是很常见的。每项要求都应当表述为前置条件或后置条件。如果函数保证其参数或结果具有某些属性——例如它们是非负的——函数也应当明确说明这一点。有些开发者会通过写注释来告知他人，但这实际上并不能以任何方式强制满足该要求。使用 \texttt{if} 语句更好一些，但它掩盖了检查的原因。目前，除了编译期断言——特别是 \texttt{static\_\allowbreak{}assert} 声明，或者依赖 \texttt{NDEBUG} 宏来启用或禁用断言编译的 \texttt{assert} 宏——C++ 标准仍然没有提供处理这一问题的办法。契约（contract）预计将成为 C++26 标准的一部分，不过在撰写本书时它仍未实现。幸运的是，微软的 \textbf{指南支持库}（\textbf{GSL}）等库提供了自己的检查，C++ Core Guidelines 也推荐使用它。GSL 包含视图、所有权指针、断言、实用工具和 concept（特别是智能指针的 concept），以帮助落实最佳实践。
+
+假设不管出于什么原因，我们要编写一个只保证处理某一范围内数字的函数。这个函数可能如下所示：
+
+\begin{codebox}[cpp]
+int foobar(int n) {
+    std::cout << "Expects that n >= 0: " << n << std::endl;
+    Expects(n >= 0);
+    ++n;
+    std::cout << "Ensures that n < 10: " << n << std::endl;
+    Ensures(n < 10);
+    return n;
+}
+\end{codebox}
+
+\label{idx:463}
+\label{idx:464}
+注意，用户甚至无需访问实现，就能确信其中加入了某些检查。这段代码也是自文档化的，因为函数需要什么、结果会是什么都一清二楚：
+
+\begin{codebox}[cpp]
+std::random_device rd;
+std::mt19937 gen{rd()};
+std::uniform_int_distribution<> dist{-5, 15};
+for (int i = 0; i < 5; ++i) {
+    std::cout << "Value = " << foobar(dist(gen)) << std::endl;
+}
+\end{codebox}
+
+这是因为 \texttt{Expects} 和 \texttt{Ensures} 宏在所有的 release 和 debug 构建中都会作为运行时检查生效，并且不会被优化掉。它们会检查某个条件是否成立，若条件不满足就终止程序。这些宏强制落实了我们函数向其使用者提供的契约。
+
+契约有助于确保函数被正确使用。但在处理共享库或代码随时间演进时，确保程序的不同部分仍能协同工作同样重要。C++ 为此提供的一种手段就是内联命名空间（inline namespace）。
+
+\section{使用内联命名空间}
+
+\label{idx:465}
+在系统编程中，你往往并不只是针对 API 编写代码；很多时候，你还需要关心 \textbf{应用二进制接口}（\textbf{ABI}）的兼容性。一次著名的 ABI 破坏发生在 GCC 发布其第五个版本时，其中一项重大改动就是 \texttt{std::\allowbreak{}string} 的类布局发生了变化。这意味着用较旧 GCC 版本（或在较新版本中仍使用新 ABI 的库，这在此后的一些 GCC 版本中依然如此）构建的库，无法与使用较新 ABI 编写的代码配合工作。在 ABI 破坏的情况下，如果你收到的是链接错误，那你算是幸运的。在某些场景下，比如把 debug 代码与 release 代码混用，如果某个类只在其中一种配置下拥有某些成员——例如为更好的调试而添加的特殊成员——你很可能会遇到内存损坏。
+
+借助 C++11 的内联命名空间，一些通常难以调试的内存损坏可以很容易地转化为链接错误。考虑下面的代码：
+
+\begin{codebox}[cpp]
+#ifdef NDEBUG
+inline namespace release {
+#else
+inline namespace debug {
+#endif
+struct EasilyDebuggable {
+    //...
+#ifndef NDEBUG
+    //有助于调试的字段
+#endif
+};
+} //结束命名空间
+\end{codebox}
+
+由于前面的代码使用了内联命名空间，在声明这个类的对象时，用户不会察觉到两种构建类型之间的差异：内联命名空间中的所有声明在外围作用域中都可见。然而，链接器最终会看到不同的符号名，这样一来，如果它试图链接不兼容的库就会失败，从而给我们带来所期望的 ABI 安全性，以及一条提及内联命名空间的友好错误消息。
+
+\begin{myTip}{提示}
+
+关于提供安全而优雅的 ABI 的更多技巧，请参见 Arvid Norberg 在 \emph{C++Now} 2019 上的演讲 \emph{The ABI Challenge}，相关链接见 \emph{延伸阅读} 一节。
+\end{myTip}
+
+\section{应用 std::optional}
+
+\label{idx:466}
+\label{idx:467}
+从 ABI 回到 API，我们再来提一个类型，它是我们在本书前面设计优秀 API 时略过的。本节的主角在处理函数的可选参数时能大显身手，因为它能帮助你的类型拥有可能持有值、也可能不持有值的组成部分，它还可以用于设计整洁的接口，或作为指针的替代品。这位主角叫做 \texttt{std::\allowbreak{}optional}，在 C++17 中被标准化。如果你无法使用 C++17，你仍然可以在 Abseil（\texttt{absl::\allowbreak{}optional}）中找到它，或者从 Boost（\texttt{boost::\allowbreak{}optional}）中找到非常相似的版本。使用这些类的一大好处是它们非常清晰地表达了意图，有助于编写整洁且自文档化的接口。下面来看一些用例，看看它的实际效果。
+
+\subsection{可选的函数参数}
+
+\label{idx:468}
+我们先从向函数传递可以持有值、但也可以不持有值的实参说起。你是否曾遇到过类似下面这样的函数签名？
+
+\begin{codebox}[text]
+void calculate(int param); // If param equals -1 it means "no value"
+void calculate(int param = -1);
+\end{codebox}
+
+有时候，如果 \texttt{param} 是在代码中别处计算出来的——也许在那一处它甚至还是一个有效值——你就很容易在本不想传的时候误传一个 \texttt{-1}。现代 C++ 提供了一种更整洁、更安全的方式来表达可选值：
+
+\begin{codebox}[cpp]
+void calculate(std::optional<int> param);
+\end{codebox}
+
+这一次，如果你不想传值，该怎么做就清楚多了：只需传一个空的 optional 即可。意图很明确，而 \texttt{-1} 也仍然可以作为有效值使用，你无需再以类型不安全的方式赋予它任何特殊含义。
+
+这只是 optional 模板的一种用法。下面再看一些其他用法。
+
+\subsection{可选的函数返回值}
+
+\label{idx:469}
+正如可以接受特殊值来表示参数的 \emph{无值} 一样，函数有时也可以返回 \emph{无值}。下面这几种，你更倾向于哪一种？
+
+\begin{codebox}[cpp]
+int try_parse(std::string_view maybe_number);
+bool try_parse(std::string_view maybe_number, int &parsed_number);
+int *try_parse(std::string_view maybe_number);
+std::optional<int> try_parse(std::string_view maybe_number);
+\end{codebox}
+
+你怎么判断第一个函数在出错时会返回什么值？又或者，它会抛出一个异常，而不是返回某个魔法值？接着看第二个签名，看起来如果出错会返回 \texttt{false}，但仍然很容易忘记检查它，而直接去读取 \texttt{parsed\_\allowbreak{}number}，从而可能引发麻烦。在第三种情况下，虽然可以相对安全地假设出错时会返回 \texttt{nullptr}、成功时会返回一个整数，但现在不清楚返回的 \texttt{int} 是否需要释放。
+
+至于最后一个签名，只需看一眼就很清楚：出错时会返回一个空值，而且不需要再做其他任何事情。它简单、易懂且优雅。
+
+\label{idx:470}
+作为对比，其他可以用来返回可选值的候选类型有 \texttt{std::pair}、\texttt{std::\allowbreak{}tuple}、\texttt{std::\allowbreak{}variant} 和 \texttt{std::any}。当你在出错返回时需要一个占位值而不是结果时，\texttt{std::pair} 和 \texttt{std::\allowbreak{}tuple} 很常用，但不够优雅。\texttt{std::\allowbreak{}variant} 类模板可能是更好的替代方案。它表示一个类型安全的联合体，持有某一预定义类型集合中的一个值，或者一个诸如 \texttt{std::\allowbreak{}monostate} 的占位符。如果你已经知道类型，那么 \texttt{std::any} 大概不是合适的工具。不过这个类型可以包含任意类型的值，也可以什么都不含，且视实现而定，\texttt{std::any} 中的对象无需动态内存分配即可存储。
+
+下面这些函数签名展示了这些类型可能的用法：
+
+\begin{codebox}[cpp]
+std::pair<bool, int> try_parse(std::string_view maybe_number);
+std::tuple<bool, int, std::string> try_parse(std::string_view maybe_number);
+std::variant<int, parse_error> try_parse(std::string_view maybe_number);
+std::any try_parse(std::string_view maybe_number);
+\end{codebox}
+
+一个不错的选择是 C++23 的 \texttt{std::\allowbreak{}expected}，它表示两种值之一：期望值（expected）或非期望值（unexpected）。\texttt{std::\allowbreak{}expected} 类模板类似于 \texttt{std::\allowbreak{}variant}，但在处理期望类型时更符合人体工程学：
+
+\begin{codebox}[cpp]
+enum class parse_error
+{
+    empty,
+    invalid_input,
+    out_of_range
+};
+std::expected<int, parse_error> try_parse(std::string_view maybe_number);
+\end{codebox}
+
+你可以用 \texttt{std::\allowbreak{}unique\_\allowbreak{}ptr} 来表示可选值，用 \texttt{nullptr} 表示缺失，但内存分配会带来运行时开销，而且可能失败：
+
+\begin{codebox}[cpp]
+bool try_parse(std::string_view maybe_number, std::unique_ptr<int> &parsed_number);
+std::unique_ptr<int> try_parse(std::string_view maybe_number);
+\end{codebox}
+
+可选返回值也可以仅仅用来标记返回了 \emph{无值}，而不一定表示发生了错误。话虽如此，我们接着来看 optional 的最后一个用例。
+
+\subsection{可选的类成员}
+
+\label{idx:471}
+让类状态保持一致并不总是一件容易的事。例如，有时你希望有一两个可以有值、也可以干脆不设置的成员。与其为这种情况再创建一个类（这会增加代码复杂度），或者预留一个特殊值（很容易被悄悄传进来而无人察觉），你可以使用一个可选的类成员。考虑下面这个类型：
+
+\begin{codebox}[cpp]
+struct UserProfile {
+    std::string nickname;
+    std::optional <std::string> full_name;
+    std::optional <std::string> address;
+    std::optional <PhoneNumber> phone;
+};
+\end{codebox}
+
+\label{idx:472}
+在这里，我们能看出哪些字段是必需的，哪些不需要填充。同样的数据也可以用空字符串来存储，但仅从结构体的定义上并不容易看出来。另一种选择是使用 \texttt{std::\allowbreak{}unique\_\allowbreak{}ptr}，但那样就会失去数据局部性，而数据局部性对性能往往至关重要。对这类情况，\texttt{std::\allowbreak{}optional} 可以发挥很大价值。当你想要设计整洁、高质量且直观的 API 时，它绝对应该成为你工具箱中的一员。
+
+还有一件事可以进一步改进它们，同时也会帮助你在默认情况下写出更少 bug 的代码。我们将在下一节讨论。
+
+\section{使用单子式接口}
+
+\label{idx:473}
+单子式（monadic）接口基于函数式编程原则。函数式编程是一种通过把问题分解为函数来解决问题的范式。它是一种声明式编程范式，基于若干核心概念，如递归、变量的不可变性、纯函数（在相同输入下产生相同输出且没有副作用）、高阶函数（接受或返回函数），以及一等函数（像其他任何变量一样被对待的函数）。采用这种方法的结果是，函数式程序易于阅读、调试和并行化。不过，递归函数由于内存占用更高，代价可能较大。
+
+单子（monad）是函子（functor）的一个子类型，在函数式编程语言中用于描述对值执行的一系列命令式操作。它是一种简单而强大的组合式设计模式，用于应对函数式编程中的一项核心挑战——处理副作用，即函数在相同输入下不仅产生相同输出，还会做别的事情。副作用的例子包括在屏幕上显示内容、向文件写入内容，或者修改程序中其他某个变量里的值。单子背后的原理是封装含有副作用的计算，同时保持语言的纯粹性。
+
+由于单子有数学渊源，理解适用于它的定律会有所帮助。这里我们为感兴趣的读者简要介绍相关的数学背景，但在实践中要高效使用单子，并不一定要掌握这些细节。
+
+\label{idx:474}
+单子的概念属于一门名为\textbf{范畴论}（category theory）的数学理论，这可能让它显得复杂而抽象，但这种模式非常方便且通用。
+
+虽然本书不是讲函数式编程语言的，但我们会简要引用 Haskell 等函数式编程语言中常见的概念，因为它们提供了简洁而规范的表达单子模式的方式：
+
+\begin{codebox}[text]
+-- m is a variable and `m a` is a monad of some polymorphic type
+data m a = ...
+-- (aka unit) a function to wrap a value into a monad
+return :: a -> m a
+-- a function for combining monadic calculations
+bind :: m a -> (a -> m b) -> m b
+\end{codebox}
+
+单子遵循三条定律，它们表明 \texttt{return} 是 \texttt{bind} 的单位元，而 \texttt{bind} 是可结合运算：
+
+\begin{itemize}
+\item 左单位元：\texttt{return a >>=\allowbreak{} h =\allowbreak{} h a}
+\item 右单位元：\texttt{m >>=\allowbreak{} return =\allowbreak{} m}
+\item 结合律：\texttt{(\allowbreak{}m >>=\allowbreak{} g)\allowbreak{} >>=\allowbreak{} h =\allowbreak{} m >>=\allowbreak{} (\allowbreak{}\textbackslash{}x -> g x >>=\allowbreak{} h)\allowbreak{}}
+\end{itemize}
+
+在数学中，函数调用写作 \texttt{h(\allowbreak{}g(\allowbreak{}f(\allowbreak{}x)\allowbreak{})\allowbreak{})\allowbreak{}}，这并不总是方便。因此在编程中，通常更好的做法是采用方法链式调用，像 \texttt{x.\allowbreak{}f(\allowbreak{})\allowbreak{}.\allowbreak{}g(\allowbreak{})\allowbreak{}.\allowbreak{}h(\allowbreak{})\allowbreak{}} 这样逐个调用方法。这能提升代码可读性，并允许你跳过可选步骤。单子两种方式都可以使用，但在 C++23 中，\texttt{std::\allowbreak{}optional} 和 \texttt{std::\allowbreak{}expected} 类中的单子操作均基于方法链式调用。
+
+下面两个代码片段展示了 \texttt{std::\allowbreak{}optional} 与 \texttt{std::\allowbreak{}expected} 在用法上的差异。前两个片段不执行任何单子操作；它们只是定义并使用 \texttt{std::\allowbreak{}optional} 或 \texttt{std::\allowbreak{}expected}，而没有用单子方法串联转换。
+
+\label{idx:475}
+下面的函数演示了如何用 \texttt{std::\allowbreak{}optional} 返回一个值或什么都不返回。这个函数只向调用方表明成功或失败，而不解释原因：
+
+\begin{codebox}[cpp]
+std::optional<int> parse_int(const std::string& s) {
+    try {
+        std::println("Parsing {} to integer", s);
+        return std::stoi(s);
+    } catch (const std::invalid_argument& ex) {
+        std::println(std::cerr, "std::invalid_argument::what(): {}", ex.what());
+        return std::nullopt;
+    } catch (const std::out_of_range& ex) {
+        std::println(std::cerr, "std::out_of_range::what(): {}", ex.what());
+        return std::nullopt;
+    }
+}
+\end{codebox}
+
+下一个函数也做字符串到数字的转换，但可以选择在同一对象中返回一个值或详细的错误。这一特性用于区分预期值与意外值，因为 \texttt{std::\allowbreak{}expected} 就是为错误处理而设计的。此外，与异常不同，这个类无需栈展开，因此在性能上更有优势：
+
+\begin{codebox}[cpp]
+std::expected<int, std::string> parse_int(const std::string& s) {
+    try {
+        std::println("Parsing {} to integer", s);
+        return std::stoi(s);
+    } catch (const std::invalid_argument& ex) {
+        std::println(std::cerr, "std::invalid_argument::what(): {}", ex.what());
+        return std::unexpected{"invalid argument"};
+    } catch (const std::out_of_range& ex) {
+        std::println(std::cerr, "std::out_of_range::what(): {}", ex.what());
+        return std::unexpected{"out of range"};
+    }
+}
+\end{codebox}
+
+C++23 扩展了 \texttt{std::\allowbreak{}optional} 类的功能，加入了单子操作，以便应用函数式编程模式：
+
+\begin{codebox}[cpp]
+std::string s;
+std::getline(std::cin, s);
+auto input = std::make_optional(s);
+auto res =
+    input.and_then(parse_int)
+         .transform([](int n) {
+             std::println("Squaring {}", n);
+             return n * n;
+         })
+         .transform([](int n) {
+             std::println("Converting {} to a string", n);
+             return std::to_string(n);
+         })
+         .or_else([]() {
+             std::println(std::cerr, "Handled error");
+             return std::optional<std::string>{"*missing*"};
+         });
+if (res.has_value()) {
+    std::println("Square number: {}", *res);
+} else {
+    std::println(std::cerr, "no value");
+}
+\end{codebox}
+
+\label{idx:476}
+有了这些新函数，就无需再检查 \texttt{std::\allowbreak{}optional} 是否为空，即可对数据进行转换。\texttt{and\_then} 操作会串联那些产生 \texttt{std::\allowbreak{}optional} 对象的函数。
+
+\texttt{transform} 操作与 \texttt{and\_then} 类似，但它调用的函数作用于一个普通值，而不是 \texttt{std::\allowbreak{}optional}。
+
+\texttt{or\_else} 操作是在 \texttt{std::\allowbreak{}optional} 为空时应用的兜底方案。
+
+下面的示例演示了如何在 \texttt{std::\allowbreak{}expected} 中使用 C++23 引入的单子操作：
+
+\begin{codebox}[cpp]
+std::string s;
+std::getline(std::cin, s);
+auto input = std::expected<std::string, std::string>(s);
+auto res =
+    input.and_then(parse_int)
+         .transform([](int n) {
+             std::println("Squaring {}", n);
+             return n * n;
+         })
+         .transform([](int n) {
+             std::println("Converting {} to a string", n);
+             return std::to_string(n);
+         })
+         .transform_error([](const std::string &error) -> std::string {
+             return "Error encountered: " + error;
+         })
+         .or_else([](const std::string &error) {
+             std::println(std::cerr, "Handled Error ({})", error);
+             return std::expected<std::string, std::string>(
+                 std::unexpected(error));
+         });
+if (res.has_value()) {
+    std::println("Square number: {}", *res);
+} else {
+    std::println(std::cerr, "{}", res.error());
+}
+\end{codebox}
+
+\texttt{and\_then} 操作会串联那些产生 \texttt{std::\allowbreak{}expected} 对象的函数。
+
+\texttt{transform} 操作与 \texttt{and\_then} 类似，但如果 \texttt{std::\allowbreak{}expected} 对象持有一个值，它调用的函数作用于一个普通值，而不是 \texttt{std::\allowbreak{}expected}\texttt{。} \texttt{transform\_\allowbreak{}error} 操作与 \texttt{transform} 类似，而 \texttt{or\_else} 操作则是在 \texttt{std::\allowbreak{}expected} 对象持有一个错误时应用的兜底方案\texttt{。}
+
+因此，\texttt{std::\allowbreak{}expected} 允许你根据详细的错误信息采取行动，相比 \texttt{std::\allowbreak{}optional}，它对执行过程提供了更多控制。
+
+\label{idx:477}
+本质上，\texttt{std::\allowbreak{}expected} 返回一个值或一个出错原因，实际上把 C++ 中的异常和 C 中的错误码结合了起来，而 \texttt{std::\allowbreak{}optional} 只是告诉你某个值是否存在，却不说明它为什么会缺失。
+
+我们讨论了单子与函数式编程的关系——函数式编程是声明式编程的一个子集，强调\emph{做什么}，而不是\emph{怎么做}。这种思维方式在现代 C++ 编程中日益重要。下面来看看声明式编程在实践中是什么样子。
+
+\section{编写声明式代码}
+
+\label{idx:478}
+你熟悉命令式与声明式这两种编码风格吗？前者是指你的代码一步步告诉机器\emph{如何}实现你想要的效果。后者则是你只告诉机器你\emph{想要}达到什么结果。有些编程语言更偏好其中一种。例如，C 和 Pascal 是命令式的，而 SQL、HTML 和 CSS 是声明式的，许多函数式语言也是如此。有些语言允许混合使用这两种风格——想想 C\# 中的 LINQ。
+
+C++ 是一种多范式编程语言，支持过程式、面向对象和函数式编程。是否有哪一种应当优先偏好呢？事实证明，在编写声明式代码时，通常能保持更高的抽象层次，从而减少 bug 并让错误更易被发现。那么，我们该如何以声明式方式编写 C++ 呢？主要有两种策略可以采用。
+
+第一种是编写函数式风格的 C++，也就是在可能的情况下优先采用纯函数式风格（函数没有副作用）。与其手工编写，你应该尝试 STL 算法库。
+
+看看下面的代码。这个函数查找距离大于 5 的两个相邻元素，如果找到这样的一对，就返回其中第一个元素的下标：
+
+\begin{codebox}[cpp]
+std::optional<std::size_t> imperative_adjacent_distance() {
+  constexpr auto temperatures = std::array{-3.0, 2.0, 0.0, 8.0, -10.0, -7.0};
+  constexpr std::size_t size = temperatures.size();
+  for (std::size_t i = 0; i < size - 1; ++i) {
+    if (std::abs(temperatures[i] - temperatures[i + 1]) > 5) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+\end{codebox}
+
+现在，把前面的代码与下面这段实现同样功能的代码片段比较一下：
+
+\begin{codebox}[cpp]
+std::optional<std::size_t> declarative_adjacent_distance() {
+    constexpr auto temperatures = std::array{-3.0, 2.0, 0.0, 8.0, -10.0, -7.0};
+    const auto it = std::ranges::adjacent_find(
+        temperatures, [](double first, double second) {
+            return std::abs(first - second) > 5;
+        });
+    if (it != std::end(temperatures)) {
+        return std::distance(std::begin(temperatures), it);
+    }
+    return std::nullopt;
+}
+\end{codebox}
+
+这两者你更愿意读哪一个？哪一个更容易理解？即使你现在对 C++ 算法还不太熟悉，在接触几次之后，你就会觉得第二个版本比手工编写的循环更简单、更安全、更清晰。这往往确实是事实，但具体取决于你的程序，第一种方式也可能适用。
+
+\label{idx:479}
+用 C++ 编写声明式代码的第二种策略在上一个片段中已经有所体现。你应该优先使用声明式 API，例如 ranges 库提供的那些。尽管我们的片段中没有使用任何 range 视图，但它们能带来很大不同。看看下面的片段：
+
+\begin{codebox}[cpp]
+using namespace std::ranges;
+auto is_even = [](auto x) { return x % 2 == 0; };
+auto to_string = [](auto x) { return std::to_string(x); }
+auto my_range = views::iota(1)
+              | views::filter(is_even)
+              | views::take(2)
+              | views::reverse
+              | views::transform(to_string);
+std::cout << std::accumulate(begin(my_range), end(my_range), ""s) << '\n';
+\end{codebox}
+
+这是声明式编码的一个绝佳例子：你只需指明应该发生什么，而不用说明如何发生。前面的代码取出前两个偶数，反转它们的顺序，把它们转换为字符串，然后打印结果：42——那个著名的关于生命、宇宙以及一切的答案。这一切都以直观且易于修改的方式完成。
+
+不过，玩具示例就到此为止。下面来看一个更贴近真实场景的例子。
+
+\subsection{展示精选商品画廊}
+
+\label{idx:480}
+\label{idx:481}
+还记得我们在\emph{第 3 章}《功能性需求与非功能性需求》中提到的交易会应用吗？下面来编写一个组件，从客户收藏为最爱的商店中挑选并展示几件精选商品。例如，在编写移动应用时，这会非常方便。
+
+我们先从一个基本属于 C++17 的实现开始，在本章中会逐步将它更新到 C++20。这其中包括为 ranges 添加支持。
+
+首先，从获取当前用户信息的一些代码开始：
+
+\begin{codebox}[text]
+int get_current_customer_id() {
+    return 42;
+}
+\end{codebox}
+
+接下来，添加商店店主：
+
+\begin{codebox}[cpp]
+struct Merchant {
+    int id{};
+};
+\end{codebox}
+
+商店里还需要有商品：
+
+\begin{codebox}[cpp]
+struct Item {
+    std::string name;
+    std::optional<std::string> photo_url;
+    std::string description;
+    std::optional<float> price;
+    std::chrono::time_point<std::chrono::system_clock> date_added{};
+    bool featured{};
+};
+\end{codebox}
+
+有些商品可能没有照片或价格（例如促销赠品或礼品的情况），因此我们对这些字段使用了 \texttt{std::\allowbreak{}optional}。
+
+\label{idx:482}
+我们还需要处理 \texttt{date\_\allowbreak{}added} 字段，并以人类可读的格式显示其内容，这需要把它转换为字符串。不过，要在各编译器上做到这一点需要考虑一些因素。C++20 之前的日期转字符串写法如下：
+
+\begin{codebox}[cpp]
+auto date_added = system_clock::to_time_t(item->date_added);
+std::put_time(std::localtime(&date_added), "%c %Z");
+\end{codebox}
+
+\label{idx:483}
+\label{idx:484}
+但 \textbf{Microsoft Visual C++}（\textbf{MSVC}）编译器将 \texttt{localtime} 函数视为不安全的函数而弃用它，会发出警告，或者在警告被视为错误时拒绝编译代码。替代函数 \texttt{localtime\_\allowbreak{}r} 和 \texttt{localtime\_\allowbreak{}s} 有助于解决这个问题，但并非所有 C++ 编译器都支持这些函数。作为一种选择，\texttt{\_\allowbreak{}CRT\_\allowbreak{}SECURE\_\allowbreak{}NO\_\allowbreak{}DEPRECATE} 预处理指令可以抑制该警告，但 C++20 有更好的解决方案——\texttt{<format>} 库，它提供了通用的 \texttt{std::\allowbreak{}format} 函数。
+
+接下来，添加一些使用 \texttt{<format>} 库描述商品的代码：
+
+\begin{codebox}[cpp]
+std::ostream &operator<<(std::ostream &os, const Item &item) {
+    auto stringify_optional = []<typename T>(const T &optional) {
+        using optional_value_type = typename std::remove_cvref_t<T>::value_type;
+        if constexpr (std::is_same_v<optional_value_type, std::string>) {
+            return optional ? *optional : "missing";
+        } else {
+            return optional ? std::to_string(*optional) : "missing";
+        }
+    };
+    auto time_added = std::chrono::system_clock::to_time_t(item.date_added);
+    os << "name: " << item.name
+       << ", photo_url: " << stringify_optional(item.photo_url)
+       << ", description: " << item.description
+       << ", price: " << stringify_optional(item.price)
+       << ", date_added: " << std::format("{:%c %Z}", item.date_added)
+       << ", featured: " << item.featured;
+    return os;
+}
+\end{codebox}
+
+\label{idx:485}
+\label{idx:486}
+首先，我们创建了一个辅助 lambda，用于把 optional 转换为字符串。由于我们只想在 \texttt{<<} 运算符中使用这段逻辑，所以把它定义在该运算符内部。注意，我们使用了 C++14 的泛型 lambda（用 \texttt{typename} 关键字替代 \texttt{auto} 参数），并结合 C++17 的 \texttt{constexpr} 与 \texttt{is\_\allowbreak{}same\_\allowbreak{}v} 类型特征，从而在处理 optional \texttt{<string>} 与其他情况时采用不同的实现。要在 C++17 之前达到同样的效果，就得编写带重载的模板，代码会更加复杂。
+
+现在用现代 C++ 定义商品类别：
+
+\begin{codebox}[text]
+enum class Category {
+    Food,
+    Antiques,
+    Books,
+    Music,
+    Photography,
+    Handicraft,
+    Artist,
+};
+\end{codebox}
+
+最后，我们可以定义商店本身：
+
+\begin{codebox}[cpp]
+struct Store {
+    gsl::not_null<const Merchant *> owner;
+    std::vector<Item> items;
+    std::vector<Category> categories;
+};
+\end{codebox}
+
+这里值得注意的是使用了 GSL 中的 \texttt{gsl::\allowbreak{}not\_\allowbreak{}null} 模板，它表明 owner 一定会被设置。为什么不直接用一个普通的引用呢？因为我们可能希望商店对象可移动、可复制，而使用引用会妨碍这一点。替代方案是 \texttt{std::\allowbreak{}reference\_\allowbreak{}wrapper<T>}，它不依赖运行时空值检查，但支持复制和移动语义。
+
+\label{idx:487}
+有了这些构件之后，下面来定义如何获取客户收藏的商店。为简单起见，我们假设处理的是硬编码的商店和商户，而不是与外部数据存储集成。
+
+首先，为商店定义一个类型别名，并开始我们的函数定义：
+
+\begin{codebox}[cpp]
+using Stores = std::vector<gsl::not_null<const Store *>>;
+Stores get_favorite_stores_for(int customer_id) {
+\end{codebox}
+
+\label{idx:488}
+接下来，像下面这样硬编码一些商户：
+
+\begin{codebox}[cpp]
+static const auto merchants = std::vector<Merchant>{{17}, {29}};
+\end{codebox}
+
+现在，像这里所示的那样添加一家带有若干商品的商店：
+
+\begin{codebox}[cpp]
+static const auto stores = std::vector<Store>{
+    {
+        .owner = &merchants[0],
+        .items = {
+            {
+                .name = "Honey",
+                .photo_url = {},
+                .description = "Straight outta Compton's apiary",
+                .price = 9.99f,
+                .date_added = system_clock::now(),
+                .featured = false
+            },
+            {
+                .name = "Oscypek",
+                .photo_url = {},
+                .description = "Tasty smoked cheese from the Tatra mountains",
+                .price = 1.23f,
+                .date_added = system_clock::now() - 1h,
+                .featured = true
+            }
+        },
+        .categories = {Category::Food}
+    }
+    //更多商店可以在 GitHub 上的完整代码中找到
+};
+\end{codebox}
+
+定义好商店之后，我们就可以编写函数的最后一部分，它将执行实际的查找：
+
+\begin{codebox}[cpp]
+static auto favorite_stores_by_customer =
+    std::unordered_map<int, Stores>{{42, {&stores[0], &stores[1]}}
+    };
+return favorite_stores_by_customer[customer_id];
+\end{codebox}
+
+\label{idx:489}
+\label{idx:490}
+\label{idx:491}
+这里，我们在这个函数中引入了第一个 C++20 特性。除非你用过 C99 或更新的版本，否则可能对 \texttt{.\allowbreak{}field =\allowbreak{} value;\allowbreak{}} 这种语法不太熟悉。从 C++20 开始，你可以用这种记法（正式名称是指定初始化器）来初始化聚合类型。它比 C99 中的限制更多，因为顺序很重要，尽管还有一些其他细微差异。没有这些指定初始化器时，很难理解哪个值初始化哪个字段。有了它们，代码虽然更冗长，但更容易理解，即使对不熟悉编程的人来说也是如此。
+
+现在商店已经就绪，下面编写代码来获取这些商店的精选商品：
+
+\begin{codebox}[cpp]
+using Items = std::vector<gsl::not_null<const Item *>>;
+Items get_featured_items_for_store(const Store &store) {
+    auto featured = Items{};
+    for (const auto &items = store.items; const auto &item : items) {
+        if (item.featured) {
+            featured.emplace_back(&item);
+        }
+    }
+    return featured;
+}
+\end{codebox}
+
+前面的代码用于从一家商店获取商品。下面再编写一个函数，从所有给定的商店获取商品：
+
+\begin{codebox}[cpp]
+Items get_all_featured_items(const Stores &stores) {
+    auto all_featured = Items{};
+    for (const auto &store : stores) {
+        const auto featured_in_store = get_featured_items_for_store(*store);
+        all_featured.reserve(all_featured.size() + featured_in_store.size());
+        std::copy(std::begin(featured_in_store), std::end(featured_in_store), std::back_inserter(all_featured));
+    }
+    return all_featured;
+}
+\end{codebox}
+
+前面的代码使用 \texttt{std::copy} 把元素插入到一个 vector 中，其内存通过 reserve 调用预先分配。
+
+既然有了获取有趣商品的方法，下面按“新鲜度”对它们排序，让最近添加的商品排在最前面：
+
+\begin{codebox}[cpp]
+void order_items_by_date_added(Items &items) {
+    //left 和 right 是 gsl::not_null<const Item *>
+    auto date_comparator = [](const auto &left, const auto &right) {
+        return left->date_added > right->date_added;
+    };
+    std::sort(std::begin(items), std::end(items), date_comparator);
+}
+\end{codebox}
+
+\label{idx:492}
+\label{idx:493}
+如你所见，我们使用 \texttt{std::sort} 配合一个自定义比较器。如果你愿意，也可以强制 \texttt{left} 和 \texttt{right} 使用相同的类型。为了以通用的方式做到这一点，下面使用另一个 C++20 特性：模板 lambda。我们来把它应用到前面的代码上：
+
+\begin{codebox}[cpp]
+void order_items_by_date_added(Items &items) {
+    auto date_comparator = []<typename T>(const T &left, const T &right) {
+        return left->date_added > right->date_added;
+    };
+    std::sort(std::begin(items), std::end(items), date_comparator);
+}
+\end{codebox}
+
+这个 lambda 的 \texttt{T} 类型会像其他任何模板一样被推导出来。
+
+还差最后两部分：实际的渲染代码，以及把所有内容粘合在一起的 main 函数。在我们的示例中，渲染简单到只需打印到 \texttt{ostream}：
+
+\begin{codebox}[cpp]
+void render_item_gallery(const Items &items) {
+    std::copy(
+        std::begin(items), std::end(items),
+        std::ostream_iterator<gsl::not_null<const Item *>>(std::cout, "\n"));
+}
+\end{codebox}
+
+在我们的例子中，我们只是把每个元素复制到标准输出，并在元素之间插入一个换行符。使用 \texttt{copy} 和 \texttt{ostream\_\allowbreak{}iterator} 允许你自己处理元素的分隔符。在某些情况下这很方便；例如，当你不希望在最后一个元素之后出现逗号（在我们的例子中是换行符）时。
+
+最后，我们的 main 函数会像这样：
+
+\begin{codebox}[text]
+int main() {
+    const auto fav_stores = get_favorite_stores_for(get_current_customer_id());
+    auto selected_items = get_all_featured_items(fav_stores);
+    order_items_by_date_added(selected_items);
+    render_item_gallery(selected_items);
+}
+\end{codebox}
+
+大功告成！不妨运行一下代码，看看它如何打印我们的精选商品：
+
+\begin{codebox}[text]
+name: Handmade painted ceramic bowls, photo_url: http://example.com/beautiful_bowl.png, description: Hand-crafted and hand-decorated bowls made of fired clay, price: missing, date_added: Sun Dec  3 12:54:38 2024 CET, featured: 1
+name: Oscypek, photo_url: missing, description: Tasty smoked cheese from the Tatra mountains, price: 1.230000, date_added: Sun Dec  3 12:06:38 2024 CET, featured: 1
+\end{codebox}
+
+\label{idx:494}
+\label{idx:495}
+基础实现完成之后，下面看看如何利用 C++20 的一些新语言特性来改进它。
+
+\subsection{应用标准 ranges}
+
+\label{idx:496}
+我们要添加的第一样东西是 ranges 库。你可能还记得，它能帮助我们写出优雅、简洁且声明式的代码。为简洁起见，我们先引入 \texttt{ranges} 命名空间：
+
+\begin{codebox}[cpp]
+#include <ranges>
+using namespace std::ranges;
+\end{codebox}
+
+定义商户、商品和商店的代码保持不变。我们从 \texttt{get\_\allowbreak{}featured\_\allowbreak{}items\_\allowbreak{}for\_\allowbreak{}store} 函数开始修改：
+
+\begin{codebox}[cpp]
+Items get_featured_items_for_store(const Store &store) {
+    auto items = store.items
+                | views::filter(&Item::featured)
+                | views::transform([](const auto &item) {
+                    return gsl::not_null<const Item *>(&item);
+                });
+    return {std::begin(items), std::end(items)};
+}
+\end{codebox}
+
+\label{idx:497}
+如你所见，从容器创建一个 range 非常直接：只需把它传给管道运算符。我们不再使用手工编写的循环来筛选精选元素，而是使用 \texttt{views::\allowbreak{}filter} 表达式，并传入一个成员指针作为谓词。得益于底层 \texttt{std::\allowbreak{}invoke} 的巧妙之处，这会正确地过滤掉所有布尔数据成员被设为 \texttt{false} 的商品。
+
+接着，我们把每个商品转换为一个 \texttt{gsl::\allowbreak{}not\_\allowbreak{}null} 指针，从而避免不必要的商品复制。最后，我们返回这些指针组成的 vector，与基础实现中一样。
+
+现在，看看如何用前面的函数从所有商店获取全部精选商品：
+
+\begin{codebox}[cpp]
+Items get_all_featured_items(const Stores &stores) {
+    auto all_featured = stores
+                        | views::transform([](auto elem) {
+                            return get_featured_items_for_store(*elem);
+                        });
+    Items ret{};
+    for_each(all_featured, [&](const Items &elem) {
+        ret.reserve(ret.size() + elem.size());
+        std::copy(std::begin(elem), std::end(elem),  std::back_inserter(ret));
+    });
+    return ret;
+}
+\end{codebox}
+
+这里，我们从所有商店创建了一个 range，并用上一步创建的函数对它们进行转换。由于需要先解引用每个元素，我们使用了一个辅助 lambda。视图是惰性求值的，因此每个转换只会在即将被消费时才执行。这有时能为你节省大量时间和计算：假设你只想要前 N 个商品，就可以跳过对 \texttt{get\_\allowbreak{}featured\_\allowbreak{}items\_\allowbreak{}for\_\allowbreak{}store} 的不必要调用。
+
+得到惰性视图之后，与基础实现类似，我们可以在 vector 中预留空间，并把 \texttt{all\_\allowbreak{}featured} 视图中每个嵌套 vector 的商品复制进去。如果要取整个容器，range 算法用起来更加简洁。看看 \texttt{std::\allowbreak{}ranges::\allowbreak{}copy} 是如何不需要我们编写 \texttt{std::\allowbreak{}begin(\allowbreak{}elem)\allowbreak{}} 和 \texttt{std::\allowbreak{}end(\allowbreak{}elem)\allowbreak{}} 的。
+
+现在商品已经就绪，下面通过用 ranges 处理它们来简化排序代码：
+
+\begin{codebox}[text]
+void order_items_by_date_added(Items &items) {
+    sort(items, greater{}, &Item::date_added);
+}
+\end{codebox}
+
+再一次，你能看到 ranges 如何帮助你写出更简洁的代码。前面的 \texttt{copy} 操作和这里的 \texttt{sort} 都是 range \emph{算法}。与\emph{视图}不同，它们是即时求值的，并允许你使用投影。在我们的例子中，我们传入了 \texttt{Item} 类的另一个成员，以便在排序时用于比较。实际上，每个商品都会被投影为其 \texttt{date\_\allowbreak{}added} 值，然后用 \texttt{greater\{\allowbreak{}\}\allowbreak{}} 进行比较。
+
+但等等——我们的商品实际上是 \texttt{gsl::\allowbreak{}not\_\allowbreak{}null} 指向 \texttt{Item} 的指针。这怎么会有效呢？原来，由于 \texttt{std::\allowbreak{}invoke} 的巧妙之处，我们的投影会先解引用 \texttt{gsl::\allowbreak{}not\_\allowbreak{}null} 指针。很棒！
+
+我们能做的最后一处修改在“渲染”代码中：
+
+\begin{codebox}[cpp]
+void render_item_gallery(const Items &items) {
+    copy(items, std::ostream_iterator<gsl::not_null<const Item *>>(std::cout, "\n"));
+}
+\end{codebox}
+
+在这里，ranges 只是帮我们去掉了一些样板代码。
+
+运行更新后的代码时，你应该会得到与基础版本相同的输出。
+
+\label{idx:498}
+你已经知道，在 \texttt{std::\allowbreak{}ranges::\allowbreak{}views} 中使用惰性求值可以通过消除不必要的计算来提升性能。事实证明，在我们的例子中，还能用 ranges 来减少内存开销。让我们重新审视从商店获取精选商品的代码。它可以缩短成下面这样：
+
+\begin{codebox}[text]
+auto get_featured_items_for_store(const Store &store) {
+    return store.items | views::filter(&Item::featured) | views::transform(
+             [](const auto &item) { return gsl::not_null(&item); });
+}
+\end{codebox}
+
+注意，我们的函数不再返回商品；相反，它依赖 C++14 的 auto 返回类型推导。在我们的例子中，代码不再返回 vector，而是返回一个惰性视图。
+
+下面来了解如何对所有商店消费它：
+
+\begin{codebox}[cpp]
+Items get_all_featured_items(const Stores &stores) {
+    auto all_featured = stores | views::transform([](auto elem) {
+                            return get_featured_items_for_store(*elem);
+                        }) |
+                        views::join;
+    auto as_items = Items{};
+    as_items.reserve(distance(all_featured));
+    copy(all_featured, std::back_inserter(as_items));
+    return as_items;
+}
+\end{codebox}
+
+现在，由于前面的函数返回的是视图而不是 vector，调用 \texttt{transform} 之后我们会得到一个“视图的视图”。这意味着我们还可以使用另一个名为 join 的标准视图，把嵌套的视图合并成一个统一的视图。
+
+接着，我们用 \texttt{std::\allowbreak{}ranges::\allowbreak{}distance} 在目标 vector 中预先分配空间，然后进行复制。有些 range 是有大小的，这种情况下你可以改为调用 \texttt{std::\allowbreak{}ranges::\allowbreak{}size}。最终代码中只有一次对 \texttt{reserve} 的调用，这应该能带来不错的性能提升。
+
+\label{idx:499}
+至此，我们完成了在代码中引入 ranges 的介绍。由于本节以性能相关的话题收尾，下面再谈一个对 C++ 编程这一方面很重要的主题。
+
+\section{将计算移到编译期}
+
+\label{idx:500}
+从 21 世纪初现代 C++ 出现开始，C++ 编程越来越倾向于在编译期间完成计算，而不是推迟到运行时。在编译期间发现错误，比事后调试要廉价得多。同样，在程序启动前就准备好结果，也比之后再计算要快得多。
+
+起初有模板元编程，但从 C++11 起，每个新标准都带来了更多用于编译期计算的特性：无论是类型特征，还是 \texttt{std::\allowbreak{}enable\_\allowbreak{}if} 或 \texttt{std::\allowbreak{}void\_\allowbreak{}t} 之类的构造，抑或是 C++20 中用于只在编译期计算的 \texttt{constinit} 和 \texttt{consteval}。
+
+\texttt{constinit} 关键字强制进行常量初始化，保证静态变量或线程局部变量在任何动态初始化发生之前就被初始化，从而避免静态初始化顺序问题，即使这些变量本身可能不是 \texttt{const}。另一方面，\texttt{consteval} 关键字强制进行常量求值，并标记必须在编译期求值的 \emph{立即函数}，对这类函数的任何调用都会产生编译期常量表达式。
+
+多年来不断改进的一个特性是 \texttt{constexpr} 关键字及其相关代码。C++20 真正改进并扩展了 \texttt{constexpr}。到 C++20 时，得益于之前的几个标准，你不仅能编写常规而简单的 \texttt{constexpr} 函数（相比 C++11 只能写单表达式函数，这是很大的进步），还能在函数内部使用动态分配和异常，更不用说 \texttt{std::\allowbreak{}vector and std::\allowbreak{}string} 了！
+
+C++23 扩展了这个关键字的适用范围：现在连虚函数都可以是 \texttt{constexpr}。重载解析照常进行，但若某个重载是 \texttt{constexpr}，它就可以在编译期被调用。\texttt{constexpr} 关键字旨在优化程序，它声明函数和变量可以在编译期求值，但最终由编译器决定是在编译期还是运行时计算。
+
+标准算法也得到了另一项改进。它们的非并行版本都已准备就绪，可供你在编译期代码中使用。看看下面的例子，它可用于检查容器中是否存在某个给定的商户：
+
+\begin{codebox}[cpp]
+#include <algorithm>
+#include <array>
+struct Merchant { int id; };
+bool has_merchant(const Merchant &selected) {
+    auto merchants = std::array{Merchant{1}, Merchant{2}, Merchant{3}, Merchant{4}, Merchant{5}};
+    return std::ranges::binary_search(merchants, selected, [](auto a, auto b) { return a.id < b.id; });
+}
+\end{codebox}
+
+如你所见，我们在一个按 ID 排序的商户数组中执行二分查找。
+
+\label{idx:501}
+要深入了解这段代码及其性能，我们建议你快速看一下它生成的汇编代码。随着编译期计算的兴起和对性能的追求，涌现出的宝贵工具之一是 \href{https://godbolt.org}{https://godbolt.org}。你可以用它快速试验代码，观察不同的架构、编译器、标志、库版本和实现会如何影响生成的汇编。
+
+我们使用 GCC trunk 并加上 \texttt{-O3} 和 \texttt{--std=\allowbreak{}c+\allowbreak{}+\allowbreak{}2a} 对前面的代码做了测试。在我们的场景中，我们用以下代码检查了生成的汇编：
+
+\begin{codebox}[text]
+int main() { return has_merchant({4}); }
+\end{codebox}
+
+通过以下链接，你可以看到几十行汇编：\href{https://godbolt.org/z/PYMTYx}{https://godbolt.org/z/PYMTYx}。
+
+不过等一下——你可能会说，汇编里有一个函数调用，所以也许我们可以把它内联，从而让它得到更好的优化？这个观点很有道理。通常这能带来很大帮助，不过这一次我们得到的只是被内联的汇编（见：\href{https://godbolt.org/z/hPadxd}{https://godbolt.org/z/hPadxd}）。
+
+那么现在，试着把签名改成下面这样：
+
+\begin{codebox}[cpp]
+constexpr bool has_merchant(const Merchant &selected)
+\end{codebox}
+
+\texttt{constexpr} 函数是隐式内联的，因此我们移除了 \texttt{inline} 关键字。如果查看汇编，就会发现发生了某种魔法：搜索在编译期就被优化掉了！正如你在 \href{https://godbolt.org/z/v3hj3E}{https://godbolt.org/z/v3hj3E} 所见，剩下的汇编只有以下这些：
+
+\begin{codebox}[text]
+main:
+        mov     eax, 1
+        ret
+\end{codebox}
+
+编译器优化了我们的代码，最后剩下的只是返回预先计算好的结果。这相当令人印象深刻，不是吗？
+
+\subsection{使用 const 让编译器更好地帮助你}
+
+\label{idx:502}
+\label{idx:503}
+即使你不给编译器 \texttt{inline} 或 \texttt{constexpr} 关键字，如前面的例子那样，编译器也能把你的代码优化得相当好。有一件事能帮助它们为你实现性能提升，那就是把变量和函数标记为 \texttt{const}。也许更重要的是，这还能帮你避免代码中的错误。许多语言的变量默认就是不可变的，这可以减少 bug、让代码更容易推理，而且通常还能带来更好的多线程性能。
+
+尽管 C++ 的变量默认是可变的，你需要显式地写上 \texttt{const}，但我们还是鼓励你这么做。它确实能帮你避免因误改不该修改的变量而产生的那些棘手笔误。
+
+使用 \texttt{const}（或 \texttt{constexpr}）代码属于一种更宏大的理念——类型安全。下面就来简单谈谈它。
+
+\section{借助安全类型的力量}
+
+C++ 高度依赖各种帮助你编写类型安全代码的机制。诸如 explicit 构造函数和转换运算符这样的语言构造早已融入这门语言。标准库中也在不断引入越来越多的安全类型。仅举几例：\texttt{optional} 帮助你避免引用空值，\texttt{string\_\allowbreak{}view} 帮助你避免越界，\texttt{any} 则作为任意类型的安全包装器。此外，借助其零开销抽象，建议你创建自己的类型，让它们既有用，又难以（或不可能）被误用。
+
+\label{idx:504}
+使用 C 风格构造往往会导致类型不安全的代码。一个例子就是 C 风格强制转换。它们可能被解析为 \texttt{const\_\allowbreak{}cast,\allowbreak{} static\_\allowbreak{}cast}、\texttt{reinterpret\_\allowbreak{}cast}，或其中某者与 \texttt{const\_\allowbreak{}cast} 的组合。意外地写入一个经 \texttt{const\_\allowbreak{}cast} 转换的 \texttt{const} 对象是未定义行为。若从 \texttt{reinterpret\_\allowbreak{}cast<T>} 返回的内存中读取，而 T 并非该对象原本的类型，同样是未定义行为（C++20 的 \texttt{std::\allowbreak{}bit\_\allowbreak{}cast} 在这里能帮上忙）。如果使用 C++ 强制转换，这两种情况都要容易避免得多。
+
+在类型方面，C 或许过于宽松了。幸运的是，C++ 为 C 中那些有问题的构造引入了许多类型安全的替代方案。用流和 \texttt{std::\allowbreak{}format} 取代了 \texttt{printf} 之类的东西，用 \texttt{std::copy} 和其他类似算法取代了不安全的 \texttt{memcpy}。最后，用模板取代了接收 void \texttt{*} 的函数（后者还要付出性能代价）。在 C++ 中，模板通过一项名为 concepts 的特性获得了更强的类型安全。下面来看看如何利用它们改进我们的代码。
+
+\subsection{约束模板参数}
+
+\label{idx:505}
+concepts 改进代码的第一种方式，是让代码更通用。你还记得那些情形吗——你只是在一处改了容器类型，却在其他地方引发了一连串改动？如果你并不是把容器换成一种语义完全不同、必须以不同方式使用的容器，那就说明你的代码可能还不够通用。
+
+另一方面，你是否曾写过模板，或者在代码里到处撒上 \texttt{auto}，后来又担心：如果别人改了底层类型，代码会不会崩溃？
+
+concepts 的核心，是对你所操作的类型施加恰到好处的约束。它们限定模板能匹配哪些类型，并在编译期进行检查。举例来说，假设你写的是下面这样：
+
+\begin{codebox}[cpp]
+template<typename T>
+void foo(T& t) {...}
+\end{codebox}
+
+现在，你可以改成这样写：
+
+\begin{codebox}[cpp]
+void foo(std::swappable auto& t) {...}
+\end{codebox}
+
+这里，要让 \texttt{foo()} 正常工作，传入的类型必须支持 \texttt{std::swap}。
+
+\label{idx:506}
+\label{idx:507}
+你是否记得有某些模板匹配了过多的类型？在 concepts 出现之前，开发者们依靠诸如标签分派（tag dispatch，给迭代器打标签）、\texttt{if constexpr}（自 C++17 起），或基于 \textbf{替换失败并非错误}（\textbf{SFINAE}）的类型萃取（例如 \texttt{std::\allowbreak{}enable\_\allowbreak{}if} 和 \texttt{std::\allowbreak{}void\_\allowbreak{})\allowbreak{}}）等技巧来施加约束。标签分派根据描述参数能力的类型标签来选择重载；\texttt{if constexpr} 让模板内部能够依据类型属性进行编译期分支；而 SFINAE 依赖这样一条规则：当模板替换无效时，它会悄然从重载集合中移除，而不是引发编译错误。
+
+然而，使用类型萃取及类似技巧有些繁琐，还会拖慢编译速度。concepts（自 C++20 起）通常比这些方法更受青睐，因为它们更简洁、更具表现力。
+
+C++20 中有几十个标准 concepts。它们大多位于 \texttt{<concepts>} 头文件中，可分为四类：
+
+\begin{itemize}
+\item 核心语言 concepts，如 \texttt{derived\_\allowbreak{}from}、\texttt{integral}、\texttt{swappable} 和 \texttt{move\_\allowbreak{}constructible}
+\item 比较 concepts，如 \texttt{boolean-testable}、\texttt{equality\_\allowbreak{}comparable\_\allowbreak{}with} 和 \texttt{totally\_\allowbreak{}ordered}
+\item 对象 concepts，如 \texttt{movable}、\texttt{copyable}、\texttt{semiregular} 和 \texttt{regular}
+\item 可调用 concepts，如 \texttt{invokable}、\texttt{predicate} 和 \texttt{strict\_\allowbreak{}weak\_\allowbreak{}order}
+\end{itemize}
+
+还有一些定义在 \texttt{<iterator>} 头文件中。它们可分为以下几类：
+
+\begin{itemize}
+\item 间接可调用 concepts，如 \texttt{indirect\_\allowbreak{}binary\_\allowbreak{}predicate} 和 \texttt{indirectly\_\allowbreak{}unary\_\allowbreak{}invocable}
+\item 通用算法要求，如 \texttt{indirectly\_\allowbreak{}swappable}、\texttt{permutable}、\texttt{mergeable} 和 \texttt{sortable}
+\end{itemize}
+
+最后，在 \texttt{<ranges>} 头文件中还能找到十几个。例如 \texttt{range}（这不是废话嘛）、\texttt{contiguous\_\allowbreak{}range} 和 \texttt{view}。
+
+如果这些还不能满足你的需求，你可以仿照标准定义我们刚才介绍的那些 concepts 的方式，声明自己的 concepts。例如，用于指定对象能否被移动和交换的 \texttt{movable} concept，是这样实现的：
+
+\begin{codebox}[cpp]
+template <class T>
+concept movable = std::is_object_v<T> && std::move_constructible<T> && std::assignable_from<T&, T> && std::swappable<T>;
+\end{codebox}
+
+此外，如果你查看 \texttt{std::\allowbreak{}swappable}，会看到以下内容：
+
+\begin{codebox}[cpp]
+template<class T>
+concept swappable = requires(T& a, T& b) { ranges::swap(a, b); };
+\end{codebox}
+
+这意味着，如果某个类型 \texttt{T} 的两个引用能让 \texttt{ranges::\allowbreak{}swap(\allowbreak{}a,\allowbreak{} b)\allowbreak{}} 编译通过，那么该类型就是 \texttt{swappable} 的。
+
+\begin{myTip}{提示}
+
+在定义自己的 concepts 时，务必覆盖它们的语义要求。在定义接口时指定并使用某个 concept，就是向该接口的使用者做出的承诺。
+\end{myTip}
+
+通常，为了简洁，你可以在声明中使用所谓的简写记法：
+
+\begin{codebox}[cpp]
+void sink(std::movable auto& resource);
+\end{codebox}
+
+\label{idx:508}
+为了可读性和类型安全，建议你把 \texttt{auto} 与 concept 一起使用，以约束类型，并让读者知道他们面对的是什么样的对象。这样写出的代码将保留 auto 式泛型带来的好处。你可以在普通函数和 lambda 中都使用这种写法。
+
+使用 concepts 的一大额外好处是错误信息更简短。把一个编译错误动辄几十行、上百行的信息缩减到区区几行，是很常见的事。还有一个好处是，你可以基于 concepts 进行重载。
+
+现在，让我们回到之前的交易会示例。这一次，我们会加入一些 concepts，看看它们如何改进我们的实现。
+
+首先，让 \texttt{get\_\allowbreak{}all\_\allowbreak{}featured\_\allowbreak{}items} 只返回一个物品范围。我们可以通过给返回类型加上 concept 来做到这一点，如下所示：
+
+\begin{codebox}[text]
+range auto get_all_featured_items(const Stores &stores);
+\end{codebox}
+
+到目前为止一切顺利。现在，我们再给这个类型添加一项要求，它会在我们调用 \texttt{order\_\allowbreak{}items\_\allowbreak{}by\_\allowbreak{}date\_\allowbreak{}added} 时强制执行：我们的范围必须可排序。\texttt{std::\allowbreak{}sortable} concept 已经为范围迭代器定义好了，但为了方便，我们定义一个新 concept，名为 \texttt{sortable\_\allowbreak{}range}：
+
+\begin{codebox}[cpp]
+template <typename Range, typename Comp, typename Proj>
+concept sortable_range =
+    random_access_range<Range> && std::sortable<iterator_t<Range>, Comp, Proj>;
+\end{codebox}
+
+与标准库中的对应物一样，我们可以接受一个比较器和一个投影（projection，我们在讲 ranges 时引入过）。能够满足 \texttt{random\_\allowbreak{}access\_\allowbreak{}range} concept，并且其迭代器满足前述 sortable concept 的类型，就能满足（也就是会被匹配到）我们的 concept。就这么简单。
+
+定义 concepts 时，你还可以使用 \texttt{requires} 子句来指定额外的约束。例如，如果你希望我们的范围只存储带有 \texttt{date\_\allowbreak{}added} 成员的元素，可以这样写：
+
+\begin{codebox}[cpp]
+template <typename Range, typename Comp>
+concept sortable_indirectly_dated_range =
+    random_access_range<Range> && std::sortable<iterator_t<Range>, Comp> && requires(range_value_t<Range> v) { { v->date_added }; };
+\end{codebox}
+
+不过在我们的场景里，并不需要把类型约束得那么紧，因为使用 concepts 时应当留有一些灵活性，并把它们定义得易于复用。
+
+\label{idx:509}
+这里的关键在于，当类型满足某个 concept 的要求时，你可以用 \texttt{requires} 子句来指定哪些代码才是对该类型合法的调用。如果愿意，你还可以对每个子表达式返回的类型施加约束；例如，要定义某个可递增的东西，可以这样写：
+
+\begin{codebox}[cpp]
+requires(I i) {
+    { i++ } -> std::same_as<I>;
+}
+\end{codebox}
+
+既然已经有了 concept，下面重新定义 \texttt{order\_\allowbreak{}items\_\allowbreak{}by\_\allowbreak{}date\_\allowbreak{}added} 函数：
+
+\begin{codebox}[text]
+void order_items_by_date_added(
+    sortable_range<greater, decltype(&Item::date_added)> auto &items) {
+    sort(items, greater{}, &Item::date_added);
+}
+\end{codebox}
+
+现在，编译器会检查我们传入的任一范围是否可排序，以及其中是否包含可用 \texttt{std::\allowbreak{}ranges::\allowbreak{}greater\{\allowbreak{}\}\allowbreak{}} 排序的 \texttt{date\_\allowbreak{}added} 成员。
+
+如果在这里使用约束更强的 concept，函数会是这样：
+
+\begin{codebox}[text]
+void order_items_by_date_added(
+    sortable_indirectly_dated_range<greater> auto &items) {
+    sort(items, greater{}, &Item::date_added);
+}
+\end{codebox}
+
+最后，重写一下我们的渲染函数：
+
+\begin{codebox}[cpp]
+template <input_range Container>
+requires std::is_same_v<typename Container::value_type, gsl::not_null<const Item *>>
+void render_item_gallery(const Container &items) {
+    copy(items, std::ostream_iterator<typename Container::value_type>(std::cout, "\n"));
+}
+\end{codebox}
+
+在这里你可以看到，在模板声明中，concept 名可以替代 \texttt{typename} 关键字。再往下看一行，你会看到 \texttt{requires} 关键字也可以用来根据类型各自的特性进一步约束相应的类型。当你不想专门定义一个新 concept 时，这会很方便。
+
+\label{idx:510}
+C++20 还有 \texttt{requires} 子句和 \texttt{requires} 表达式，它们类似于 C++11 中的 \texttt{noexcept} 子句和 \texttt{noexcept} 表达式。\texttt{requires} 表达式是一个 \texttt{bool} 类型的编译期表达式，主要用于创建 concepts。不过，它也可以用来检查模板参数是否具备所需的接口。\texttt{requires} 子句则对模板实参或函数声明施加约束，以确定它在特定作用域中是否适用。以下代码同时用到了 \texttt{requires} 子句和 \texttt{requires} 表达式：
+
+\begin{codebox}[cpp]
+template<typename T>
+requires requires (T a, T b) { a + b; }
+auto sum(T a, T b) { return a + b; }
+\end{codebox}
+
+这里，我们在一个 \texttt{requires} 子句中嵌套了一个 \texttt{requires} 表达式，这在语法上完全正确，但可能被视为糟糕的风格。有些情况下，最好显式地定义 concepts，因为它们本就是为了让模板元编程更简单、更易读而创建的：
+
+\begin{codebox}[cpp]
+template<typename T>
+concept is_digit = requires (T a, T b) { a + b; a - b ; };
+template<typename T>
+requires is_digit<T>
+auto sum(T a, T b) { return a + b; }
+\end{codebox}
+
+concepts 就讲到这里。下面总结一下我们学到的内容。
+
+\section{小结}
+
+在本章中，我们学习了许多 C++ 特性，以及它们对编写简洁、富有表现力且高效的 C++ 代码的影响。我们学习了如何提供恰当的 C++ 组件接口。现在，你已经能够运用 RAII 等原则，编写出优雅且不产生资源泄漏的代码。你也知道如何使用 \texttt{std::\allowbreak{}optional} 之类的类型，在接口中更好地表达意图。
+
+接下来，我们探讨了 monadic 接口，并演示了如何使用泛型 lambda、模板 lambda 以及 \texttt{if constexpr} 等特性，用更少的代码兼容众多类型。现在，你也能够使用指定初始化器（designated initializer）清晰地定义对象了。
+
+之后，你学会了如何使用标准 ranges 以声明式风格编写简洁代码，如何使用 \texttt{constexpr} 编写既能在编译期又能在运行期执行的代码，以及如何使用 concepts 编写约束更强的模板代码。
+
+在下一章中，我们将讨论如何设计 C++ 代码，以便在现有的惯用法和模式之上继续构建。
+
+\section{问题}
+
+\begin{enumerate}
+\item 你如何确保代码中每个已打开的文件在不再使用时都会被关闭？
+\item 在 C++ 代码中，什么时候应该使用原始指针（不用智能指针封装）？
+\item 什么是推导指引（deduction guide）？
+\item 什么时候应该使用 \texttt{std::\allowbreak{}optional} 和 \texttt{gsl::\allowbreak{}not\_\allowbreak{}null}？
+\item 什么时候应该使用 \texttt{std::\allowbreak{}optional} 和 \texttt{std::\allowbreak{}expected}？
+\item 什么时候应该使用 \texttt{const,\allowbreak{} constexpr,\allowbreak{} consteval} 和 \texttt{constinit}？
+\item 范围算法与视图有何不同？
+\item 在定义函数时，除了指定 concept 名之外，你还能如何进一步约束类型？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Arvid Norberg，\emph{The ABI Challenge}（YouTube 视频），C++Now 2019：\href{https://www.youtube.com/watch?v=ncyQAjTyPwU}{https://www.youtube.com/watch?v=ncyQAjTyPwU}
+\item ISO C++，\emph{ C++ Core Guidelines: T.10 Specify Concepts for All Template Arguments, }GitHub：\texthref{https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines\#t10-specify-concepts-for-all-template-arguments}
+\item ISO C++，\emph{ C++ Core Guidelines: Guidelines Support Library (GSL)}，GitHub：\href{https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines\#gsl-guidelines-support-library}{https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines\#gsl-guidelines-support-library}
+\item GCC，\emph{libstdc++: Implementation of} \texttt{std::\allowbreak{}chrono}，GitHub：\href{https://github.com/gcc-mirror/gcc/blob/trunk/libstdc\%2B\%2B-v3/include/std/chrono}{https://github.com/gcc-mirror/gcc/blob/trunk/libstdc\%2B\%2B-v3/include/std/chrono}
+\item C++ Reference，\emph{Standard Format Specification (Since C++20)}：\href{https://en.cppreference.com/w/cpp/utility/format/spec}{https://en.cppreference.com/w/cpp/utility/format/spec}
+\item C++ Reference，\texttt{std::\allowbreak{}formatter<std::\allowbreak{}chrono::\allowbreak{}duration>}：\href{https://en.cppreference.com/w/cpp/chrono/duration/formatter}{https://en.cppreference.com/w/cpp/chrono/duration/formatter}
+\item C++ Reference，\emph{Iterator Tags}：\href{https://en.cppreference.com/w/cpp/iterator/iterator_tags.html}{https://en.cppreference.com/w/cpp/iterator/iterator\_tags.html}
+\item C++ Reference，\emph{Iterator Library}：\href{https://en.cppreference.com/w/cpp/iterator.html}{https://en.cppreference.com/w/cpp/iterator.html}
+\item C++ Reference，\emph{Contract Assertions (Since C++26)}：\href{https://en.cppreference.com/w/cpp/language/contracts.html}{https://en.cppreference.com/w/cpp/language/contracts.html} 立即解锁本书的独家权益 扫描此二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 \emph{注意：开始之前请准备好你的购买发票。}
+\end{itemize}

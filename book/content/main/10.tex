@@ -1,0 +1,1102 @@
+代码的可测试性是任何软件产品最重要的品质。如果没有恰当的测试，重构代码或改进代码的任何其他方面（例如安全性、可扩展性或性能）都将昂贵得难以承受。在本章中，我们将学习如何设计和管理自动化测试，以及在必要时如何正确使用 fake 和 mock。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 为什么要测试代码？
+\item 运行时测试框架
+\item 编译期测试技术
+\item 理解测试替身
+\item 测试驱动的类设计
+\item 为 \textbf{持续集成/持续部署}（\textbf{CI/CD}）自动化应用测试
+\item 为 CI/CD 自动化基础设施验证
+\end{itemize}
+
+\section{技术要求}
+
+本章的示例代码可以在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter10}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter10} 找到。
+
+本章示例中我们将使用的软件如下：
+
+\begin{itemize}
+\item CMake 3.28+
+\item GCC 14+ 或 Clang 19+
+\item Conan 2+
+\item GoogleTest 1.15+
+\item Catch2 3.7+
+\item Doctest 2.4+
+\item [Boost].UT 2.1+
+\item CppUTest 4.0+
+\item Drogon 1.9+
+\end{itemize}
+
+\section{为什么要测试代码？}
+
+\label{idx:783}
+软件工程和软件架构是复杂的学科，而应对不确定性的自然方式就是为自己防范潜在风险。我们一直通过人寿保险、健康保险和汽车保险来这样做。然而在软件开发中，我们往往会忘记所有这些安全预防措施，只是寄希望于一个乐观的结果。
+
+明知事情不仅可能出错，而且\emph{必然}会出错，软件测试这个话题竟然至今仍存在争议，实在令人难以置信。无论是由于缺乏技能还是缺乏预算，仍然有一些项目连最基本的测试都没有。而当客户决定更改需求时，一次简单的修改就可能引发没完没了的返工和救火。
+
+不做恰当测试所节省下来的时间，会在第一次返工发生时全部赔进去。如果你以为这种返工不会很快出现，那你多半错了。在如今所处的敏捷环境中，返工是我们日常生活的一部分。我们对世界不断增长的认识以及客户的变化会导致需求变化，而需求变化又要求我们修改代码。
+
+因此，测试的主要目的是在项目后期保护你宝贵的时间。当然，在项目早期，当你必须实现各种测试而不是只专注于功能时，这是一种投入，但这是一种你不会后悔的投入。就像保险单一样，一切按计划进行时，测试会从你的预算中拿走一点，可一旦出了问题，你就能获得丰厚的赔付。
+
+2024 年因 CrowdStrike 安全软件的一次错误更新而引发的全球大规模 IT 宕机事件就是例证。一个 40 KB 文件里的逻辑错误导致了全球性的 IT 宕机，使世界各地数百万台计算机停止运行。这个例子证明，即使经过了彻底测试，错误仍可能被忽略。当然，这并非历史上唯一一次此类故障。一个被忽视的细节就能让一个庞大的系统崩溃，这正是严格测试如此重要的原因。
+
+\subsection{测试金字塔}
+
+\label{idx:784}
+\label{idx:785}
+在设计或实现软件系统时，你可能会遇到不同类型的自动化测试，它们各自服务于略有不同的目的。思考它们的一种有用方式是通过测试金字塔，其中低层次测试构成底座，高层次测试占据顶端。
+
+一种常见的层级结构从下到上如下：
+
+\begin{itemize}
+\item \textbf{单元测试}：代码
+\item \textbf{集成测试}：设计
+\item \textbf{系统测试}：需求
+\item \textbf{验收测试（端到端测试）}：客户需求
+\end{itemize}
+
+这种划分并非绝对的，你常常会看到其他分类方式，例如以下这些：
+
+\begin{itemize}
+\item 单元测试
+\item 服务测试
+\item UI 测试（端到端测试）
+\end{itemize}
+
+\label{idx:786}
+\label{idx:787}
+\label{idx:788}
+\label{idx:789}
+在这两种分类中，单元测试（也称为组件测试或模块测试）都位于底层。服务测试结合了集成测试和系统测试。集成测试包括组件集成测试和消费者驱动的契约测试。（事实上，组件集成测试常常与组件测试相混淆。）UI 测试则对应验收测试。
+
+下图展示了测试金字塔，它说明了自动化测试理想情况下应当如何在各个层次之间分布：
+
+\myGraphic{0.802}{images/B18456_10_1.png}{图 10.1：测试金字塔}
+
+值得注意的是，单元测试不仅是构建成本最低的，而且执行速度相当快，往往还能并行运行。这意味着它们很适合作为一种 CI 门禁机制。不仅如此，它们还常常能就系统的健康状况提供快速反馈。更高层次的测试不仅更难写好，而且可能不那么健壮。这会导致测试结果闪烁不定，每几次测试运行就有一次失败。它们也更容易出现不稳定性（flakiness）——无论代码或测试环境是否发生变化，测试结果都时好时坏、无法预测。如果高层次测试的失败与单元测试层面的任何失败都不相关，那么问题很可能出在测试本身，而不是被测系统上。
+
+不稳定的测试不应成为常态，因为这样的测试会侵蚀人们对测试套件的信任、制造不确定性、降低开发速度、影响团队士气、浪费时间和资源，并掩盖真正的问题。要识别不稳定的测试，可以在不同环境中以串行和并行方式重复运行失败的测试，比较这些环境，并分析结果。此外，要防止这类测试，应检查外部依赖，稳定、复现并清理测试环境，隔离测试，消除随机性，简化测试逻辑，检查测试断言的充分性，解决并发问题，调整定时和等待，并持续监控测试。
+
+\label{idx:790}
+我们并不是说更高层次的测试完全没用、你只应专注于编写单元测试。事实并非如此。金字塔之所以呈这个形状，是因为应当有一个由单元测试覆盖的坚实底座。不过，在这个底座之上，你也应当以适当的比例拥有所有更高层次的测试，也就是说，底层的数量必须远多于上层，才能形成这个比喻意义上的测试自动化金字塔的形状。毕竟，不难想象这样一个系统：所有单元测试都通过了，但系统本身却无法为客户提供任何价值。一个极端的例子是，一个完美运行的后端却没有任何用户界面（无论是图形界面还是以 API 形式提供的界面）。没错，它通过了所有单元测试，但这并不能成为借口！
+
+\label{idx:791}
+如你所料，测试金字塔的反面被称为冰淇淋甜筒，它是一种反模式。违背测试金字塔往往会导致代码脆弱、缺陷难以追踪。这会让调试变得昂贵得多，而且在测试开发上也并不会带来任何节省。
+
+\label{idx:792}
+我们前面所介绍的是所谓的\textbf{功能性测试}。它们的目的是检查被测系统是否满足功能性需求。
+
+\subsection{非功能性测试}
+
+\label{idx:793}
+\label{idx:794}
+除了功能性需求之外，还有其他类型的需求，我们可能也希望对它们加以控制。其中一些如下：
+
+\begin{itemize}
+\item \textbf{性能}：你的应用在功能上可能符合需求，但由于性能不佳，最终用户仍然无法使用它。我们将在 \emph{第 13 章} \emph{性能}中更多地讨论如何改进性能。
+\item \textbf{耐力}：即便你的系统性能非常出色，也不意味着它能承受持续的高负载。而即使它扛住了，它能否承受组件出现的一些故障呢？当我们接受这样一个理念——每一段软件都是脆弱的，随时都可能出故障——我们就会开始设计能够抗故障的系统。这构成了容错设计以及混沌工程的基础，后者以受控的方式有意向系统中引入故障，以暴露其弱点。
+\item \textbf{安全性}：如今，安全性至关重要这一点应该已经无需重复。但由于人们仍未给予它应有的重视，我们只好不厌其烦地再说一遍。每一个联网的系统都可能——而且极有可能真的会——被攻破。在开发早期进行安全测试，其好处与其他类型的测试相同：你可以在问题变得修复代价过高之前就将其捕获。
+\item \textbf{可用性}：性能不佳可能会让最终用户不愿使用你的产品，而可用性低下则可能让他们根本无法访问该产品。可用性问题可能源于性能过载，但造成可用性丧失的原因还有其他一些。
+\item \textbf{完整性}：客户的数据不仅应当免受外部攻击者的侵害，还应当免受因软件故障而造成的任何篡改或丢失。防范位腐烂（bit rot）、创建快照以及备份，都是防止完整性受损的方法。通过将当前版本与先前记录的快照进行比较，你可以判断差异仅仅由所执行的操作造成，还是由错误导致。
+\label{idx:795}
+\label{idx:796}
+\item \textbf{易用性}：即使一个产品满足了前面所有条件，如果它的界面笨拙、交互不直观，用户仍可能不满意。易用性测试大多以手动方式进行。每当系统的 UI 或工作流发生变化时，都应当进行一次易用性评估。
+\end{itemize}
+
+\subsection{回归测试}
+
+\label{idx:797}
+\label{idx:798}
+回归测试通常是端到端测试，用来防止你两次犯下同样的错误。不过，它们并不局限于这一层次，而是可以存在于测试金字塔的任何一层。当你（或你的 QA 团队、客户）在生产系统中发现一个缺陷时，只打一个热修复补丁然后把它忘掉是不够的。应当补上一个回归测试，确保该问题再也不会重现。
+
+广义上讲，回归测试是各类软件测试的统称，用于确认新功能不会影响旧功能，并发现已经测试过的源代码中的错误。一个编写良好的回归测试应当防止同一个错误再次进入生产系统。事实上，好的回归测试甚至能阻止整\emph{类}错误进入生产环境。毕竟，一旦你知道自己哪里做错了，你就能想象出其他把事情搞砸的方式。你还可以做的另一件事是进行根因分析。
+
+\label{idx:799}
+\textbf{回归测试选择}（\textbf{RTS}）策略通过识别并只运行那些可能受近期代码变更影响的测试，来加快回归测试，从而降低回归测试的成本。
+
+\subsection{根因分析}
+
+\label{idx:800}
+\label{idx:801}
+根因分析是一个过程，它帮助你揭示问题的真正根源，而不只是问题的表象。进行根因分析最常见的方法是使用\emph{5 个为什么}法，它因丰田公司而闻名。这种方法要剥去问题表象的所有表层，露出隐藏其下的根本原因。你在每一层都追问一个\emph{为什么}，直到找到你要寻找的根本原因。
+
+下面来看一个该方法实际运用的例子。
+
+在这个例子中，问题是我们没有收到某些交易的付款。
+
+\emph{为什么？}系统没有向客户发送相应的电子邮件。
+
+\emph{为什么？}电子邮件发送系统不支持客户姓名中的特殊字符。
+
+\emph{为什么？}电子邮件发送系统没有得到恰当的测试。
+
+\emph{为什么？}由于需要开发新功能，没有时间进行恰当的测试。
+
+\emph{为什么？}我们对这些功能的时间估算不正确。
+
+在这个例子中，时间估算问题可能是生产系统中发现的这个缺陷的根本原因，但也可能只是又一层需要剥开的表层。这个框架给你的是一个大多数情况下都适用的启发式方法，但如果你并不完全确定自己得到的就是你所寻找的，可以继续剥开更多的层，直到找到引发所有这些麻烦的原因。
+
+\label{idx:802}
+\label{idx:803}
+\label{idx:804}
+鉴于许多缺陷都源于完全相同、且往往可复现的根本原因，找到根本原因极为有益，因为你可以在未来\emph{在多个不同层面上}防止自己犯下同样的错误。这种做法与应用于软件测试和问题解决的\textbf{纵}\textbf{深}\textbf{防御}原则相吻合。该原则假定设置多重、互补的防护措施，以防任何一项安全控制失效或存在漏洞。
+
+\subsection{为进一步改进打下基础}
+
+\label{idx:805}
+让代码得到测试可以保护你免于犯下意外错误。但它也开启了各种新的可能。当你的代码被测试用例覆盖时，你就不必害怕重构。重构是把能正常工作的代码转换为功能上相似、但内部组织更好的代码的过程。你可能会想，为什么需要改变代码的组织方式呢？这样做的原因有好几个。
+
+首先，你的代码可能变得不再易读，这意味着每次修改都要花费太多时间。其次，随着代码随时间累积了过多的变通方法和特殊情况，修复一个缺陷会导致其他一些功能行为异常。这两个原因都可以归结为生产率的提升。从长远来看，它们会让维护成本更低。
+
+除了生产率之外，你可能还想改进性能。这既可能指运行时性能（应用在生产环境中的表现），也可能指编译期性能（这基本上是另一种形式的效率提升）。
+
+你可以通过用更高效的算法替换当前不够理想的算法，或通过更改正在重构的模块中所使用的数据结构，来为运行时性能做重构。为编译期性能做重构，通常包括把部分代码移到不同的编译单元、重新组织头文件，或减少依赖。
+
+无论你的最终目标是什么，重构通常都是一件有风险的事。你拿过一个大体上能正常工作的东西，最终可能得到一个更好的版本，也可能得到一个更差的版本。你怎么知道自己属于哪种情况呢？这时，测试就来救场了。
+
+如果当前的功能集已被充分覆盖，而你想修复最近暴露出来的 bug，那么你只需再加一个届时会失败的测试用例。如果你的整个测试套件重新全部通过，就说明你的重构工作是成功的。最坏的情况是，如果你无法在指定的时间范围内满足所有测试用例，就必须中止重构过程。
+
+如果你想提升性能，也可以采用类似的流程，只不过关注点不是单元测试（或端到端测试），而是性能测试。
+
+\label{idx:806}
+\label{idx:807}
+\label{idx:808}
+随着近年来辅助重构的自动化工具（如 ReSharper C++（\href{https://www.jetbrains.com/resharper-cpp/features/}{https://www.jetbrains.com/resharper-cpp/features/}））和代码维护工具的兴起，你甚至可以把一部分编码工作完全外包给外部软件服务。诸如 Mend Renovate（\href{https://www.mend.io/renovate/}{https://www.mend.io/renovate/}）和 Snyk（\href{https://snyk.io/}{https://snyk.io/}）这样的服务都支持 C++ 依赖项。拥有扎实的测试覆盖率，你就能放心使用它们，而不必担心在更新依赖时破坏自己的应用。
+
+由于始终应当考虑让依赖项在安全漏洞方面保持最新，这类服务可以显著减轻负担。因此，测试不仅能保护你免于犯错，还能减少引入新功能所需的精力。它还能帮助你改进代码库，使其保持稳定和安全！
+
+\label{idx:809}
+我们很容易想当然地认为自己的测试已经足够，但实际上可能会漏掉一些关键测试。这种不可预测性是开发过程的一部分。所幸，覆盖率工具通过衡量测试的数量和质量，有助于缓解这一问题。
+
+你可以使用 Squish Coco、BullseyeCoverage、RKTracer、Parasoft C/C++test、Testwell CTC++、VectorCast、Codecov 和 CANTATA 等工具来测量 C++ 应用与测试的代码覆盖率。例如，C++ IDE CLion 依赖开源的覆盖率工具（\texttt{llvm-cov} 和 \texttt{gcov}），它们需要特殊的编译器标志：
+
+\begin{itemize}
+\item GCC：
+\end{itemize}
+
+\texttt{-fprofile-arcs} \texttt{-ftest-coverage} 或 \texttt{–coverage}
+
+\begin{itemize}
+\item Clang：
+\end{itemize}
+
+\texttt{-fprofile-instr-generate} \texttt{-fcoverage-mapping}
+
+\texttt{-ftest-coverage} 或 \texttt{–coverage}，用于 \texttt{gcov} 风格的覆盖率
+
+既然我们已经理解了测试的必要性，接下来就想开始编写自己的测试。其实可以编写不依赖任何外部库的测试，但那样一来，关注点就会转移到管理测试结果和生成报告上。由于我们希望只专注于测试逻辑本身，所以会选择一个测试框架 / 技术来替我们处理这些繁琐的工作。在接下来的两节中，我们将介绍一些最流行的测试框架 / 技术。
+
+\section{运行时测试框架}
+
+\label{idx:810}
+\label{idx:811}
+\label{idx:812}
+就框架而言，目前事实上的标准是 \textbf{GoogleTest}（\textbf{GTest}）。它与搭档 \textbf{Google Mock}（\textbf{gMock)} 共同构成了一套小巧的工具集，让你能够遵循 C++ 测试的最佳实践。
+
+除 GTest/gMock 组合之外，其他流行的替代方案还有 Catch2、Boost.Test、Doctest、CppUTest 和 [Boost].UT。这些框架全都支持现代 C++ 标准——尤其是 C++14、C++17、C++20 和 C++23。
+
+为了比较这些测试框架，我们将使用同一个想要测试的代码库。以它为基础，再分别用每个框架实现测试。并不存在放之四海而皆准的方案，因为框架的选择取决于你的项目与需求。
+
+\label{idx:813}
+有些测试框架（如 DrogonTest 和 Qt Test）是随库一起提供的，当你需要测试基于这些库并用到其特有功能的系统时，它们可能很合适。
+
+\subsection{GTest 示例}
+
+\label{idx:814}
+\label{idx:815}
+GTest 是一个 xUnit 测试框架，为现代 C++ 测试需求提供了全面的支持。xUnit 是一系列单元测试框架，它们具有共同的架构，即基于测试用例、测试套件、测试夹具、测试运行器和断言。
+
+\label{idx:816}
+GTest 支持如下功能：
+
+\begin{itemize}
+\item \textbf{测试发现}，无需手动注册即可自动发现测试
+\item \textbf{值与类型参数化测试}，让同一个测试可以用多个值或类型运行
+\item \textbf{浮点数比较}，在比较数字时允许存在微小的舍入差异
+\item \textbf{事件监听器}，可在测试运行时插入自定义操作或报告
+\item \textbf{mock 与依赖注入（通过 gMock）}，用伪造对象替换真实组件，从而进行隔离测试
+\item \textbf{夹具}，在一组相关测试之间共享公用的初始化或清理代码
+\item \textbf{带附加信息的日志记录}，捕获测试过程中发生的额外细节
+\item \textbf{sanitizer 集成}，与在测试运行时捕获内存和线程错误的工具协同工作
+\item \textbf{XML 和 JSON 报告}，以标准格式输出测试结果，供 CI/CD 系统使用
+\item \textbf{私有代码测试}，通过将测试类声明为友元来测试类的私有成员
+\end{itemize}
+
+该框架还提供了丰富的断言——断言是测试内部的检查，用于验证条件是否成立。其中包括用户自定义断言，以及有助于调试的内置追踪支持。此外，运行测试还有多种方式：可以配置为有选择地运行、重复运行、以随机顺序运行，或在分布式环境中运行。
+
+GTest 会隔离各个测试，但同一测试套件内的测试之间可以共享资源。
+
+下面是为我们的 \texttt{customer} 库编写的一个示例测试：
+
+\begin{codebox}[cpp]
+#include <gtest/gtest.h>
+#include "customer/responder.h"
+TEST(basic_responses, given_name_when_prepare_responses_then_greets_friendly) {
+  const auto name = "Leo";
+  const auto [status, value] = responder{}.prepare_response(name);
+  ASSERT_EQ(status, drogon::k200OK);
+  ASSERT_EQ(value, "Hello, Leo!");
+}
+\end{codebox}
+
+\label{idx:817}
+在这个测试中，测试过程中通常要做的多数工作都已被抽象掉了。我们主要关注的是提供想要测试的操作（\texttt{prepare\_\allowbreak{}response}）以及期望的行为（两行 \texttt{ASSERT\_\allowbreak{}EQ}）。
+
+\subsection{Catch2 示例}
+
+\label{idx:818}
+\label{idx:819}
+\label{idx:820}
+Catch2 的主要优势在于简单和语法自然。该框架支持测试夹具、断言、数据生成器（用于向测试用例输入值或值范围的内置工具）、浮点匹配器、日志记录、事件监听器和报告器（负责格式化并输出测试结果的组件），包括 JUnit 格式（一种 Java 报告标准）和 Hamcrest 风格的匹配器（一种在多种语言中实现的富有表现力的匹配风格）。
+
+\label{idx:821}
+Catch2 还对 \textbf{行为驱动开发}（\textbf{BDD}）风格的测试提供了基本支持，在这种风格中测试用例用自然语言编写。它还支持微基准测试功能。
+
+下面是为我们的 \texttt{customer} 库编写的一个示例测试：
+
+\begin{codebox}[cpp]
+#include <catch2/catch_all.hpp>
+#include "customer/responder.h"
+TEST_CASE("Basic responses",
+          "Given Name When Prepare Responses Then Greets Friendly") {
+  const auto name = "Mikey";
+  const auto [status, value] = responder{}.prepare_response(name);
+  REQUIRE(status == drogon::k200OK);
+  REQUIRE(value == "Hello, Mikey!");
+}
+int main(const int argc, char* argv[]) {
+  return Catch::Session().run(argc, argv);
+}
+\end{codebox}
+
+它看起来和上一个非常相似。有些关键字不同（\texttt{TEST} 和 \texttt{TEST\_\allowbreak{}CASE}），检查结果的方式也略有差异（用 \texttt{REQUIRE(\allowbreak{}a =\allowbreak{}=\allowbreak{} b)\allowbreak{}} 代替 \texttt{ASSERT\_\allowbreak{}EQ(\allowbreak{}a,\allowbreak{}b)\allowbreak{}}）。不过两者都相当紧凑、易读。
+
+\subsection{CppUTest 示例}
+
+\label{idx:822}
+\label{idx:823}
+CppUTest 是一个基于 C/C++ 的 xUnit 测试框架，专为嵌入式编程而设计。该框架支持夹具、断言和 mock。此外，它还有内存泄漏检测等插件，以及指针恢复机制（重置指针以避免测试之间相互影响）和 IEEE754 浮点异常处理（浮点运算的一项技术标准）等内置功能。
+
+\label{idx:824}
+\label{idx:825}
+CppUTest 提供了集成代码，可以在 CppUTest 运行器下链接并运行 GTest 测试，还支持在同一项目中使用 gMock。但 CppUTest 与 GTest 是两个相互竞争的 C++ 单元测试框架。GTest 因其丰富的功能而被广泛采用，而 CppUTest 则专注于简单性和嵌入式系统。
+
+下面是为我们的 \texttt{customer} 库编写的一个示例测试：
+
+\begin{codebox}[cpp]
+#include "customer/responder.h"
+#include <CppUTest/CommandLineTestRunner.h>
+#include <CppUTest/TestHarness.h>
+TEST_GROUP(basic_responses){};
+TEST(basic_responses, given_name_when_prepare_responses_then_greets_friendly) {
+  const auto name = "Raph";
+  const auto [status, value] = responder{}.prepare_response(name);
+  CHECK_EQUAL(status, drogon::k200OK);
+  CHECK(value == "Hello, Raph!");
+}
+int main(const int ac, char **av) {
+  return CommandLineTestRunner::RunAllTests(ac, av);
+}
+\end{codebox}
+
+与 GTest 和 Catch2 相比，CppUTest 使用不同的语法（\texttt{TEST}\_\texttt{GROUP/\allowbreak{}TEST}）和更简单的断言（\texttt{CHECK} 和 \texttt{CHECK\_\allowbreak{}EQUAL}），并且需要显式的 \texttt{main()} 函数来运行测试。
+
+\subsection{Doctest 示例}
+
+\label{idx:826}
+\label{idx:827}
+Doctest 是一个单头文件的测试框架，非常轻量、无侵入、可移植且线程安全。该框架支持断言、日志记录、事件监听器、报告器、崩溃处理、参数化测试、浮点比较、用户类型的字符串化（支持在断言消息中打印自定义类型）、测试发现、扩展以及 BDD 风格的测试。
+
+下面是为我们的 \texttt{customer} 库编写的一个示例测试：
+
+\begin{codebox}[cpp]
+#include <tuple>
+#include "customer/responder.h"
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
+TEST_CASE("Basic responses") {
+  auto name = "Donnie";
+  drogon::HttpStatusCode status;
+  Json::Value value;
+  std::tie(status, value) = responder{}.prepare_response(name);
+  REQUIRE(status == drogon::k200OK);
+  REQUIRE(value == "Hello, Donnie!");
+}
+\end{codebox}
+
+\label{idx:828}
+\label{idx:829}
+同样地，它相当简洁、易于理解。Doctest 的主要卖点是：与其他功能相近的替代方案相比，它在编译期和运行期都是最快的。
+
+\subsection{Boost.Test 示例}
+
+\label{idx:830}
+\label{idx:831}
+Boost.Test 是一个可定制、可配置的框架，支持自注册、参数化和数据集测试、断言以及详细报告（包括 XML 和 JUnit），但它庞大而复杂的 API 可能颇具挑战性。它的夹具可以被测试用例、测试套件或全局使用。
+
+下面是为我们的 \texttt{customer} 库编写的一个示例测试：
+
+\begin{codebox}[cpp]
+#define BOOST_TEST_MODULE basic_responses
+#include <boost/test/included/unit_test.hpp>
+#include "customer/responder.h"
+BOOST_AUTO_TEST_CASE(given_name_when_prepare_responses_then_greets_friendly) {
+  const auto name = "Bulk Bogan";
+  const auto [status, value] = responder{}.prepare_response(name);
+  BOOST_CHECK_EQUAL(status, drogon::k200OK);
+  BOOST_CHECK_EQUAL(value, "Hello, Bulk Bogan!");
+}
+\end{codebox}
+
+这个示例看起来同样简洁，但 Boost.Test 比其他框架更重。尽管它灵活且功能丰富，但学习曲线也更陡峭。
+
+\subsection{DrogonTest 示例}
+
+\label{idx:832}
+\label{idx:833}
+DrogonTest 是一个极简的测试框架，受 GTest 和 Catch2 启发，内建在 Drogon 框架中。该框架提供了多种断言，并原生支持异步测试。
+
+下面是为我们的 \texttt{customer} 库编写的一个示例：
+
+\begin{codebox}[cpp]
+#define DROGON_TEST_MAIN
+#include <drogon/drogon_test.h>
+#include "customer/responder.h"
+DROGON_TEST(given_name_when_prepare_responses_then_greets_friendly) {
+  const auto name = "Zero Cool";
+  const auto [status, value] = responder{}.prepare_response(name);
+  CHECK(status == drogon::k200OK);
+  CHECK(value == "Hello, Zero Cool!");
+}
+int main(const int argc, char** argv) { return drogon::test::run(argc, argv); }
+\end{codebox}
+
+\label{idx:834}
+\label{idx:835}
+这个示例很直观。对于用 Drogon 构建的项目来说，该框架是一个便捷的选择，尤其是在测试异步代码时。
+
+\subsection{[Boost].UT 示例}
+
+\label{idx:836}
+\label{idx:837}
+[Boost].UT 或 μ（micro）是一个单头文件 / 模块的框架，不含宏，支持参数化测试、断言、匹配器、运行器、报告器和日志记录。测试可以使用 BDD 方法编写（包括 Gherkin 规范和 Spec 记法）。
+
+该框架利用 C++20 特性来实现这些功能：
+
+\begin{itemize}
+\item 避免为 lambda 表达式引入唯一类型，由于不必为每个 lambda 引入新类型，编译速度可提升 5 倍
+\item 类型名擦除，从而实现类型 / 函数记忆化（存储开销较大的计算结果），这也能加快编译速度
+\item 断言结合 C++20 的 \texttt{source\_\allowbreak{}location} 类（它表示关于源代码的具体信息，如文件名、行号和函数名，可用于日志记录、测试或调试），取代了诸如 \texttt{\_\allowbreak{}\_\allowbreak{}FILE\_\allowbreak{}\_\allowbreak{}}（当前源文件）、\texttt{\_\allowbreak{}\_\allowbreak{}FUNCTION\_\allowbreak{}\_\allowbreak{}}（所在函数）和 \texttt{\_\allowbreak{}\_\allowbreak{}LINE\_\allowbreak{}\_\allowbreak{}}（当前源文件中的行号）之类的预定义宏
+\item 使用指定初始化器来指定配置选项，从而编写更简洁的代码
+\item 接受非类型模板参数的常量匹配器
+\item 支持泛型 lambda 模板参数列表的参数化测试
+\item 用 C++20 概念定义模板约束，以及 C++20 模块
+\end{itemize}
+
+下面是为我们的 \texttt{customer} 库编写的一个示例测试：
+
+\begin{codebox}[cpp]
+#define BOOST_UT_DISABLE_MODULE
+#include <boost/ut.hpp>
+//import boost.ut;
+#include "customer/responder.h"
+namespace ut = boost::ut;
+ut::suite<"responder tests"> _ = [] {
+  using namespace boost::ut;
+  "basic_responses"_test = [] {
+    const auto name = "Kelvin Torbo";
+    const auto [status, value] = responder{}.prepare_response(name);
+    should("given_name_when_prepare_responses_then_greets_friendly") =   
+    [status, value] {
+      expect(status == drogon::k200OK);
+      expect(value == "Hello, Kelvin Torbo!");
+    };
+  };
+};
+int main() {}
+\end{codebox}
+
+\label{idx:838}
+这个示例凸显了 [Boost].UT 现代、不含宏的风格，其中测试用 BDD 风格的 \texttt{should} 块定义。
+
+\label{idx:839}
+前面这些框架有助于测试运行时的执行过程，而 C++ 还允许进行编译期测试，我们接下来就介绍这部分。
+
+\section{编译期测试技术}
+
+\label{idx:840}
+模板元编程让我们能够编写在编译期执行的 C++ 代码，而不是通常的运行时执行。C++11 加入的 \texttt{constexpr} 关键字让我们可以更广泛地利用编译期逻辑，而 C++20 的 \texttt{consteval} 关键字则旨在让我们对代码在编译期的求值方式拥有更强的控制力。
+
+编译期编程的问题之一在于，没有简便的方法对它进行测试。虽然针对运行时执行的代码的单元测试框架比比皆是（正如我们刚刚看到的），但关于编译期编程的资源却并不多。部分原因可能是，编译期编程仍被视为复杂且只面向专家。
+
+不过，某件事不容易，并不意味着它不可能。正如运行时测试依赖在运行时检查的断言一样，你可以用 \texttt{static\_\allowbreak{}assert} 来检查编译期代码的行为是否正确，它是随 C++20 的 \texttt{consteval} 一同引入的。
+
+下面是一个使用 \texttt{static\_\allowbreak{}assert} 的简单示例：
+
+\begin{codebox}[cpp]
+#include <cstdint>
+#include <string_view>
+consteval uint64_t  generate_lucky_number(std::string_view name) {
+  uint64_t number = 1;
+  for (const auto letter : name) {
+    number = number * 7 + static_cast<uint64_t>(letter);
+  }
+  return number;
+}
+static_assert(generate_lucky_number("Paul and Jessica") == 491752089676924,
+              "Generate the lucky number for Paul and Jessica");
+\end{codebox}
+
+在这里，\texttt{static\_\allowbreak{}assert} 的第二个参数提供了一条自定义消息。如果检查失败，编译器会中止构建并报告如下错误：
+
+\begin{codebox}[text]
+error: static assertion failed: Generate the lucky number for Paul and Jessica.
+\end{codebox}
+
+\label{idx:841}
+由于这些函数调用的结果是在编译期计算出来的，我们实际上可以把编译器当作测试框架来用。但局限在于，编译期失败会立即中止编译，而且与运行时框架不同，它不会汇总多个测试的结果。
+
+尽管编译期测试可能有用，但大多数实际应用仍然严重依赖运行时交互。这些交互在测试时会带来自身的挑战。这时，使用测试替身之类的技术就派上了用场。
+
+\section{理解测试替身}
+
+\label{idx:842}
+只要你测试的函数与外部世界没有太多交互，事情就相当简单。麻烦始于被测单元需要与第三方组件（如数据库、HTTP 连接和特定文件）打交道的时候。
+
+一方面，你想了解代码在各种情况下会如何表现。另一方面，你不想等数据库启动，更不想为了检查所有必要的条件而维护多个包含不同数据版本的数据库。
+
+我们该如何应对这类情况呢？思路是不要去执行那些会触发所有这些副作用的真实代码，而是改用测试替身。测试替身是代码中模拟真实 API 的结构，只不过它们不会执行所模拟函数或对象的实际操作。
+
+最常见的测试替身有 mock、spy、dummy、fake 和 stub。它们彼此相似但并不相同，很多人常常把它们混为一谈。
+
+\subsection{不同的测试替身}
+
+mock 是验证交互的测试替身。它们预先编程好了对应该进行哪些调用的期望，如果这些期望没有得到满足，测试就会失败。
+
+spy 会记录它们是如何被调用的信息（例如参数或调用次数），这样测试就能在执行后验证交互情况。
+
+dummy 是永远不会被实际使用的占位对象。它们满足构造函数、函数或方法的参数要求，但不影响测试逻辑。
+
+\label{idx:843}
+stub 返回预定义的值，但不含逻辑。例如，\texttt{Stub\allowbreak{}Random.\allowbreak{}random\allowbreak{}Integer(\allowbreak{})\allowbreak{}} 方法可能总是返回同一个值（例如 \texttt{3}），但当我们测试返回值的类型，或者测试它确实返回了某个值时，这可能已经是一个足够用的 stub 实现。具体值可能并不那么重要。此外，像时间戳这样的随机值如果不可预测，可能会导致测试失败。
+
+最后，fake 是具有可用实现的轻量级对象，其行为大体上与真实实现相同。主要区别在于，fake 可能走各种捷径，比如避免调用生产数据库或文件系统，这就使它们不适合用于生产环境。
+
+在有限范围内，fake 也可以用在测试之外。例如，在内存中处理数据而不访问数据库，对于制作原型或遇到性能瓶颈时都很有用。但在这些场景中使用它们与测试替身无关。
+
+\begin{myNotic}{注意}
+
+\label{idx:844}
+在实现 \textbf{命令查询分离}（\textbf{CQS}）设计模式时，你通常希望用 stub 来替身查询（因为它们返回数值），用 mock 来替身命令（因为它们代表需要被验证的操作）。
+\end{myNotic}
+
+\subsection{编写测试替身}
+
+\label{idx:845}
+要编写测试替身，我们通常会使用外部库，就像使用单元测试一样。一些最流行的方案如下：
+
+\begin{itemize}
+\label{idx:846}
+\item \textbf{Google Mock}（也称为 \textbf{gMock}）现已是 GoogleTest 库的一部分。
+\label{idx:847}
+\item \textbf{Trompeloeil} 专注于 C++14，能与许多测试库很好地集成，例如 Catch2、Doctest 和 GTest。
+\label{idx:848}
+\item \textbf{CppUMock} 是 CppUTest 的一部分，可与 GTest 和 gMock 集成。
+\label{idx:849}
+\item \textbf{FakeIt} 是一个单头文件框架，用 C++11 编写，可轻松与 GTest、MS Test 和 Boost.Test 集成。FakeIt 的语法与 gMock 非常相似；正因如此，我们没有单独给出示例。如果你已经熟悉 gMock，上手 FakeIt 只需花很少的功夫。
+\end{itemize}
+
+接下来几节中的代码将向你展示如何使用 gMock、Trompeloeil 和 CppUMock。为保持一致，我们将继续沿用本章前面用过的示例。
+
+\subsubsection{gMock 示例}
+
+\label{idx:850}
+由于 gMock 是 GTest 的一部分，我们将把它们放在一起介绍。
+
+\label{idx:851}
+在这个示例中，我们将对 merchant 和 responder 使用 mock 来检查交互，并用一个把数据保存在内存中的 fake 评价存储。这样，我们就能在不需要真实外部系统的情况下测试逻辑。
+
+这个辅助测试类提供并存储顾客对商家发布的评价：
+
+\begin{codebox}[cpp]
+#pragma once
+#include <optional>
+#include <unordered_map>
+#include "merchants/reviews.h"
+class fake_customer_review_store : public i_customer_review_store {
+public:
+  explicit fake_customer_review_store(review::customer_id_t customer_id)
+      : customer_id_(customer_id) {}
+  std::optional<review> get_review_for_merchant(
+      review::merchant_id_t merchant_id) final {
+    if (auto it = reviews_.find(merchant_id); it != std::end(reviews_)) {
+      return it->second;
+    }
+    return {};
+  }
+  void post_review(review r) final {
+    if (r.customer != customer_id_) {
+      throw std::invalid_argument{
+          "Trying to post a review under a different customer ID"};
+    }
+    reviews_[r.merchant] = std::move(r);
+  }
+private:
+  review::customer_id_t customer_id_;
+  std::unordered_map<review::merchant_id_t, review> reviews_;
+};
+\end{codebox}
+
+mock 类像普通类一样定义，再用宏来生成被 mock 的方法并指定其行为。在我们的例子中，\texttt{MOCK\_\allowbreak{}METHOD} 宏在 \texttt{merchant} 类内生成被 mock 的方法，而 \texttt{ON\_CALL} 宏则定义它们的默认行为：
+
+\begin{codebox}[cpp]
+#include <gmock/gmock.h>
+#include <merchants/visited_merchant_history.h>
+#include "fake_customer_review_store.h"
+#include "merchants/reviews.h"
+namespace {
+class mock_visited_merchant : public i_visited_merchant {
+public:
+  explicit mock_visited_merchant(fake_customer_review_store &store,
+                                 merchant_id_t id)
+      : review_store_{store},
+        review_{store.get_review_for_merchant(id).value()} {
+    ON_CALL(*this, post_rating).WillByDefault([this](stars s) {
+      review_.rating = s;
+      review_store_.post_review(review_);
+    });
+    ON_CALL(*this, get_rating).WillByDefault([this] { return review_.rating; });
+  }
+  MOCK_METHOD(stars, get_rating, (), (override));
+  MOCK_METHOD(void, post_rating, (stars s), (override));
+private:
+  fake_customer_review_store &review_store_;
+  review review_;
+};
+}  //namespace
+\end{codebox}
+
+\label{idx:852}
+GTest 夹具支持 \texttt{SetUp()} 和 \texttt{Tear\allowbreak{}Down(\allowbreak{})\allowbreak{}} 方法，用于初始化和清理测试数据。下面的夹具类 \texttt{history\_\allowbreak{}with\_\allowbreak{}one\_\allowbreak{}rated\_\allowbreak{}merchant} 包含一个 fake 评价存储和一个供测试使用的被 mock 的 merchant：
+
+\begin{codebox}[cpp]
+class history_with_one_rated_merchant : public ::testing::Test {
+public:
+  static constexpr std::size_t CUSTOMER_ID = 7777;
+  static constexpr std::size_t MERCHANT_ID = 1234;
+  static constexpr const char *REVIEW_TEXT = "Blue Manic Monday";
+  static constexpr stars RATING = stars{5.f};
+protected:
+  void SetUp() final {
+    fake_review_store_.post_review(
+        {CUSTOMER_ID, MERCHANT_ID, REVIEW_TEXT, RATING});
+    //nice mock 不会对 get_rating 的“无趣”调用发出警告
+    auto mocked_merchant =
+        std::make_unique<::testing::NiceMock<mock_visited_merchant>>(
+            fake_review_store_, MERCHANT_ID);
+    merchant_index_ = history_.add(std::move(mocked_merchant));
+  }
+  fake_customer_review_store fake_review_store_{CUSTOMER_ID};
+  history_of_visited_merchants history_{};
+  std::size_t merchant_index_{};
+};
+\end{codebox}
+
+\label{idx:853}
+\texttt{TEST\_F} 宏会创建测试夹具的实例，并提供对该实例中对象和子例程的访问。\texttt{EXPECT\_\allowbreak{}CALL} 宏设置期望，也就是说，期望的方法要么被调用特定次数（包括零次），要么测试就会失败。注意 \texttt{post\_\allowbreak{}rating} 方法是被 mock 的：
+
+\begin{codebox}[cpp]
+TEST_F(history_with_one_rated_merchant,
+       when_user_changes_rating_then_the_review_is_updated_in_store) {
+  const auto &mocked_merchant = dynamic_cast<const mock_visited_merchant &>(
+      history_.get_merchant(merchant_index_));
+  EXPECT_CALL(mocked_merchant, post_rating);
+  constexpr auto new_rating = stars{4};
+  static_assert(RATING != new_rating);
+  history_.rate(merchant_index_, stars{new_rating});
+}
+TEST_F(history_with_one_rated_merchant,
+       when_user_selects_same_rating_then_the_review_is_not_updated_in_store) {
+  const auto &mocked_merchant = dynamic_cast<const mock_visited_merchant &>(history_.get_merchant(merchant_index_));
+  EXPECT_CALL(mocked_merchant, post_rating).Times(0);
+  history_.rate(merchant_index_, stars{RATING});
+}
+\end{codebox}
+
+下面是针对我们的 \texttt{customer} 库的另一个示例测试。这个示例与上一个类似，但它用 \texttt{MATCHER\_\allowbreak{}P} 宏定义了一个自定义匹配器 \texttt{contains\_\allowbreak{}value}，并且不依赖夹具：
+
+\begin{codebox}[cpp]
+#include <gmock/gmock.h>
+#include "customer/responder.h"
+using namespace ::testing;
+namespace {
+class responder_mock {
+public:
+  MOCK_METHOD(
+      (std::pair<drogon::HttpStatusCode, Json::Value>),  //注意括号
+      prepare_response, (const std::string &name), ());
+  MOCK_METHOD(void, respond,
+             (drogon::HttpStatusCode status, const Json::Value &response,
+              std::function<void(const drogon::HttpResponsePtr &)>  
+              &&callback),
+              ());
+};
+MATCHER_P(contains_value, value, "") { return arg == value; }
+}  //namespace
+\end{codebox}
+
+\label{idx:854}
+第一个期望在调用 \texttt{prepare\_\allowbreak{}response} 方法时返回一个测试响应。第二个期望验证传给 \texttt{respond} 方法的值与期望值相符：
+
+\begin{codebox}[cpp]
+TEST(basic_responses,
+     given_name_when_handle_get_then_response_is_prepared_and_sent) {
+  drogon::HttpRequestPtr request = drogon::HttpRequest::newHttpRequest();
+  request->setMethod(drogon::HttpMethod::Get);
+  request->setPath("/customer");
+  request->setParameter("name", "Rotoro");
+  auto responder = StrictMock<responder_mock>{};
+  const auto response = Json::Value("Bizarre Club");
+  EXPECT_CALL(responder, prepare_response("Rotoro"))
+  WillOnce(Return(std::pair{drogon::k200OK, response}));
+  EXPECT_CALL(responder, respond(drogon::k200OK, contains_value(response), _));
+  handle_get(request, responder, [](const drogon::HttpResponsePtr &) {});
+}
+\end{codebox}
+
+在撰写本书时，GTest 是最受欢迎的 C++ 测试框架。它与 gMock 的集成意味着你的项目中已经可以直接使用 gMock。这一组合用起来直观，功能也很完备，因此如果你已经在用 GTest，就没有理由再去寻找替代方案。
+
+\subsubsection{Trompeloeil 示例}
+
+\label{idx:855}
+\label{idx:856}
+为了与上一个示例形成对比，这次我们使用 Trompeloeil 作为测试替身，并用 Catch2 作为测试框架：
+
+\begin{codebox}[cpp]
+#include <merchants/visited_merchant_history.h>
+#include <catch2/catch_all.hpp>
+#include <catch2/trompeloeil.hpp>
+#include <memory>
+#include "fake_customer_review_store.h"
+#include "merchants/reviews.h"
+using trompeloeil::_;
+\end{codebox}
+
+\label{idx:857}
+\texttt{MAKE\_\allowbreak{}MOCKn} 宏为成员函数创建 mock 实现：
+
+\begin{codebox}[cpp]
+class mock_visited_merchant final : public i_visited_merchant {
+public:
+  MAKE_MOCK0(get_rating, stars(), override);
+  MAKE_MOCK1(post_rating, void(stars s), override);
+};
+\end{codebox}
+
+\label{idx:858}
+这个测试使用 BDD 风格的语法，采用 Gherkin 风格的 \texttt{GIVEN}、\texttt{WHEN} 和 \texttt{THEN} 宏。在这个示例中不需要测试夹具，因为测试数据就在这些宏的作用域内：
+
+\begin{codebox}[cpp]
+SCENARIO("merchant history keeps store up to date", "[mobile app]") {
+  GIVEN("a history with one rated merchant") {
+    static constexpr std::size_t CUSTOMER_ID = 7777;
+    static constexpr std::size_t MERCHANT_ID = 1234;
+    static constexpr const char *REVIEW_TEXT = "I'm like TT, just like TT";
+    static constexpr stars RATING = stars{5.f};
+    auto fake_review_store_ = fake_customer_review_store{CUSTOMER_ID};
+    fake_review_store_.post_review(
+        {CUSTOMER_ID, MERCHANT_ID, REVIEW_TEXT, RATING});
+    auto history_ = history_of_visited_merchants{};
+    const auto merchant_index_ =
+        history_.add(std::make_unique<mock_visited_merchant>());
+    auto &mocked_merchant = const_cast<mock_visited_merchant &>(
+        dynamic_cast<const mock_visited_merchant &>(
+            history_.get_merchant(merchant_index_)));
+    auto review_ = review{CUSTOMER_ID, MERCHANT_ID, REVIEW_TEXT, RATING};
+\end{codebox}
+
+\texttt{ALLOW\_\allowbreak{}CALL}、\texttt{LR\_\allowbreak{}SIDE\_\allowbreak{}EFFECT}、\texttt{LR\_\allowbreak{}RETURN}、\texttt{REQUIRE\_\allowbreak{}CALL} 和\texttt{ FORBID\_\allowbreak{}CALL} 宏用于设置期望。对于匹配这些期望的调用，第一个 \texttt{ALLOW\_\allowbreak{}CALL} 宏会产生副作用（更新评价并把它发布出去），第二个则指定 \texttt{get\_\allowbreak{}rating(\allowbreak{})\allowbreak{}} 应返回什么：
+
+\begin{codebox}[cpp]
+    ALLOW_CALL(mocked_merchant, post_rating(_))
+        .LR_SIDE_EFFECT(review_.rating = _1;
+                        fake_review_store_.post_review(review_););
+    ALLOW_CALL(mocked_merchant, get_rating()).LR_RETURN(review_.rating);
+    WHEN("a user changes rating") {
+      constexpr auto new_rating = stars{4};
+      static_assert(RATING != new_rating);
+      THEN("the review is updated in store") {
+        REQUIRE_CALL(mocked_merchant, post_rating(_));
+        history_.rate(merchant_index_, stars{new_rating});
+      }
+    }
+    WHEN("a user selects same rating") {
+      THEN("the review is not updated in store") {
+        FORBID_CALL(mocked_merchant, post_rating(_));
+        history_.rate(merchant_index_, stars{RATING});
+      }
+    }
+  }
+}
+\end{codebox}
+
+\label{idx:859}
+\label{idx:860}
+Catch2 的一大优点就是让编写 BDD 风格的测试变得很容易，就像这里展示的这个测试一样。如果你偏好这种风格，那么 Catch2 搭配 Trompeloeil 会是个不错的选择，因为二者集成得非常好。
+
+\subsubsection{CppUMock 示例}
+
+\label{idx:861}
+\label{idx:862}
+CppUTest 通过 CppUMock 支持 mock 及其作用域，CppUMock 可以 mock 函数、类方法和值，设置期望，验证参数，并返回包括不同类型的对象在内的值。
+
+这个示例只用到该框架的少数几个功能：
+
+\begin{codebox}[cpp]
+#include "fake_customer_review_store.h"
+#include "merchants/reviews.h"
+#include "merchants/visited_merchant_history.h"
+#include <CppUTest/CommandLineTestRunner.h>
+#include <CppUTest/TestHarness.h>
+#include <CppUTestExt/MockSupport.h>
+namespace {
+class mock_visited_merchant final : public i_visited_merchant {
+public:
+  explicit mock_visited_merchant(fake_customer_review_store &store,
+                                 const merchant_id_t id)
+      : review_store_{store},
+        review_{store.get_review_for_merchant(id).value()} {}
+  stars get_rating() override { return review_.rating; }
+\end{codebox}
+
+\label{idx:863}
+在这里，\texttt{Mock\allowbreak{}Support} 通过 \texttt{mock(\allowbreak{})\allowbreak{}.\allowbreak{}actual\allowbreak{}Call(\allowbreak{}\_\allowbreak{}\_\allowbreak{}func\_\allowbreak{}\_\allowbreak{})\allowbreak{}.\allowbreak{}on\allowbreak{}Object(\allowbreak{}this)\allowbreak{}} 调用记录下测试替身的 \texttt{post\_\allowbreak{}rating(\allowbreak{})\allowbreak{}} 方法是在这个特定实例上被调用的：
+
+\begin{codebox}[cpp]
+  void post_rating(const stars s) override {
+    mock().actualCall(__func__).onObject(this);
+    review_.rating = s;
+    review_store_.post_review(review_);
+  }
+private:
+  fake_customer_review_store &review_store_;
+  review review_;
+};
+}  //namespace
+\end{codebox}
+
+\label{idx:864}
+CppUTest 中的每个测试组都可以有 setup 和 teardown 方法，用于初始化和清理测试数据。在 teardown 方法中，\texttt{Mock\allowbreak{}Support} 会验证是否满足了期望，然后清除 \texttt{mock} 状态：
+
+\begin{codebox}[cpp]
+TEST_GROUP(history_with_one_rated_merchant) {
+  static constexpr std::size_t CUSTOMER_ID = 7777;
+  static constexpr std::size_t MERCHANT_ID = 1234;
+  static constexpr const char *REVIEW_TEXT =
+      "It's not 'Door to Heaven' it is...";
+  static constexpr stars RATING = stars{5.f};
+  TEST_SETUP() {
+    fake_review_store_.post_review(
+        {CUSTOMER_ID, MERCHANT_ID, REVIEW_TEXT, RATING});
+    merchant_index_ = history_.add(std::make_unique<mock_visited_merchant>(
+        fake_review_store_, MERCHANT_ID));
+  }
+  TEST_TEARDOWN() {
+    mock().checkExpectations();
+    mock().clear();
+  }
+  fake_customer_review_store fake_review_store_{CUSTOMER_ID};
+  history_of_visited_merchants history_{};
+  std::size_t merchant_index_{};
+};
+\end{codebox}
+
+\label{idx:865}
+在这里，\texttt{Mock\allowbreak{}Support} 设置期望：\texttt{mocked\_\allowbreak{}merchant} 的 \texttt{post\_\allowbreak{}rating(\allowbreak{})\allowbreak{}} 成员函数恰好被调用一次；否则测试就会失败：
+
+\begin{codebox}[cpp]
+TEST(history_with_one_rated_merchant,
+      when_user_changes_rating_then_the_review_is_updated_in_store) {
+  const auto &mocked_merchant = history_.get_merchant(merchant_index_);
+  mock()
+      .expectOneCall("post_rating")
+      .onObject(const_cast<i_visited_merchant *>(&mocked_merchant));
+  constexpr auto new_rating = stars{4};
+  static_assert(RATING != new_rating);
+  history_.rate(merchant_index_, stars{new_rating});
+}
+\end{codebox}
+
+\label{idx:866}
+在这里，\texttt{Mock\allowbreak{}Support} 设置期望：\texttt{mocked\_\allowbreak{}merchant} 的 \texttt{post\_\allowbreak{}rating(\allowbreak{})\allowbreak{}} 成员函数从不被调用；否则测试就会失败：
+
+\begin{codebox}[text]
+TEST(history_with_one_rated_merchant,
+      when_user_selects_same_rating_then_the_review_is_not_updated_in_store) {
+  const auto &mocked_merchant = history_.get_merchant(merchant_index_);
+  mock()
+      .expectNCalls(0, "post_rating")
+      .onObject(const_cast<i_visited_merchant *>(&mocked_merchant));
+  history_.rate(merchant_index_, stars{RATING});
+}
+\end{codebox}
+
+最后，测试运行器会执行所有测试：
+
+\begin{codebox}[text]
+int main(const int ac, char **av) { return RUN_ALL_TESTS(ac, av); }
+\end{codebox}
+
+CppUTest 的主要优势在于简单以及适合嵌入式系统。借助 CppUMock，你可以清晰地设置期望，并以轻量的方式验证交互。不过，与 GTest 等更大型的框架相比，它的 mock 能力有限，因此对于嵌入式场景之外的复杂项目，它可能并不是最佳选择。
+
+\label{idx:867}
+使用测试替身能让测试变得方便，但如果你的类本来就难以测试，它们也帮不上忙。这正是应该采用测试驱动设计的原因。
+
+\section{测试驱动的类设计}
+
+\label{idx:868}
+仅仅区分不同类型的测试、学会某一个（或几个）测试框架是不够的。当你开始为实际代码编写测试时，很快就会注意到并非所有类都易于测试。有时，你可能会觉得需要访问私有属性或方法。如果你想维护良好架构的原则，就要克制这种冲动！相反，可以考虑去测试通过该类型公有 API 暴露出来的业务需求，或者重构该类型，使其拥有另一个可供测试的代码单元。
+
+\subsection{当测试与类设计发生冲突}
+
+\label{idx:869}
+你可能遇到的问题并不是测试框架不够用。通常，你遇到的是设计不当的类。即使这些类的行为看似正确、外观也没问题，但只要它们不支持测试，就说明它们的设计不正确。
+
+好消息是，测试能够揭示类设计中的缺陷。这意味着你可以在问题变得棘手之前就把它修好。当你开始基于这样的类设计构建类层次结构时，它很可能会反过来困扰你。在实现测试的过程中修正设计，恰恰能减少可能产生的技术债务。
+
+\subsection{老生常谈：先写测试}
+
+\label{idx:870}
+\label{idx:871}
+这句话已经说过很多遍了，可还是有很多人倾向于“忘记”这条规则。当你编写测试时，首先要做的就是降低创建难以测试的类的风险。你从 API 的用法出发，让实现去迎合 API，从而最好地服务于 API。这样一来，你通常会得到既更易用、又更易测试的 API。当你实践 \textbf{测试驱动开发}（\textbf{TDD}）或在写代码之前先写测试时，最终也会实现依赖注入，这意味着你的类可以做到更松散的耦合。
+
+反过来做（先写类，然后再为它们补上单元测试）可能会得到写起来更容易、但测试起来更困难的代码。而一旦测试变难，你就可能忍不住想跳过它。
+
+要让测试在整个开发生命周期中都有效，而不只是在实现阶段有效，你还需要把这些测试自动化。
+
+\subsection{防御性编程}
+
+\label{idx:872}
+\label{idx:873}
+与名字给人的印象不同，防御性编程并不是一种安全特性。它的名字来源于保护你的类和函数，使其不被违背本意地使用。它跟测试并没有直接关系，却是一种很好的设计模式，因为它能提升代码质量，让你的项目经得起未来的考验。
+
+防御性编程从静态类型开始。例如，如果你创建一个以自定义类型为参数的函数，就必须确保没有人会用误传的值调用它。用户必须主动去确认该函数期望什么，并据此准备输入。
+
+\label{idx:874}
+在 C++ 中，我们在编写模板代码时也可以利用类型安全相关的特性。比如在为顾客评论创建一个容器时，我们本可以接受任意类型的列表并从中拷贝。为了得到更友好的错误信息和更完善的检查，我们可以这样写：
+
+\begin{codebox}[cpp]
+class CustomerReviewStore : public i_customer_review_store {
+ public:
+  CustomerReviewStore() = default;
+  explicit CustomerReviewStore(const std::ranges::range auto  
+                               &initial_reviews) {
+  static_assert(is_range_of_reviews_v<decltype(initial_reviews)>,
+                "Must pass in a collection of reviews");
+  std::ranges::copy(begin(initial_reviews), end(initial_reviews),
+                    begin(reviews_));
+  }
+ //...
+ private:
+  std::vector<review> reviews_;
+};
+\end{codebox}
+
+\texttt{explicit} 关键字可以防止我们不希望出现的隐式类型转换。通过规定输入参数必须满足 \texttt{range} 概念，我们确保只有合法的容器才能通过编译。借助概念（concept），我们对非法使用的防御能给出更清晰的错误信息。在代码中使用 \texttt{static\_\allowbreak{}assert} 也是一种很好的防御手段，因为它在需要时可以给出有意义的错误信息。我们的 \texttt{is\_\allowbreak{}range\_\allowbreak{}of\_\allowbreak{}reviews} 检查可以这样实现：
+
+\begin{codebox}[cpp]
+template <typename T>
+constexpr bool is_range_of_reviews_v =
+    std::is_same_v<std::ranges::range_value_t<T>, review>;
+\end{codebox}
+
+这样一来，我们就能确保拿到的范围确实包含了我们想要的那种类型的评论。
+
+静态类型无法阻止非法的运行时值被传入函数。因此，防御性编程的下一种形式就是检查前置条件。这样，代码会在问题刚露出苗头时就立刻失败，这总比返回一个非法值、任其传播到系统其他部分要好。在 C++ 拥有契约（contract）之前，我们可以用前面几章提到过的 GSL 库来检查代码的前置条件和后置条件：
+
+\begin{codebox}[cpp]
+void post_review(review review) final {
+  Expects(review.merchant);
+  Expects(review.customer);
+  Ensures(!reviews_.empty());
+  reviews_.push_back(std::move(review));
+}
+\end{codebox}
+
+\label{idx:875}
+在这里，通过使用 \texttt{Expects} 宏，我们检查传入的评论是否设置了商家和评论者的 ID。除了应对未设置 ID 的情况，我们还会用 \texttt{Ensures} 后置条件宏来防御把评论加入存储失败的情况。
+
+说到运行时检查，首先想到的事情之一就是检查一个或多个属性是不是 \texttt{nullptr} 类型。防范这一问题的最佳方式，是把可空资源（即可以取值为 \texttt{nullptr} 的资源）与不可空资源区分开来。有一个非常好用的工具可以帮你做到这一点，它从 C++17 起就进入了标准库：\texttt{std::\allowbreak{}optional}。只要可以，就在你设计的所有 API 中都使用它。
+
+下一节，我们来看看自动化测试如何融入 CI/CD 工作流。
+
+\section{为 CI/CD 自动化应用测试}
+
+\label{idx:876}
+下一章我们将重点讨论 CI/CD。要让 CI/CD 流水线正常工作，你需要有一套测试，在缺陷进入生产环境之前就把它们捕获住。确保所有业务需求都被恰当地表达为测试，这取决于你和你的团队。
+
+\label{idx:877}
+测试在多个层面上都有用。在上一节提到的 BDD 中，业务需求构成了自动化测试的基础。但你正在构建的系统并不只有业务需求。你要确保所有第三方集成都按预期工作，确保所有子组件（例如微服务）之间能够互相调用，最后还要确保你正在编写的函数和类不存在任何你能想到的缺陷。
+
+每一个你能自动化的测试，都是 CI/CD 流水线的候选者，它们在这条流水线中也各有各的位置。例如，端到端测试最适合在部署之后作为验收测试来运行；而单元测试则最适合在编译之后立即执行。毕竟，我们的目标是：一旦发现任何可能与规格不符的地方，就立刻中断流程。
+
+你不必在每次运行 CI/CD 流水线时都跑遍所有已自动化的测试。每条流水线的运行时间相对较短会更好，理想情况下应在提交后的几分钟内完成。那么，如果真的想让运行时间尽可能短，又该如何确保一切都得到了充分的测试呢？
+
+一个办法是为不同目的准备不同的测试套件。例如，可以为提交到特性分支的代码准备一组最小化的测试。由于每天会有大量提交进入特性分支，这意味着它们只会被简要地测试一下，而且能很快拿到结果。把特性分支合并到共享的开发分支时，就需要稍微大一些的测试用例集合，这样可以确保我们没有破坏其他团队成员要使用的功能。最后，合并到生产分支时会运行一组更全面的用例。毕竟，我们希望生产分支得到彻底的测试，哪怕测试要花上相当长的时间。
+
+另一个办法是在 CI/CD 中使用精简过的测试用例集合，并另外设立一个持续测试流程。该流程定期运行，针对某个特定环境的当前状态执行深入检查。这些测试可以一直做到安全测试和性能测试，从而评估该环境是否有资格被晋升。
+
+\label{idx:878}
+\label{idx:879}
+晋升指的是我们选定某个环境，并确认它具备成为更成熟环境的全部条件（例如从开发环境晋升到下一级的预发布环境，或从预发布晋升到生产）。如果晋升是自动进行的，那么提供自动回滚也是一个好做法，以防那些细微的差异（比如域名或流量方面的差异）让刚刚晋升的环境不再能通过测试。
+
+这也引出了另一项重要实践：始终在生产环境上运行测试。当然，这类测试必须尽可能不产生干扰，但它们应当让你在任何时刻都能知道系统运行是否正常。
+
+\section{为 CI/CD 自动化基础设施验证}
+
+\label{idx:880}
+\label{idx:881}
+如果你想在应用的软件架构中引入配置管理、\textbf{基础设施即代码}（\textbf{IaC}）或不可变部署等概念，也应当考虑对基础设施配置本身进行验证。这意味着要在应用测试运行之前，检查服务器、容器和环境是否处于预期状态。可用于此的工具很多，其中比较流行的包括 Serverspec、Testinfra、Goss 和 Terratest。
+
+这些工具在适用范围上略有不同，具体如下：
+
+\begin{itemize}
+\label{idx:882}
+\label{idx:883}
+\item \textbf{Serverspec} 和 \textbf{Testinfra} 更侧重于测试那些通过配置管理工具配置出来的服务器的实际状态，这类工具包括 SaltStack（或简称 Salt）、Ansible、Puppet、CFEngine 和 Chef。它们分别用 Ruby 和 Python 编写，并接入各自语言的测试引擎——即 Serverspec 用 RSpec、Testinfra 用 pytest。
+\label{idx:884}
+\item \textbf{Goss} 在适用范围和形式上都有所不同。除了测试服务器，你还可以借助 \texttt{dgoss} 包装器用 Goss 来测试项目中使用到的容器。至于形式，它并不使用你在 Serverspec 或 Testinfra 中会看到的那种命令式代码，而是与 Ansible 或 Salt 类似，用 YAML 文件来描述我们想要检查的目标状态。如果你已经在用声明式的方式做配置管理（比如前面提到的 Ansible 或 Salt），Goss 可能会更直观，因而也更适合用来测试。
+\label{idx:885}
+\item 最后，\textbf{Terratest} 是一个可以用来测试 IaC 工具（如 Packer 和 Terraform）输出的工具（名字也由此而来）。正如 Serverspec 和 Testinfra 使用各自语言的测试引擎为服务器编写测试一样，Terratest 借助 Go 的 testing 包来编写相应的测试用例。
+\end{itemize}
+
+\label{idx:886}
+这里之所以纳入 Serverspec、Testinfra 和 Goss 这类工具，是因为它们展示了基础设施验证通常是如何进行的。它们常与 C++ 项目一起用于 CI/CD 流水线，尽管它们本身并不是用 C++ 写的。而 Terratest 则专注于测试 Terraform、Packer 这类 IaC 工具。由于它的适用范围超出了 C++ 工作流通常所需，这里只是为了完整性才提及，并不提供代码示例。
+
+下面来看看如何用 Serverspec、Testinfra 和 Goss 来验证部署是否按计划完成（至少从基础设施的角度来看是如此）。
+
+\subsection{使用 Serverspec 进行测试}
+
+\label{idx:887}
+\label{idx:888}
+下面是一个 Serverspec 测试示例，它检查特定版本的 Git 是否可用，以及 Let's Encrypt 配置文件是否存在：
+
+\begin{codebox}[text]
+# We want to have git 1:2.1.4 installed if we're running Debian
+describe package('git'), :if => os[:family] == 'debian' do
+  it { should be_installed.with_version('1:2.1.4') }
+end
+# We want the file /etc/letsencrypt/config/example.com.conf to:
+describe file('/etc/letsencrypt/config/example.com.conf') do
+  it { should be_file } # be a regular file
+  it { should be_owned_by 'letsencrypt' } # owned by the letsencrypt user
+  it { should be_mode 600 } # access mode 0600
+  it { should contain('example.com') } # contain the text example.com
+                                       # in the content
+end
+\end{codebox}
+
+即便不经常使用 Ruby 的人，也应该能读懂这套 Ruby DSL 语法。不过，你可能还是需要适应一下如何编写这类代码。
+
+\subsection{使用 Testinfra 进行测试}
+
+\label{idx:889}
+\label{idx:890}
+下面是用 Testinfra 实现同样检查的方式：
+
+\begin{codebox}[python]
+# 我们希望在主机上安装 Git
+def test_git_is_installed(host):
+    git = host.package("git")
+    # 我们测试该软件包是否已安装
+    assert git.is_installed
+    # 以及它是否匹配版本 1:2.1.4（采用 Debian 的版本编号方式）
+    assert git.version.startswith("1:2.1.4")
+# 我们希望 /etc/letsencrypt/config/example.com.conf 这个文件：
+def test_letsencrypt_file(host):
+    le = host.file("/etc/letsencrypt/config/example.com.conf")
+    assert le.user == "letsencrypt" # be owned by the letsencrypt user
+    assert le.mode == 0o600 # access mode 0600
+    assert le.contains("example.com") # contain the text example.com in the contents
+\end{codebox}
+
+\label{idx:891}
+\label{idx:892}
+Testinfra 使用的是普通的 Python 语法。它应该比较好读，但和 Serverspec 一样，你可能需要经过一些练习，才能自信地用它编写测试。
+
+\subsection{使用 Goss 进行测试}
+
+\label{idx:893}
+\label{idx:894}
+下面是一个 Goss 的 YAML 文件示例，它实现了同样的检查：
+
+\begin{codebox}[yaml]
+# 我们希望在主机上安装 Git
+package:
+  git:
+    installed: true # we test if the package is installed
+  versions:
+  - 1:2.1.4 # and if it matches version 1:2.1.4 (using Debian versioning)
+file:
+  # 我们希望 /etc/letsencrypt/config/example.com.conf 这个文件：
+  /etc/letsencrypt/config/example.com.conf:
+    exists: true
+  filetype: file # be a regular file
+  owner: letsencrypt # be owned by the letsencrypt user
+  mode: "0600" # access mode 0600
+  contains:
+  - "example.com" # contain the text example.com in the contents
+\end{codebox}
+
+无论是读还是写，YAML 语法大概都是需要准备工作最少的。不过，如果你的项目已经用到了 Ruby 或 Python，那么在编写较复杂的测试时，也许就该继续沿用 Serverspec 或 Testinfra。
+
+\section{小结}
+
+本章同时从架构和技术两个层面探讨了如何测试软件的各个部分。我们了解了测试金字塔，以理解不同类型的测试如何共同维护软件项目的整体健康与稳定。由于测试既可以是功能性的，也可以是非功能性的，我们看到了这两种类型的若干示例。
+
+本章最值得记住的一点是，测试并不是终点。我们之所以需要测试，不是因为它能带来立竿见影的价值，而是因为在重构时、或是在改变系统既有部分的行为时，可以用它来检查是否出现了已知的回归。当我们想做根因分析时，测试同样很有用，因为它可以快速验证各种假设。
+
+在明确了理论上的要求之后，我们展示了可用于编写测试替身（test double）的不同测试框架和库的示例。尽管先写测试、后写实现需要一些练习，但它有一个重要的好处，那就是更好的类设计。
+
+最后，为了强调现代架构不只是软件代码，我们还看了一些用于测试基础设施和部署的工具。
+
+对于那些始终如一地执行检查、并在每一步都把好质量关的自动化流水线而言，测试至关重要。下一章，我们将看到 CI 和 CD 如何为你设计和架构的应用带来更好的服务质量和健壮性。
+
+\section{问题}
+
+\begin{enumerate}
+\item 测试金字塔的最底层是什么？
+\item 有哪些类型的非功能性测试？
+\item 那个著名的根因分析方法叫什么？
+\item 可以测试 C++ 中的编译期代码吗？
+\item 为带有外部依赖的代码编写单元测试时，应该使用什么？
+\item 单元测试在 CI/CD 中起什么作用？
+\item 有哪些工具可以用来测试基础设施代码？
+\item 在单元测试中访问类的私有属性和方法是个好主意吗？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Marius Bancila，\emph{Modern C++ Programming Cookbook: Master Modern C++ with Comprehensive Solutions for C++23 and All Previous Standards}，第三版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/modern-c-programming-cookbook-9781835080542}{https://www.packtpub.com/en-us/product/modern-c-programming-cookbook-9781835080542}
+\item Martin Fowler，\emph{Mocks Aren't Stubs}：\href{https://martinfowler.com/articles/mocksArentStubs.html}{https://martinfowler.com/articles/mocksArentStubs.html}
+\item Martin Fowler，\emph{Test Pyramid}：\href{https://martinfowler.com/bliki/TestPyramid.html}{https://martinfowler.com/bliki/TestPyramid.html}
+\item LLVM Project，\emph{Clang: Source-Based Code Coverage}：\href{https://clang.llvm.org/docs/SourceBasedCodeCoverage.html}{https://clang.llvm.org/docs/SourceBasedCodeCoverage.html}
+\item GNU Project，\emph{gcov—A Test Coverage Program}：\href{https://gcc.gnu.org/onlinedocs/gcc/Gcov.html}{https://gcc.gnu.org/onlinedocs/gcc/Gcov.html}
+\item SmartBear，\emph{How to Avoid 7 Common Software-Testing Problems}：\href{https://smartbear.com/resources/ebooks/how-to-avoid-7-common-software-testing-problems/}{https://smartbear.com/resources/ebooks/how-to-avoid-7-common-software-testing-problems/}
+\item Pact，\emph{Should you use Pact? Convince me}：\href{https://docs.pact.io/faq/convinceme}{https://docs.pact.io/faq/convinceme}
+\item Pact，\emph{README}（Pact C++ 实现指南）：\href{https://docs.pact.io/implementation_guides/cpp}{https://docs.pact.io/implementation\_guides/cpp}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描这个二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

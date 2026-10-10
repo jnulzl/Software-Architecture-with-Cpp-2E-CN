@@ -1,0 +1,2064 @@
+微服务之所以如此有用，是因为它们可以多种方式组合，创造出新的价值。而组合依赖于高效的通信。这意味着，大多数情况下，当我们想使用某个特定的微服务时，就必须了解如何与它交互。好消息是，虽然微服务可以实现任何通信方式，但大多数微服务都遵循少数几种流行的做法。
+
+在微服务架构中，服务间通信对于保障系统的功能、可维护性和性能至关重要。要有效管理这种通信，就需要一套支持它的合适 API 架构。下面我们来探讨这类架构所支持的主要通信风格。
+
+本节将涵盖以下主题：
+
+\begin{itemize}
+\item 服务间通信简介
+\item 交互风格
+\item 消息系统
+\item 使用 Web 服务
+\item 远程过程调用
+\end{itemize}
+
+\section{技术要求}
+
+本章的代码已放在 GitHub 上，地址为 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter15}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter15}。
+
+\section{服务间通信简介}
+
+\label{idx:1482}
+\textbf{服务间通信}（\textbf{ISC}）是\textbf{进程间通信}（\textbf{IPC}）的一个子集。因此，下面我们先来看看 IPC。
+
+\label{idx:1483}
+IPC 指一系列广泛的方法，用于在一个或多个进程的线程之间交换数据，这些进程既可以运行在同一台机器上，也可以跨越多台通过网络连接的机器（包括 localhost）。这些方法包括文件、信号、网络套接字与本地（Unix 域）套接字、信号量、消息队列、消息传递、匿名管道与命名管道、共享内存，以及内存映射文件（仅用于本地 IPC，不用于 ISC）。
+
+ISC 是相互独立的服务之间的数据交换，这些服务通常分布在网络上，并通过更高层的协议进行交互。因此，它是在更高层、网络化的上下文中实现的，而 IPC 则涵盖进程之间交换数据的所有机制，包括本地机制。所以，ISC 是 IPC 的一种类型。
+
+\label{idx:1484}
+\label{idx:1485}
+\label{idx:1486}
+微服务之间的通信是其成功运行的关键因素。正确的交互模式与协议选择，能够保障整个系统的性能和顺畅运行。网络通信通常用标准模型来描述。\textbf{开放系统互连}（\textbf{OSI}）模型是一个七层概念模型，用于描述系统如何通过网络进行通信。\textbf{传输控制协议/网际协议}（\textbf{TCP/IP}）模型是 OSI 模型的一个简化的四层变体。
+
+\label{idx:1487}
+尽管核心的 IPC 概念在所有\textbf{操作系统}（\textbf{OS}）中都是一致的，但具体实现、性能特征和细微差别却各不相同。幸运的是，跨平台的高层 C++ 库——例如 STL、Boost、Qt 和 SDL——在很大程度上抽象掉了 IPC 实现中平台相关的差异，极大地便利了多平台上的软件开发。
+
+有了这些基础知识，我们现在来看看微服务实际是如何交互的。
+
+\section{交互风格}
+
+\label{idx:1488}
+微服务可以以不同的交互风格进行通信。在实践中，这些风格可以表示为客户端-服务器交互。重要的是，客户端-服务器关系描述的是某台机器在某一时刻所扮演的角色，而不是它固有的身份。这种关系可以从两个维度来划分：通信类型（同步或异步）和交互模型（一对一、一对多、多对一或多对多）。
+
+\label{idx:1489}
+\label{idx:1490}
+通信类型决定了客户端和服务器如何实时交互。\textbf{同步通信}遵循\emph{请求-响应}模型：客户端发送请求并等待响应。在同步模式下，客户端甚至可能为了等待服务返回响应而被阻塞很长时间。\textbf{异步通信}是\emph{发送后即忘}模型：客户端发送一条消息/事件，并不期待立即的响应。在异步模式下，客户端在服务器执行请求期间会继续工作而不会被阻塞。
+
+交互模型描述的是参与交换的客户端与服务器的数量。
+
+\myGraphic{0.888}{images/B18456_15_01.png}{图 15.1：交互风格}
+
+\label{idx:1491}
+\label{idx:1492}
+\textbf{一对一通信}是一种简单的交互，其中每个服务都与其他某个服务建立唯一且直接的连接，这意味着存在一套共同且有明确定义的契约或接口。当两个服务高度相互依赖、需要实时交换数据时，这种类型很有用。值得注意的是，这类服务的功能直接依赖于彼此的功能与可用性，这可能导致紧密耦合。
+
+\label{idx:1493}
+\label{idx:1494}
+\textbf{一对多通信}发生在一个服务与多个服务交互时。在这种情况下，消息会被路由和过滤。然而，即使通信系统提供了投递保证，消息仍可能丢失或重复。这种模型降低了服务之间的紧密耦合，使它们能够独立运行，因而适用于需要可扩展性和可用性、且存在多个并发客户端消息的场景。
+
+\label{idx:1495}
+\label{idx:1496}
+\textbf{多对一通信}与一对多通信正好相反。因此，接收消息的中心服务必须处理来自许多服务的、格式各异的大量传入请求。这种模型需要一套灵活且可扩展的架构，当服务需要集中式的功能或数据存储时很有用。这类通信促进了服务之间的松散连接，使它们能够独立运行，同时通过中心点保持对共享资源的访问。
+
+\label{idx:1497}
+\label{idx:1498}
+\label{idx:1499}
+\textbf{多对多通信}是一种复杂的交互，其中多个服务与多个服务相互交互。这类系统的可靠性和容错能力（包括故障检测与恢复）必须加以考虑，因为一个服务的故障可能影响整个系统。必须审慎地选择通信协议，以确保服务的兼容性和互操作性。服务之间的高效通信可能需要性能优化技术，包括缓存和负载均衡。这种模型适用于复杂且动态的场景。
+
+在许多分布式架构（包括微服务）中，这些交互风格都是通过消息传递来实现的，它允许应用或服务交换离散的消息，而无需直接连接或始终可用的连接。下一节我们将探讨不同的消息系统。
+
+\section{消息系统}
+
+\label{idx:1500}
+消息传递有许多不同的用例，从 IoT 和传感器网络，到运行在云中的基于微服务的分布式应用，不一而足。
+
+\label{idx:1501}
+消息传递的好处之一是，它以一种中立的方式连接用不同技术实现的服务。在开发\textbf{面向服务的架构}（\textbf{SOA}）时，每个服务通常由专门的团队开发和维护。团队可以选择自己用着顺手的工具，这包括编程语言、第三方库和构建系统。
+
+\label{idx:1502}
+维护一套统一的工具可能适得其反，因为不同的服务可能有不同的需求。例如，一个自助终端应用可能需要一个\textbf{图形用户界面}（\textbf{GUI}）库，而同一应用中的硬件控制器则有其他要求，比如依赖硬件厂商的第三方组件。这些依赖随后可能带来一些限制，无法同时满足两个组件的需求；例如，GUI 应用可能需要较新的编译器，而硬件那一方却被固定在一个较旧的编译器上。利用消息系统将这些组件解耦，可以让它们拥有各自独立的生命周期。
+
+消息系统的一些用例包括以下几种：
+
+\begin{itemize}
+\item 金融业务
+\item 车队监控
+\item 物流采集
+\item 传感器处理
+\item 数据订单履行
+\item 任务排队
+\end{itemize}
+
+以下各节将重点介绍为低开销而设计的消息系统，以及带代理（broker）的消息系统，这两者都可用于分布式系统。分布式消息系统将工作分散到许多相互连接的点上，而不是只依赖一个点来处理所有消息。
+
+\subsection{低开销消息系统}
+
+\label{idx:1503}
+\label{idx:1504}
+低开销消息系统是为资源受限的环境而设计的，例如传感器网络、IoT 设备和嵌入式系统，这些环境对小巧的占用空间和低延迟要求极高。它们在大规模云服务中不太常见，但通过与其他系统集成，仍可在此类场景中使用。
+
+\label{idx:1505}
+\label{idx:1506}
+\label{idx:1507}
+例如，微控制器上典型的 RAM 容量相当有限。Arduino 开发板有 2–4 KB，ESP32 有 520 KB，STM32 器件有 16–192 KB。\textbf{外设接口控制器}（\textbf{PIC}）的 RAM 容量差异很大，但通常在几十字节到几十千字节之间。自然，在这些微控制器的内存中处理以兆字节计的消息根本无从谈起。为这类控制器编程，与为早期处理器（例如 Zilog Z80，1976 年至 2024 年间生产）编程并无太大差别。
+
+\label{idx:1508}
+相比之下，工业\textbf{可编程逻辑控制器}（\textbf{PLC}）设备通常有 3–20 MB，而典型的 Linux IoT 控制器根据其用途和复杂度的不同，RAM 可从 32 MB 一直到 4 GB 甚至更多。这些设备可以支持更高级的消息系统，但在资源敏感的场景中，仍然可能受益于低开销消息系统。
+
+\subsubsection{MQTT}
+
+\label{idx:1509}
+\textbf{MQTT} 代表\textbf{消息队列遥测传输}。它是\textbf{结构化信息标准促进组织}（\textbf{OASIS}）和\textbf{国际标准化组织}（\textbf{ISO}）下的一个开放标准。MQTT 使用发布-订阅模型，通常基于 TCP/IP，但它也可以与其他传输协议配合使用，例如 QUIC（基于\textbf{用户数据报协议}——\textbf{UDP}）或 Bluetooth。
+
+\myGraphic{0.616}{images/B18456_15_02.png}{图 15.2：MQTT 架构}
+
+\label{idx:1510}
+MQTT 是一种轻量级消息协议，专为受限设备以及低带宽、高延迟或不可靠的网络而设计。另有一个单独的规范名为 \textbf{MQTT-SN}，它代表\textbf{面向传感器网络的 MQTT}。它聚焦于不带 TCP/IP 协议栈的电池供电嵌入式设备。
+
+\label{idx:1511}
+MQTT 使用一个消息代理（broker），它接收来自客户端的所有消息，并将这些消息路由到各自的目的地。它提供三个级别的\textbf{服务质量}（\textbf{QoS}），每一级都会影响性能和开销：
+
+\begin{itemize}
+\item \textbf{最多一次投递（不保证）}：消息会被发送，但不期待确认。适用于高频、非关键的数据，这类数据允许消息丢失，并且最看重最低延迟和低负载。
+\item \textbf{至少一次投递（确认投递）}：可能出现重复消息（例如由于连接不稳定）。适用于允许一定程度重复的重要数据。
+\item \textbf{恰好一次投递（确保投递）}：消息既不丢失也不重复。用于极其关键的一次性数据（例如金融交易、医疗设备读数或安全告警）。
+\end{itemize}
+
+MQTT 协议的理论最大消息大小为 256 MB，但在实践中，由于代理和客户端的限制，它往往要小得多。
+
+\label{idx:1512}
+MQTT 在各种 IoT 应用中尤其流行，这并不令人意外，因为高延迟和低带宽在这些应用中很常见。它得到 openHAB、Node-RED、Pimatic、ThingsBoard、Microsoft Azure IoT Hub、阿里云 IoT 以及 Amazon IoT 的支持。它在即时通信中也很流行，被用于 ejabberd 和 Facebook Messenger，主要面向移动应用，因为该协议能节省电池消耗。其他用例还包括汽车共享平台、物流和运输。
+
+\begin{myNotic}{注意}
+
+为了把 MQTT 放到具体的背景下，将它与其他 IoT 系统中常用的通信协议放在一起看会有所帮助。通信协议通常按其功能以及它们在 OSI 或 TCP/IP 模型中所处的层次来划分。在 IoT 协议栈中，通信方向包括\emph{传感器到传感器}（最常见的协议是 DDS）、\emph{传感器到服务器}（CoAP、MQTT、XMPP、STOMP）以及\emph{服务器到服务器}（AMQP）。它们代表了设备与系统交互的不同方式，具体选择取决于带宽、延迟和设备约束等因素。常见的 IoT 消息协议包括以下几种：
+
+\begin{itemize}
+\label{idx:1513}
+\label{idx:1514}
+\item \textbf{MQTT}：它从多个节点收集数据并将其传输到服务器。该协议基于发布-订阅模型，使用一个称为\textbf{代理}（broker）的中间服务器来处理消息优先级排序和代理排队。MQTT-SN 基于 MQTT，是面向传感器网络的专用协议。MQTT 的传输协议是 TCP。其主要特性包括轻量级设计、适合低带宽网络，以及在带宽占用极小的前提下可靠地投递消息。
+\label{idx:1515}
+\item \textbf{受约束应用协议}（\textbf{CoAP}）：它类似于 HTTP，但使用较短的报头，因而适合带宽有限的网络。该协议采用客户端-服务器架构，适合将节点状态信息传输到服务器（\texttt{GET}、\texttt{PUT}、\texttt{HEAD}、\texttt{POST}、\texttt{DELETE} 和 \texttt{CONNECT} 消息）。其传输协议是 UDP。其主要特性是适合低功耗的受限设备以及低功耗、可交互的联网。
+\label{idx:1516}
+\item \textbf{数据分发服务}（\textbf{DDS}）：它实现了一种发布-订阅模式，用于分布式节点之间的实时数据共享。该协议通过使用\emph{主题}对数据（例如温度、位置或压力）进行分类，从而将数据生产者（发布者）与数据消费者（订阅者）解耦。DDS 通过 QoS 管理确保可靠的投递。其传输协议是 UDP。它是一种中间件，用于支持数据连接以及可扩展的实时数据交换。
+\end{itemize}
+\end{myNotic}
+
+\begin{myNotic}{注意}
+
+\label{idx:1517}
+\textbf{可扩展消息与存在协议}（\textbf{XMPP}）：它长期以来一直用于互联网上的实时消息传递。其 XML 格式使其适合 IoT 网络。该协议运行在发布-订阅和客户端-服务器架构之上。它还可用于在小网络中寻址 \texttt{name@domain.\allowbreak{}com} 类型的设备。标准 XMPP 协议使用 TCP，但可以通过 HTTP（BOSH/WebSocket）传输，以绕过防火墙等网络限制。其主要特性是实时通信与数据交换、即时反馈以及交互性。
+
+IoT 协议栈构建在 TCP/IP 模型之上，其中每一层（应用层、传输层、网际层和网络接入层）都执行将数据从设备传输到应用的具体功能
+\end{myNotic}
+
+\label{idx:1518}
+然而，该协议也有一些缺点：
+
+\begin{itemize}
+\item 不支持视频流传输。
+\item 所有通信都要经过代理，因此代理故障可能导致整个系统瘫痪。
+\label{idx:1519}
+\item 尽管该协议支持\textbf{安全套接层} / \textbf{传输层安全}（\textbf{SSL}/\textbf{TLS}），但实现安全连接需要额外的投入。脆弱性可能源于薄弱的认证机制（仅用户名和密码）、未加密的消息以及不完整的\textbf{访问控制列表}（\textbf{ACL}）。
+\label{idx:1520}
+\item 使用 TLS / \textbf{数据报传输层安全}（\textbf{DTLS}）来保障安全，可能会给资源非常有限的设备带来过重的负担，致使它们无法使用 MQTT。
+\item 在设备众多的超大型网络上，可能需要额外的优化来维持性能。
+\item MQTT 协议并非为处理大型数据集或复杂结构而设计。
+\item 许多流行的代理（例如 Mosquitto）没有内置的 Web 界面，迫使用户借助第三方工具来进行管理和监控。
+\end{itemize}
+
+支持该标准的 C++ 库有 Eclipse Paho、\texttt{mqtt\_cpp}（基于 C++14 和 Boost.Asio）、\texttt{Boost.\allowbreak{}MQTT5}（一个基于 Boost.Asio 的 C++17 MQTT 客户端）、\texttt{libmosquitto}、\texttt{qmqtt}，以及用于跨平台 Qt 框架的 Qt MQTT、\texttt{pubsubclient}、用于 \texttt{Arduino} 的 \texttt{arduino-mqtt}，以及用于 ESP32 的 \texttt{esp-mqtt} 和 \texttt{esp-idf}。
+
+下面的示例展示了如何使用 Eclipse Paho 库发布和订阅 MQTT 消息。
+
+在 \texttt{publisher.\allowbreak{}cpp} 中，\texttt{callback} 类处理两个事件：连接丢失和消息投递。这些事件回调由 MQTT 客户端触发：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+const std::string SERVER_ADDRESS("tcp://localhost:1883");
+const std::string CLIENT_ID("publisher");
+const std::string TOPIC("test/topic");
+constexpr int QOS = 1;
+class callback final : public mqtt::callback {
+public:
+  void connection_lost(const std::string &cause) override {
+    std::cout << "Connection lost: " << cause << std::endl;
+  }
+  void delivery_complete(mqtt::delivery_token_ptr token) override {
+    std::cout << "Message delivered" << std::endl;
+  }
+};
+\end{codebox}
+
+\label{idx:1521}
+这个异步客户端设置事件处理器，连接到 MQTT 服务器，向 \texttt{test/\allowbreak{}topic} 主题发送一条消息，并在与服务器断开连接后终止：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+mqtt::async_client client(SERVER_ADDRESS, CLIENT_ID);
+callback cb;
+client.set_callback(cb);
+mqtt::connect_options conn_opts;
+conn_opts.set_keep_alive_interval(20);
+conn_opts.set_clean_session(true);
+try {
+  client.connect(conn_opts)->wait();
+  std::cout << "Connected to MQTT broker" << std::endl;
+  std::string payload = "It's a UNIX system!";
+  mqtt::message_ptr pub_msg = mqtt::make_message(TOPIC, payload, QOS, false);
+  client.publish(pub_msg)->wait();
+  std::cout << "Message published: " << payload << std::endl;
+  client.disconnect()->wait();
+  std::cout << "Disconnected" << std::endl;
+} catch (const mqtt::exception &exc) {
+  std::cerr << "MQTT Exception: " << exc.what() << std::endl;
+  return 1;
+}
+\end{codebox}
+
+现在，我们已经为客户端准备好了配置和事件处理器，建立了连接，发布了一条消息，并通过断开与代理的连接完成了清理。
+
+在 \texttt{subscriber.\allowbreak{}cpp} 中，\texttt{callback} 类处理两个事件：连接丢失和消息到达。这些事件回调由 MQTT 客户端触发：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+const std::string SERVER_ADDRESS("tcp://localhost:1883");
+const std::string CLIENT_ID("subscriber");
+const std::string TOPIC("test/topic");
+constexpr int QOS = 1;
+class callback final : public mqtt::callback {
+public:
+  void connection_lost(const std::string &cause) override {
+    std::cout << "Connection lost: " << cause << std::endl;
+  }
+  void message_arrived(mqtt::const_message_ptr msg) override {
+    std::cout << "Message arrived: " << msg->get_payload_str() << std::endl;
+  }
+};
+\end{codebox}
+
+\label{idx:1522}
+这个异步客户端会设置事件处理器，连接到 MQTT 服务器，等待发往 \texttt{test/\allowbreak{}topic} 主题的消息，并在按下 \emph{Enter} 键时断开与服务器的连接后终止：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+mqtt::async_client client(SERVER_ADDRESS, CLIENT_ID);
+callback cb;
+client.set_callback(cb);
+mqtt::connect_options conn_opts;
+conn_opts.set_keep_alive_interval(20);
+conn_opts.set_clean_session(true);
+try {
+  client.connect(conn_opts)->wait();
+  std::cout << "Connected to MQTT broker" << std::endl;
+  client.subscribe(TOPIC, QOS)->wait();
+  std::cout << "Subscribed to topic: " << TOPIC << std::endl;
+  std::cout << "Press Enter to exit..." << std::endl;
+  std::cin.get();
+  client.disconnect()->wait();
+  std::cout << "Disconnected" << std::endl;
+} catch (const mqtt::exception &exc) {
+  std::cerr << "MQTT Exception: " << exc.what() << std::endl;
+  return 1;
+}
+\end{codebox}
+
+订阅者现在连接到 broker，接收发布在订阅主题上的消息，并在程序结束时断开连接。
+
+\subsubsection{ZeroMQ}
+
+\label{idx:1523}
+\label{idx:1524}
+\label{idx:1525}
+\label{idx:1526}
+\label{idx:1527}
+ZeroMQ（也称为 ØMQ、0MQ 或 zmq）是一种无代理的消息队列。它支持多种通信模式，例如发布–订阅、请求–应答、推–拉、pair、dealer–router、router–dealer 以及 xpub–xsub（一种扩展的发布–订阅模式，支持动态发现主题）。它独立于任何特定传输方式，可用于 TCP、UDP、\textbf{实用通用组播}（\textbf{PGM}，一种可靠的组播传输协议）、\textbf{面向 NACK 的可靠组播}（\textbf{NORM}，一种组播传输协议）、inproc（单个进程内的直接内存访问）、\textbf{通用安全服务应用程序接口}（\textbf{GSSAPI}）、WebSocket 以及 IPC（在本地进程之间传递消息的进程间传输）。
+
+\myGraphic{0.742}{images/B18456_15_03.png}{图 15.3：ZeroMQ 发布–订阅通信}
+
+\label{idx:1528}
+作为一种消息系统（即“面向消息的中间件”），ZeroMQ 被广泛应用于金融服务业、游戏开发、嵌入式系统、学术研究和航空航天等诸多行业。最初，该系统被构想为用于股票交易的一种超高速消息系统，因此极致优化是其重点。正因如此，它适合对消息快速投递有硬性要求的实时应用。后来，开发重心转向提供一套通用系统，用于构建分布式应用，并支持任意消息模式、多种语言绑定以及各种传输机制。其名称所包含的核心理念在于，ZeroMQ 在设计上是无代理的，这减少了集中式管理，但也把职责（路由、持久化和监控）转移到应用上。它还被宣传为能提供零延迟，即不会因代理的存在而引入额外延迟。此外，ZeroMQ 能够处理最大 2\textsuperscript{63}-1 字节的消息。
+
+\label{idx:1529}
+\label{idx:1530}
+ZeroMQ 的主要缺点在于缺少内置的消息投递保证。无代理消息传递的可扩展性可能不如有代理消息传递，因为消息分发和负载均衡由各个服务自行负责。没有中心消息代理，就更难监控和管理消息流，也难以确保所有服务对消息的处理保持一致。不过，确实存在一款用于 ZeroMQ 的代理，名为 Malamute。
+
+ZeroMQ 的底层代码库是用 C 编写的，并为各种主流编程语言（包括 C++）提供了实现。C++ 方面最流行的实现是 \texttt{libzmq}，它主要用 C++98 编写，带有一些可选的 C++11 片段；其他库还有 \texttt{azmq}（将 ZeroMQ 与 Boost.Asio 集成）和 \texttt{cppzmq}（一个用 C++11 编写的仅头文件库）。
+
+下面的例子基于 \texttt{libzmq} 库。ZeroMQ 提供两种发送数据的方式：\texttt{zmq\_send} 函数用于简单消息，\texttt{zmq\_\allowbreak{}msg\_\allowbreak{}send} 函数用于发送多部分消息。它们都有对应的接收函数。
+
+在 \texttt{publisher.\allowbreak{}cpp} 中，\texttt{zmq\_send} 函数返回已发送的字节数。消息长度与已发送数据不一致即表示出错：
+
+\begin{codebox}[text]
+// omitted code
+...
+void *context = zmq_ctx_new();
+void *publisher = zmq_socket(context, ZMQ_PUB);
+int rc = zmq_bind(publisher, "tcp://127.0.0.1:5556");
+assert(rc == 0);
+char msg[] = "Gravity cascades";
+size_t msg_size = strlen(msg);
+while (true) {
+  rc = zmq_send(publisher, msg, msg_size, 0);
+  assert(rc == msg_size);
+\end{codebox}
+
+值得注意的是，这样的循环在消息之间没有任何延迟，会让处理器和网络过载，但这里的实现是刻意简化的，纯粹用于教学。
+
+终止时，发布者应关闭套接字并销毁 ZeroMQ 上下文，以释放系统资源：
+
+\begin{codebox}[text]
+}
+zmq_close(publisher);
+zmq_ctx_destroy(context);
+\end{codebox}
+
+该循环被设计为不断发送同一条消息，这样后续连接的订阅者仍然能收到消息。
+
+\label{idx:1531}
+\label{idx:1532}
+在 \texttt{subscriber.\allowbreak{}cpp} 中，\texttt{zmq\_recv} 函数把消息接收到缓冲区中，并返回读取的字节数。如果消息超过缓冲区长度，它会把消息截断。另一方面，\texttt{zmq\_\allowbreak{}msg\_\allowbreak{}recv} 函数允许接收多部分消息，但下面的代码只使用了 \texttt{zmq\_recv}：
+
+\begin{codebox}[text]
+// omitted code
+...
+#define MSG_SIZE 1024
+void *context = zmq_ctx_new();
+void *subscriber = zmq_socket(context, ZMQ_SUB);
+int rc = zmq_connect(subscriber, "tcp://127.0.0.1:5556");
+assert(rc == 0);
+rc = zmq_setsockopt(subscriber, ZMQ_SUBSCRIBE, "", 0);
+assert(rc == 0);
+char msg[MSG_SIZE + 1];
+while (true) {
+  rc = zmq_recv(subscriber, msg, MSG_SIZE, 0);
+  assert(rc != -1);
+  msg[rc] = '\0'; // important
+  printf("%s\n", msg);
+}
+zmq_close(subscriber);
+zmq_ctx_destroy(context);
+\end{codebox}
+
+\texttt{zmq\_recv} 函数返回已接收的字节数。由于消息被当作以 null 结尾的 C 字符串（ASCIIZ），即字符数组，因此要用这个值把终止空字符（\texttt{'\textbackslash{}0'}）放在已接收字节之后。否则，屏幕上会显示栈中遗留的字符。终止时，订阅者也应关闭套接字并销毁 ZeroMQ 上下文。
+
+\label{idx:1533}
+尽管 \texttt{libzmq} 提供了 C++ 绑定，但从程序编写风格和资源管理来看，它仍是一个 C 库。在某种程度上，\texttt{cppzmq} 和 \texttt{azmq} 库通过用 C++ 类进行包装，隐藏了该库的 C 语言特性。
+
+\subsection{有代理的消息系统}
+
+\label{idx:1534}
+常见的有代理消息系统是 RabbitMQ 和 Apache Kafka。两者都是成熟的解决方案，在大量不同的设计中极受欢迎。
+
+\label{idx:1535}
+许多文章热衷于讨论 RabbitMQ 和 Apache Kafka 在某一方面的优劣。这种观点略有偏差，因为这两种消息系统基于不同的范式。
+
+Apache Kafka 专注于流式传输海量数据，并把数据流存储在持久化内存中，以便日后重放。而 RabbitMQ 常用作不同微服务之间的消息代理，或用作处理后台作业的任务队列。正因如此，RabbitMQ 的路由能力比 Apache Kafka 强得多。尽管在项目中常常并行使用这两种系统，但每种技术各有其长处。
+
+RabbitMQ 和 Apache Kafka 有着不同的消息投递模型。Apache Kafka 的消费者主动拉取消息，而 RabbitMQ 则把消息推送给消费者。
+
+可扩展性方面的考量也可能影响在两种消息代理之间的取舍。Apache Kafka 的架构便于横向扩展，也就是向现有工作节点池中加入更多机器。而 RabbitMQ 的设计则着眼于纵向扩展，也就是为现有机器增加更多资源，而不是增加更多规格相近的机器。
+
+\subsubsection{Apache Kafka}
+
+\label{idx:1536}
+\label{idx:1537}
+\label{idx:1538}
+Apache Kafka 用 Java 编写，是一个分布式事件流平台，用于构建实时数据管道和流式应用。高吞吐量、低延迟、可扩展性和可靠性使它适用于多种用例：消息队列、实时数据流处理（例如处理来自 IoT 设备的持续数据）、日志聚合、事件挖掘、数据集成、大数据分析、\textbf{抽取、转换、加载}（\textbf{ETL}——一种数据仓库处理过程）以及微服务互操作。Apache Kafka 最初由 LinkedIn 为自身需求而创建，如今广泛用于物流与供应链、金融行业、电信和在线商务等领域。
+
+Apache Kafka 有自己基于 TCP/IP 的协议。该平台可通过 Kafka 连接器与其他系统集成，尤其是 Cassandra、FTPS、MQTT、Mongo、MySQL、PostgreSQL、RabbitMQ 和 Redis。
+
+简单来说，该系统的架构可以概括如下：
+
+\begin{itemize}
+\item \textbf{生产者}：向 Kafka 主题发布消息（生成并发送数据）的应用。
+\item \textbf{消费者}：订阅 Kafka 主题并从分区中读取消息（由生产者生成）的应用，通常属于某个消费者组。该组会分担处理来自主题分区的消息的工作量，以实现并行。
+\label{idx:1539}
+\label{idx:1540}
+\item \textbf{消息}：执行某项操作所需的数据包。Kafka 中的消息存储在提交日志中，其中每条记录（日志）都按严格顺序排列。消息只能追加到日志中，不能删除或修改。Kafka 代理把消息存储在集群上的主题中，每个主题又划分为若干分区。日志保留并非永久，而是一直保留到某个阈值或某段时间（数天、数周、数月）。这样，即使在数据传输之后，也可以随时对数据进行处理和分析。Apache Kafka 中默认的最大消息大小为 1 MB，强烈建议不要超过该上限，以免代理被大消息压垮。不过，如果确实有必要提高建议的最大消息大小，则应修改生产者、消费者和主题的配置参数。
+\item \textbf{主题}：用于承载相同或相似内容消息的具名逻辑通道，组织为不可变、按时间排序的记录序列。
+\item \textbf{代理}：把消息从生产者传输到消费者的调度器（节点）。多个协同工作的代理构成一个 Kafka 集群。
+\item \textbf{分区}：主题的一个较小的有序片段，用于跨多个代理进行扩展和并行处理。分区会在代理之间复制，以实现容错。
+\label{idx:1541}
+\item \textbf{协调服务}：用于管理 Kafka 代理和集群的分布式服务。该服务维护配置信息、命名、分布式同步、容错以及分区的领导者选举。对于新的 Apache Kafka 集群，推荐选用 \textbf{Kafka Raft}（\textbf{KRaft}），而此前使用的是 Zookeeper。Raft 是一种共识算法，允许代理选举并追随一个领导者。领导者负责该分区的所有读写操作，每个分区都有自己的领导者，而追随者会复制领导者的数据，以确保冗余和故障转移。
+\end{itemize}
+
+\emph{图 15.4} 展示了 Apache Kafka 的架构：
+
+\myGraphic{0.667}{images/B18456_15_04.png}{图 15.4：Apache Kafka 架构}
+
+\label{idx:1542}
+\label{idx:1543}
+Kafka 提供了确保安全运行和数据可靠性的工具。投递保证有三种：至多一次、至少一次和精确一次。此外，Kafka 事务中的 \texttt{read\_\allowbreak{}committed} 事务隔离级别可以阻止消费者读取来自进行中或已中止事务的消息，这些消息包括未完成或已取消的消息。
+
+由于采用分布式架构且对配置有诸多要求，搭建 Kafka 可能相当复杂。虽然该方案提供了更强的可扩展性和容错能力，但要求服务提供方对该技术有更深入的理解。Kafka 提供了数量庞大的配置参数，即使对经验丰富的开发者来说也难以理解，更不用说初学者了。对于复杂的消息处理模式，最好使用 RabbitMQ 这类现成的解决方案，因为 Kafka 开箱即用时并不提供这种功能。因此，对于没有实时数据处理需求的小型简单项目来说，Apache Kafka 属于杀鸡用牛刀。
+
+\label{idx:1544}
+常见的 Kafka GUI 工具包括 Kafbat UI、KafkIO、Aiven Kafka UI、Kafka-UI、AKHQ、Burrow、\textbf{Cluster Manager for Apache Kafka}（\textbf{CMAK}）、Conduktor、Kafdrop、Kafka IDE、Redpanda Console 和 kPow。
+
+Apache Kafka 的 C++ 客户端库有 \texttt{librdkafka}、\texttt{modern-cpp-kafka} 和 \texttt{cppkafka}。
+
+下面的例子基于 \texttt{modern-cpp-kafka} 库，该库依赖 \texttt{librdkafka} 库。
+
+在 \texttt{producer.\allowbreak{}cpp} 中，活动 Kafka 代理列表由 \texttt{KAFKA\_\allowbreak{}BROKER\_\allowbreak{}LIST} 环境变量指定。如果未设置该变量，生产者默认使用本地代理。主题同样可以通过 \texttt{TOPIC} 环境变量指定：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+using namespace kafka;
+using namespace kafka::clients::producer;
+//192.168.0.1:9092,192.168.0.2:9092,192.168.0.3:9092
+const char *tmp = std::getenv("KAFKA_BROKER_LIST");
+std::string brokers{tmp != nullptr ? tmp : "127.0.0.1:9092"};
+tmp = std::getenv("TOPIC");
+const Topic topic{tmp != nullptr ? tmp : "test-topic"};
+\end{codebox}
+
+\label{idx:1545}
+\label{idx:1546}
+Kafka 代理有一个 \texttt{auto.\allowbreak{}create.\allowbreak{}topics.\allowbreak{}enable} 属性，用于控制是否自动创建主题（完整的属性列表要长得多，如需更细致的自定义设置，应参阅 Kafka 文档）：
+
+\begin{codebox}[text]
+const Properties props({{"bootstrap.servers", {brokers}},
+                        {"auto.create.topics.enable", {"true"}}});
+KafkaProducer producer(props);
+\end{codebox}
+
+配置好生产者后，代码会发送一条消息，调用打印投递状态的投递回调，然后终止：
+
+\begin{codebox}[cpp]
+std::string line{"Ready player three"};
+ProducerRecord record(topic, NullKey, Value(line.c_str(), line.size()));
+auto deliveryCb = [](const RecordMetadata &metadata, const Error &error) {
+  if (!error) {
+    std::cout << "Message delivered: " << metadata.toString() << std::endl;
+  } else {
+    std::cerr << "Message failed to be delivered: " << error.message()
+              << std::endl;
+  }
+};
+producer.send(record, deliveryCb);
+producer.close();
+\end{codebox}
+
+既然生产者已经能够发布消息，下一步就来看看消费者如何接收它们。
+
+在 \texttt{consumer.\allowbreak{}cpp} 中，消费者的设置与生产者的设置类似：
+
+\begin{codebox}[text]
+// omitted code
+...
+using namespace kafka;
+using namespace kafka::clients::consumer;
+// common code
+...
+KafkaConsumer consumer(props);
+\end{codebox}
+
+消费者订阅该主题，并在一个无限外层循环中轮询记录：
+
+\begin{codebox}[cpp]
+consumer.subscribe({topic});
+while (true) {
+  auto records = consumer.poll(std::chrono::milliseconds(100));
+  for (const auto &record : records) {
+    if (!record.error()) {
+      std::cout << "Got a new message..." << std::endl;
+      std::cout << "\tTopic    : " << record.topic() << std::endl;
+      std::cout << "\tPartition: " << record.partition() << std::endl;
+      std::cout << "\tOffset   : " << record.offset() << std::endl;
+      std::cout << "\tTimestamp: " << record.timestamp().toString()
+                << std::endl;
+      std::cout << "\tHeaders  : " << toString(record.headers()) 
+                << std::endl;
+      std::cout << "\tKey   [" << record.key().toString() << "]" 
+                << std::endl;
+      std::cout << "\tValue [" << record.value().toString() << "]"
+                << std::endl;
+    } else {
+      std::cerr << record.toString() << std::endl;
+    }
+  }
+}
+consumer.close();
+\end{codebox}
+
+\label{idx:1547}
+\label{idx:1548}
+消费者接收并打印消息，直到内层循环退出。至此，消费者的工作流程就完整了。
+
+\subsubsection{RabbitMQ}
+
+\label{idx:1549}
+\label{idx:1550}
+\label{idx:1551}
+\label{idx:1552}
+\label{idx:1553}
+RabbitMQ 用 Erlang 编写，是一种轻量级消息代理，用于在各种系统之间交换消息。RabbitMQ 使用异步的 \textbf{高级消息队列协议}（\textbf{AMQP}），但也支持其他协议，例如 MQTT 和 \textbf{面向文本的简单消息协议}（\textbf{STOMP}）。这意味着 RabbitMQ 可以与基于这些受支持协议的其他现有解决方案互操作。如果你编写了一个使用 AMQP 与 RabbitMQ 交互的应用，日后应该可以将其迁移为使用 Apache Qpid、Apache ActiveMQ，或 Amazon MQ、Azure Service Bus 之类的托管方案。
+
+\label{idx:1554}
+RabbitMQ 的组件如下：
+
+\begin{itemize}
+\item \textbf{发布者}：创建消息并发送到交换机的应用。
+\item \textbf{消费者}：订阅队列中的消息、接收并处理消息的应用。
+\item \textbf{队列}：存储带优先级的消息，并将其分发给消费者。RabbitMQ 中默认的最大消息大小在 4.x 版本中是 16 MB，在更早的版本中是 128 MB。
+\item \textbf{绑定}：将交换机与队列连接起来的关联，用于把消息路由到特定队列。该规则定义了交换机与队列之间的关系。
+\label{idx:1555}
+\label{idx:1556}
+\label{idx:1557}
+\item \textbf{交换机}：根据交换机与队列之间的绑定把消息路由到队列。交换机有不同类型：
+
+\begin{itemize}
+\item \textbf{直连交换机}：消息被发送到路由键与消息的路由键相匹配的队列。
+\item \textbf{主题交换机}：消息被发送到路由键匹配某个模式的队列。模式可以由数字、英文字母以及 \texttt{*}（恰好匹配一个单词）和 \texttt{\#}（匹配零个或多个单词）通配符组成，单词之间用点分隔。
+\item \textbf{扇出交换机}：消息被无条件地发送到所有队列。
+\item \textbf{首部交换机}：消息被发送到绑定属性与消息首部相对应的队列。\texttt{x-match} 绑定参数指定必须匹配所有首部属性还是只匹配其中任意一个。
+\end{itemize}
+\end{itemize}
+
+\emph{图 15.5} 展示了 RabbitMQ 的架构：
+
+\myGraphic{0.920}{images/B18456_15_05.png}{图 15.5：RabbitMQ 架构}
+
+\label{idx:1558}
+RabbitMQ 可以创建虚拟主机，以隔离代理内部的消息环境。它还支持集群，以实现高可用性和可扩展性。
+
+队列长度可以设限。默认情况下，RabbitMQ 会从队列前端丢弃消息或将其作为死信（也就是队列中最旧的消息）。不过，可以通过队列设置改变这一行为，让代理丢弃或把最近发布的消息作为死信。如果启用了发布确认，代理会就这一事件通知发布者。
+
+\label{idx:1559}
+使用 RabbitMQ，你还可以为消息和队列指定 \textbf{生存时间}（\textbf{TTL}）参数或策略。这样，消息和队列就会自动过期。死信交换机则是一种在过期消息因某种原因未被处理时日后重新发布它们的方式。
+
+\label{idx:1560}
+RabbitMQ 中的队列是单线程的，单个队列最多能处理 50,000 条消息。因此，为了在多核系统中获得更好的吞吐量，建议创建多个队列和消费者。
+
+\label{idx:1561}
+\label{idx:1562}
+RabbitMQ 的投递保证通过消息持久化、消费者确认和发布者确认来实现。经典队列在代理重启后无法存活，因为除非声明为 \emph{持久}，否则它们不会被复制并持久化到磁盘，这与基于复制的仲裁队列不同。默认情况下，代理不会发送发布者确认，因此如果代理或连接失败，消息就会直接丢失。所以，如果没有收到该确认，就必须重新发送消息。
+
+此外，只有在消费者确认消息已投递之后，代理才能从队列中删除该消息，否则消息会被重新投递。使用确认可以保证 \emph{至少一次} 投递。如果没有确认，消息可能在发布和消费过程中丢失，只能保证 \emph{至多一次} 投递。由于保证不明确且性能较差，RabbitMQ 中并不常用事务。
+
+后台处理和长时间运行的处理是 RabbitMQ 的最佳用例，此时消息被放入队列而不立即处理。RabbitMQ 常用于微服务架构，作为应用之间的通信手段。它非常适合复杂的消息路由（例如选择性订阅或发布），提供了非常灵活的功能。它也是从一个微服务向另一个微服务发送短生命周期消息的绝佳选择。它可用于发送实时通知、在 Web 服务器上分发任务、IoT 设备通信、实时数据摄取与分析、电子商务订单处理与交易、游戏应用、搜索引擎索引以及文档处理。
+
+\label{idx:1563}
+RabbitMQ 自带一个名为管理插件的易用界面。
+
+RabbitMQ 的 C++ 客户端库有 \texttt{AMQP-CPP}、\texttt{Simple\allowbreak{}Amqp\allowbreak{}Client}、\texttt{rmqcpp}、\texttt{amqpcpp} 和 \texttt{hareflow}。
+
+下面的例子展示了如何使用 \texttt{AMQP-CPP} 和 \texttt{libevent} 库来发布和消费消息。\texttt{libevent} 是一个高性能的事件驱动网络库，专为异步通信而设计。它可以提供高效的 I/O 多路复用、定时事件管理以及信号处理。\texttt{AMQP-CPP} 库还支持 Boost.Asio（用于网络和底层 I/O 编程的 C++ 库）、\texttt{libev}（高性能的异步 I/O C 库）和 \texttt{libuv}（用于异步 I/O 的 C 库，Node.js 中即采用它）库。
+
+在 \texttt{producer.\allowbreak{}cpp} 中，事件处理和打开通道的实现对生产者和消费者来说完全相同：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+auto evbase = event_base_new();
+AMQP::LibEventHandler handler(evbase);
+AMQP::TcpConnection connection(
+    &handler, AMQP::Address("amqp://guest:guest@localhost:5672/"));
+AMQP::TcpChannel channel(&connection);
+channel.onError([&evbase](const char *message) {
+  std::cout << "Channel error: " << message << std::endl;
+  event_base_loopbreak(evbase);
+});
+\end{codebox}
+
+交换机的声明对两者也完全相同：
+
+\begin{codebox}[text]
+auto exchange_name = "greet-exchange";
+channel.declareExchange(exchange_name, AMQP::ExchangeType::direct);
+\end{codebox}
+
+\label{idx:1564}
+\label{idx:1565}
+\label{idx:1566}
+\label{idx:1567}
+由于 AMQP 本质上是一种异步协议，代码遵循 \textbf{事件驱动架构}（\textbf{EDA}），其中每个动作都是为了响应事件而发生的。这些事件需要处理器和事件回调，由它们启动工作流中的后续动作：
+
+\begin{codebox}[text]
+channel.confirmSelect()
+    .onSuccess([&]() {
+      auto routing_key = "greet-routing";
+      channel.publish(exchange_name, routing_key,
+                      "Tommy, Chuckie, Phil and Lil");
+    })
+    .onAck([&](uint64_t delivery_tag, bool multiple) {
+      event_base_loopbreak(evbase);
+    })
+    .onNack([&](uint64_t delivery_tag, bool multiple, bool requeue) {
+      event_base_loopbreak(evbase);
+    });
+event_base_dispatch(evbase);
+event_base_free(evbase);
+\end{codebox}
+
+这里，通道同时处理成功事件和错误事件。通道成功打开后，就可以发布消息了，发布发生在相应的事件回调中。\texttt{ack} 和 \texttt{nack} 事件表示消费者已成功处理此前发送的消息。这种方式可以支持复杂的消息处理场景，但在我们这个简单的例子中，两个事件都会导致程序终止。
+
+调用 \texttt{event\_\allowbreak{}base\_\allowbreak{}dispatch(\allowbreak{}evbase)\allowbreak{}} 会启动 \texttt{libevent} 循环，该循环等待 AMQP 事件并分派相应的回调。循环会在这些回调内部被中断；否则程序会一直运行下去。循环退出后，\texttt{event\_\allowbreak{}base\_\allowbreak{}free(\allowbreak{}evbase)\allowbreak{}} 会在终止前执行清理。
+
+在 \texttt{consumer.\allowbreak{}cpp} 中，消费者声明一个队列并把该队列绑定到交换机：
+
+\begin{codebox}[text]
+// omitted code
+...
+// common code
+...
+auto queue_name = "greet-queue";
+channel.declareQueue(queue_name, AMQP::durable);
+auto routing_key = "greet-routing";
+channel.bindQueue(exchange_name, queue_name, routing_key);
+\end{codebox}
+
+\label{idx:1568}
+\label{idx:1569}
+\label{idx:1570}
+随后消费者注册一个处理器来处理传入的消息。它持续运行，并对已处理的消息进行确认：
+
+\begin{codebox}[cpp]
+channel.consume(queue_name)
+    .onReceived(
+        [&channel](const AMQP::Message &msg, uint64_t tag, bool 
+                   redelivered) {
+                                std::cout << "Received: " << std::string{
+                                msg.body(), msg.bodySize()
+                                }
+                   << std::endl;
+         channel.ack(tag);
+        });
+event_base_dispatch(evbase);
+event_base_free(evbase);
+\end{codebox}
+
+消息传递只是组件之间通信的一种方式。在很多情况下，尤其是需要即时响应时，Web 服务处于核心地位。下一节我们就来关注它们。
+
+\section{使用 Web 服务}
+
+\label{idx:1571}
+\label{idx:1572}
+Web 服务的共同特征是它们基于标准 Web 技术。大多数情况下，这指的是 \textbf{HTTP}，也是我们将重点讨论的技术。虽然可以基于不同协议实现 Web 服务，但这类服务极为罕见，因此不在我们的讨论范围之内。
+
+\subsection{处理 Web 服务的工具}
+
+\label{idx:1573}
+使用 HTTP 作为传输方式的一大好处是可用工具非常丰富。大多数情况下，只需一个 Web 浏览器就可以测试和调试 Web 服务。除此之外，还有许多有助于自动化的附加程序。包括以下几种：
+
+\begin{itemize}
+\item 标准的 Unix 文件下载工具 \texttt{wget}
+\item 现代的 HTTP 客户端 \texttt{curl}
+\item 流行的开源库，例如 \texttt{libcurl}、\texttt{curlpp}、\texttt{cpr}（C++ HTTP 请求库）、\texttt{cpp-httplib} 以及 Asio C++ Library
+\item 测试框架，例如 Appium、Cypress、K6、Locust、Playwright、Puppeteer、Selenium 和 Robot Framework
+\item 浏览器扩展，例如 Wappalyzer、Percy、Lighthouse 和 Firebug
+\label{idx:1574}
+\item HTTP/API 客户端，例如 Bruno、Hoppscotch、Insomnia 和 Postman
+\item 专用的测试软件，包括 SoapUI、Burp Suite 和 Katalon Studio
+\item 数据包分析器，例如 Wireshark、HTTP Toolkit 和 Fiddler
+\end{itemize}
+
+\subsection{Web API 的有效载荷格式}
+
+\label{idx:1575}
+微服务通常会对外暴露 API。这些 API 使与微服务通信成为可能。由于典型的通信方式要借助计算机网络，因此最流行的 API 形式是 Web（HTTP）API。
+
+\label{idx:1576}
+基于 HTTP 的 Web 服务的工作方式是，针对使用恰当 HTTP 动词（\texttt{GET}、\texttt{POST}、\texttt{PUT}、\texttt{PATCH}、\texttt{DELETE}、\texttt{HEAD}、\texttt{OPTIONS}、\texttt{TRACE} 和 \texttt{CONNECT}）的 HTTP 请求，返回一个 HTTP 响应。请求与响应应当呈现什么样的形式、应当传递什么数据，其语义因风格和技术而异。
+
+Web 服务通常按负载（payload）格式分类：基于 XML 的与基于 JSON 的。目前基于 JSON 的格式正在取代基于 XML 的格式，但仍常见到使用 XML 格式的服务。
+
+在带宽受限的环境中（例如电信行业），使用 JSON 和 XML 传输数据可能极为缓慢且代价高昂。数据压缩是通过降低网络带宽需求来提升网站性能的重要手段。为此，HTTP 内容编码算法——Gzip、Brotli、Zstandard 和 Deflate——会压缩负载以减小其体积。这些算法在压缩速度和压缩率上各有不同。
+
+\label{idx:1577}
+Zstandard 更适合动态内容，而 Brotli 适合静态、可缓存的内容。Gzip 基于 Deflate，诞生于 20 世纪 90 年代初，旨在以消耗 CPU 时间为代价，在低带宽网络上提供高压缩率。在高带宽网络上，Gzip 可能会拖慢应用；不过由于使用广泛，它仍是支持度最高的压缩算法。
+
+\label{idx:1578}
+\label{idx:1579}
+处理以 JSON 或 XML 编码的数据时，可能需要 \texttt{xmllint}、\texttt{xmlstarlet}、\texttt{jq} 和 \texttt{libxml2} 等额外工具。
+
+\label{idx:1580}
+\label{idx:1581}
+\label{idx:1582}
+诸如 \textbf{Protocol Buffers}（\textbf{Protobuf}）、MessagePack、\textbf{Binary JSON}（\textbf{BSON}）、\textbf{Universal Binary JSON}（\textbf{UBJSON}）、Apache Avro、Apache Parquet、\textbf{Concise Binary Object Representation}（\textbf{CBOR}）和 \textbf{Optimized Row Columnar}（\textbf{ORC}）等数据格式，是比 JSON 和 XML 更快、更紧凑的替代方案，有助于优化数据序列化。恰当的序列化策略对 ISC、EDA 和数据存储都很重要。它能优化性能和可扩展性，在分布式应用中尤其如此，并且在处理需要高效存储与传输的大型数据集或复杂数据结构时至关重要。经过优化的高效序列化可能比未经优化的序列化加上压缩更快，对较小或冗余较少的数据尤其如此。不过，数据序列化并不能完全替代数据压缩。
+
+\subsubsection{基于 XML 的 Web 服务}
+
+\label{idx:1583}
+\label{idx:1584}
+最早获得广泛应用的 Web 服务主要以 XML 为基础。\textbf{XML}，即\textbf{可扩展标记语言}（eXtensible Markup Language），在当时是分布式计算和 Web 环境中首选的交换格式。用 XML 负载设计服务有若干不同思路，其中最早也最具影响力的一种是 XML-RPC。
+
+\label{idx:1585}
+你可能会需要与已有的基于 XML 的 Web 服务交互，这些服务可能由你所在组织内部开发，也可能来自外部。不过我们建议用更轻量的方式来实现新的 Web 服务，例如基于 JSON 的 Web 服务、RESTful Web 服务或 gRPC。
+
+\paragraph{XML-RPC 及其与 SOAP 的关系}
+
+\label{idx:1586}
+\label{idx:1587}
+\label{idx:1588}
+\label{idx:1589}
+\label{idx:1590}
+\label{idx:1591}
+最早出现的标准之一名为 XML-RPC。这个项目背后的想法是提供一种\textbf{远程过程调用}（\textbf{RPC}）技术，以与当时流行的\textbf{组件对象模型}（\textbf{COM}）和\textbf{公共对象请求代理体系结构}（\textbf{CORBA}）竞争。其目标是使用 HTTP 作为传输协议，并使该格式既可被人类读写、又可被机器解析。为实现这一点，XML 被选作数据编码格式。
+
+使用 XML-RPC 时，想要执行 RPC 的客户端会向服务器发送一个 HTTP 请求。该请求可以带有多个参数。服务器用一个响应作答。XML-RPC 协议为参数和结果定义了几种数据类型。
+
+尽管 SOAP 具有类似的数据类型，但它使用 XML 模式定义，这使其消息比 XML-RPC 中的消息可读性差得多。
+
+由于 XML-RPC 已不再积极维护，该标准没有任何现代 C++ 实现。如果你想从现代代码中与 XML-RPC Web 服务交互，最好的办法可能是使用 gSOAP 工具包，它支持 XML-RPC 以及其他 XML Web 服务标准。总体而言，这个工具包很少被使用，在现代 C++ 项目中尤其如此，因为基于 SOAP 的服务已在很大程度上被 REST 和其他轻量级方案所取代。
+
+\label{idx:1592}
+对 XML-RPC 的主要批评是，与直接发送普通的 XML 请求和响应相比，它并没有带来多少价值，却让消息大得多。
+
+\label{idx:1593}
+随着时间推移，该标准演变为 SOAP，它构成了\textbf{万维网联盟}（\textbf{W3C}）协议栈的基础。
+
+\paragraph{SOAP}
+
+\label{idx:1594}
+\label{idx:1595}
+\textbf{SOAP} 最初的缩写代表\textbf{简单对象访问协议}（Simple Object Access Protocol）。在该标准的 1.2 版中，这个缩写被弃用。
+
+SOAP 由三部分组成：
+
+\begin{itemize}
+\label{idx:1596}
+\item \textbf{SOAP 信封}，定义消息的结构和处理规则
+\label{idx:1597}
+\item \textbf{SOAP 头部}规则，定义特定于应用的数据类型（可选）
+\label{idx:1598}
+\item \textbf{SOAP 主体}，承载 RPC 与响应
+\end{itemize}
+
+下面是一个使用 HTTP 作为传输协议的 SOAP 消息示例：
+
+\begin{codebox}[text]
+POST /FindMerchants HTTP/1.1
+Host: www.domifair.org
+Content-Type: application/soap+xml; charset=utf-8
+Content-Length: 345
+SOAPAction: "http://www.w3.org/2003/05/soap-envelope"
+<?xml version="1.0"?>
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+ <soap:Header>
+ </soap:Header>
+ <soap:Body xmlns:m="https://www.domifair.org">
+    <m:FindMerchants>
+      <m:Lat>54.350989</m:Lat>
+      <m:Long>18.6548168</m:Long>
+      <m:Distance>200</m:Distance>
+    </m:FindMerchants>
+  </soap:Body>
+</soap:Envelope>
+\end{codebox}
+
+\label{idx:1599}
+该示例使用标准 HTTP 头部和 \texttt{POST} 方法调用一个远程过程，以查找位于给定地理位置一定距离范围内的商户。SOAP 独有的一个头部是 \texttt{SOAPAction}。它指向一个\textbf{统一资源标识符}（\textbf{URI}），用以标识该动作的意图。如何解释这个 URI 由客户端决定。
+
+\texttt{soap:Header} 是可选的，因此我们将其留空。它与 \texttt{soap:Body} 一起包含在 \texttt{soap:Envelope} 之中。主要的过程调用发生在 \texttt{soap:Body} 内部。我们引入了自己的 XML 命名空间，它专用于假设中的 \emph{圣多明我集市}（St. Dominic's Fair）应用。该命名空间指向我们领域的根。我们调用的过程是 \texttt{Find\allowbreak{}Merchants}，并提供三个参数：纬度、经度和距离。
+
+\label{idx:1600}
+\label{idx:1601}
+由于 SOAP 被设计为可扩展、传输中立且独立于编程模型，它也促成了其他配套标准的诞生。这意味着在使用 SOAP 之前，通常有必要学习所有相关的标准和协议。这种协议通常与\textbf{Web 服务描述语言}（\textbf{WSDL}）配合使用。
+
+如果你的应用大量使用 XML，且开发团队熟悉所有术语和规范，那么学习相关标准和协议不成问题。不过，如果你只是想为第三方暴露一个 API，更简单的做法是构建 REST API，因为它对生产者和消费者来说都更容易学习。
+
+遗憾的是，由于消息冗长，SOAP 服务的体积和带宽需求通常十分庞大。如果这不成问题，那么 SOAP 也有其用武之地。它同时支持同步和异步调用，以及有状态和无状态操作。如果你需要严格、正式的通信手段，SOAP 可以提供。只要确保使用该协议的 1.2 版，因为它引入了许多改进。其中之一是增强了服务的安全性；另一个是改进了服务本身的定义，有助于互操作性，并能正式定义传输方式（允许使用消息队列）——仅举几例。
+
+在 2000 年代中期，SOAP 作为分布式计算的通信协议流行起来，各种编程语言中都有数十种实现，包括 Java、C/C++、.NET、Perl 和 PHP。\emph{Web 服务}这一术语在那个时候流行起来，这要归功于 SOAP 和 XML-RPC 等标准，它们使机器之间能够通过互联网通信。十年之内，SOAP 几乎销声匿迹，因为再没有人用该协议编写新服务，它已被 REST 和 JSON 所取代。
+
+SOAP 最显著的缺点是，由于数据量大以及 XML 格式本身的原因，请求和响应实际上都可能无法阅读。此外，与解析 XML 相比，解析 JSON 通常更快、占用内存更少，因为 JSON 结构更简单，并且可以直接转换为大多数编程语言的原生数据类型。
+
+在接下来的几节中，我们将介绍几个通常与 SOAP 配套的支撑标准和工具。要有效地使用 SOAP，理解它们是很有必要的。
+
+\paragraph{WSDL}
+
+\label{idx:1602}
+WSDL 提供了一种机器可读的描述，说明服务可以如何被调用、消息应当如何构造。与其他 W3C Web 服务标准一样，它以 XML 编码。
+
+它常与 SOAP 一起使用，用以定义 Web 服务所提供的接口以及这些接口可以如何使用。
+
+\label{idx:1603}
+一旦你用 WSDL 定义了 API，就可以（而且应该！）使用自动化工具来帮你据此生成代码。对于 C++，gSOAP 就是带有此类工具的一个框架。它附带一个名为 \texttt{wsdl2h} 的工具，能够根据定义生成头文件。然后你可以使用另一个工具 \texttt{soapcpp2}，从接口定义生成到你的实现的绑定。
+
+\paragraph{UDDI}
+
+\label{idx:1604}
+在记录 Web 服务接口之后的下一步是服务发现，它使应用能够找到并连接到由其他方实现的服务。
+
+\label{idx:1605}
+\textbf{通用描述、发现与集成}（\textbf{UDDI}）是一个用于 WSDL 文件的注册表，可以手动或自动搜索。与本节讨论的其他技术一样，UDDI 使用 XML 格式。
+
+UDDI 注册表可以用 SOAP 消息查询，以实现自动化的服务发现。尽管 UDDI 为 WSDL 提供了逻辑上的扩展，但它在开放互联网上的采用情况令人失望。不过，仍然可以找到公司内部使用的 UDDI 系统。
+
+\subsubsection{SOAP 库}
+
+SOAP 最流行的两个库是 \textbf{Apache Axis} 和 \textbf{gSOAP}。
+
+\label{idx:1606}
+\label{idx:1607}
+Apache Axis 既适合实现 SOAP（包括 WSDL）Web 服务，也适合实现 REST Web 服务。值得注意的是，这个库已经十多年没有发布新版本了。
+
+\label{idx:1608}
+gSOAP 是一个工具包，可用于创建基于 XML 的 Web 服务并与之交互，其重点在 SOAP。它处理数据绑定、SOAP 和 WSDL 支持、JSON 和 RSS 解析、UDDI API，以及其他几个相关的 Web 服务标准。尽管它没有使用现代 C++ 特性，但仍在积极维护。
+
+\subsubsection{基于 JSON 的 Web 服务}
+
+\label{idx:1609}
+\label{idx:1610}
+\label{idx:1611}
+\textbf{JSON} 代表 \textbf{JavaScript 对象表示法}（JavaScript Object Notation）。与名字所暗示的相反，它并不局限于 JavaScript。它与语言无关。大多数编程语言中都有 JSON 的解析器和序列化器。不过，它的语法源自 JavaScript，因为它基于 JavaScript 的一个子集。
+
+值得注意的是，JSON 比 XML 紧凑得多。
+
+\label{idx:1612}
+JSON 支持的数据类型如下：
+
+\begin{itemize}
+\item \textbf{数字}（Number）：具体格式可能因实现而异；在 JavaScript 中默认为双精度浮点数
+\item \textbf{字符串}（String）：以 Unicode 编码的文本
+\item \textbf{布尔值}（Boolean）：\texttt{true} 或 \texttt{false} 值
+\item \textbf{数组}（Array）：值的有序列表，可以为空
+\item \textbf{对象}（Object）：由键值对构成的映射
+\item \texttt{null}：表示空值
+\end{itemize}
+
+\label{idx:1613}
+\emph{第 11 章}《\emph{持续集成与持续部署}》中介绍的 \texttt{Packer} 配置，就是一个 JSON 文档的示例：
+
+\begin{codebox}[json]
+{
+  "variables": {
+    "aws_access_key": "",
+    "aws_secret_key": ""
+  },
+  "builders": [{
+    "type": "amazon-ebs",
+    "access_key": "{{user `aws_access_key`}}",
+    "secret_key": "{{user `aws_secret_key`}}",
+    "region": "eu-central-1",
+    "source_ami": "ami-0265dc4673f9d6a35",
+    "instance_type": "t2.micro",
+    "ssh_username": "admin",
+    "ami_name": "Project's Base Image {{timestamp}}"
+  }],
+  "provisioners": [{
+    "type": "ansible",
+    "playbook_file": "./provision.yml",
+    "user": "admin",
+    "host_alias": "baseimage"
+  }],
+  "post-processors": [{
+    "type": "manifest",
+    "output": "manifest.json",
+    "strip_path": true
+  }]
+}
+\end{codebox}
+
+\label{idx:1614}
+使用 JSON 作为格式的标准之一是 JSON-RPC 协议。
+
+\paragraph{JSON-RPC}
+
+\label{idx:1615}
+\label{idx:1616}
+\label{idx:1617}
+JSON-RPC 是一种以 JSON 编码的 RPC 协议，与 XML-RPC 和 SOAP 类似。与它的 XML 前辈不同，它的开销很小。它也非常简单，同时保持了 XML-RPC 的人类可读性。
+
+我们之前用 SOAP 调用表达的那个示例，采用 JSON-RPC 2.0 后大致如下：
+
+\begin{codebox}[json]
+{
+  "jsonrpc": "2.0",
+  "method": "FindMerchants",
+  "params": {
+    "lat": "54.350989",
+    "long": "18.6548168",
+    "distance": 200
+  },
+  "id": 1
+}
+\end{codebox}
+
+这个 JSON 文档仍然需要合适的 HTTP 头部，但即便算上头部，它也比对应的 XML 小得多。其中出现的唯一元数据就是包含 JSON-RPC 版本和请求 ID 的那个字段。\texttt{method} 和 \texttt{params} 字段的意思几乎是自明的。SOAP 就不总能做到这一点。
+
+\label{idx:1618}
+然而，尽管该协议轻量、易于实现且易于使用，但与 SOAP 和 REST Web 服务相比，它并未得到广泛采用。它比 SOAP 发布得晚得多，大致与 REST 服务开始流行的时间相同。REST 迅速取得成功（可能得益于其灵活性），而 JSON-RPC 却未能获得类似的关注。
+
+\label{idx:1619}
+JSON-RPC 的 C++ 实现包括 \texttt{jsonrpc-cpp-lib}、\texttt{jsonrpc2}（一个 C++23 仅头文件库）、\texttt{jsonrpcpp}、\texttt{libjson-rpc-cpp} 和 \texttt{json-rpc-cxx}。\texttt{json-rpc-cxx} 是 \texttt{libjson-rpc-cpp} 的现代重实现。JSON-RPC 协议很简单，例如可以用更流行的库（如 \texttt{nlohmann/\allowbreak{}json}，即适用于现代 C++ 的 JSON）来实现。
+
+例如，Sony 在 REST API 之上使用 JSON-RPC 协议，作为一种在网络中进行 RPC 的轻量级协议，以实现对其设备的通信和控制，例如 BRAVIA 专业显示器和摄像机。
+
+\subsection{Web API 设计方法}
+
+\label{idx:1620}
+构建 HTTP API 的两种广泛使用的方法是\textbf{表述性状态转移}（\textbf{REST}）和 \textbf{GraphQL}；这两者我们都会在本节介绍。REST 是一种架构风格，而 GraphQL 是基于查询语言的 API 范式。
+
+\subsubsection{REST}
+
+\label{idx:1621}
+\label{idx:1622}
+\label{idx:1623}
+由于简单易用、可扩展、灵活、支持缓存，并且与各种技术兼容，REST 目前是 Web 服务和基于微服务的系统中最流行的 API 架构。符合这种架构风格的服务通常称为 RESTful 服务。REST 与 SOAP 或 JSON-RPC 的主要区别在于，REST 几乎完全基于 HTTP 和 URI 语义。
+
+REST 的创造者 Roy Fielding 早在 2000 年就在其题为 \emph{Architectural Styles and the Design of Network-based Software Architectures} 的学位论文中描述了 REST 方法：
+
+\begin{myQuote}
+“表述性状态转移”这个名字意在唤起人们对一个设计良好的 Web 应用行为的想象：一个由网页构成的网络（一台虚拟状态机），用户通过选择链接（状态转移）在应用中前进，从而将下一个页面（代表应用的下一个状态）传输给用户并渲染出来供其使用。
+
+\end{myQuote}
+
+REST 是一种 API 架构风格，定义了一组用于实现 Web 服务的约束。这些约束如下：
+
+\begin{itemize}
+\label{idx:1624}
+\item \textbf{客户端–服务器架构}：它强制在客户端与服务器之间实现清晰分离。客户端请求数据，服务器提供数据。这种分离提升了系统的可扩展性，并使客户端能够独立于服务器逻辑运行。
+\item \textbf{无状态性}：客户端和服务器都无需存储与其通信相关的状态。
+\item \textbf{可缓存性}：响应应被定义为可缓存或不可缓存，以利用标准的 Web 缓存，这通过 \texttt{Cache-Control} 和 \texttt{ETag}（实体标签）HTTP 头部来实现。它通过降低服务器负载、加快数据获取，提升了可扩展性和性能。
+\item \textbf{分层系统}：架构可以包含多个层，例如负载均衡器、代理服务器和认证系统，每一层执行各自的功能，并相互独立。它提升了系统的可靠性和灵活性。
+\label{idx:1625}
+\item \textbf{统一接口}：它简化并解耦架构，使各部分能够独立演进。它由四个子约束构成：
+
+\begin{itemize}
+\item \textbf{资源标识（在请求中）}：每个资源都有一个唯一且一致的 URI。URI 应当简单且可预测。它们应当表示名词（资源），而不是动词（动作）。
+\item \textbf{通过表示来操作资源}：表示是资源的当前状态或期望状态，用于对资源执行操作。标准化的 HTTP 方法确保了一致且可预测的通信。
+\item \textbf{自描述消息}：请求和响应必须包含处理它们所需的全部信息。
+\item \textbf{超媒体作为应用状态引擎}（\textbf{HATEOAS}）：它引导客户端通过服务器提供的超媒体链接来发现可执行的操作。它使客户端无需事先了解所有可能的 URL 和操作，就能动态定位服务器上的资源并与之交互。服务器（在响应中）不仅提供数据，还提供指向相关资源和可能操作的链接，这增强了 API 的松耦合性和灵活性。
+\end{itemize}
+\item \textbf{按需代码（可选）}：它向客户端发送可执行代码（例如 JavaScript 和 WebAssembly）以供执行。
+\end{itemize}
+
+\label{idx:1626}
+REST API 必须是超文本驱动的，但 Fielding 解释说，仅仅通过 HTTP 调用服务并不能使其成为 RESTful。尽管如此，由于 HATEOAS 较为复杂，它并不总是被实现，这可能会拖慢开发，在客户端可以安全地使用硬编码路由的简单 API 中尤其如此。开发者往往更喜欢更快、不使用 HATEOAS 的方法，因为在这种情况下导航不成问题。
+
+由于依赖 Web 标准，RESTful Web 服务可以复用现有组件，例如代理、负载均衡器和缓存。得益于低开销，这类服务也非常高性能和高效。
+
+\label{idx:1627}
+REST 使用 HTTP 作为传输协议，用 URI 表示资源，用 HTTP 动词来操作资源或调用操作。对于每个 HTTP 方法应当如何表现，并没有统一标准，但最常达成共识的语义如下：
+
+\begin{itemize}
+\item \texttt{POST}：创建新资源
+\item \texttt{GET}：获取已有资源
+\item \texttt{PATCH}：更新已有资源
+\item \texttt{DELETE}：删除已有资源
+\item \texttt{PUT}：替换已有资源
+\end{itemize}
+
+\label{idx:1628}
+由于 REST 是面向资源的，其 URL 设计不同于 RPC 风格的 API。在 REST 中，HTTP 请求针对的是\emph{资源}，而不是\emph{动作}。\textbf{统一资源定位符}（\textbf{URL}）指向某个资源，HTTP 方法则指明对该资源做什么，这使得 URL 中的动词毫无意义，也不符合 RESTful。
+
+\label{idx:1629}
+资源可以是通过 REST API 访问的任何实体，例如用户、产品、订单、文档、工单、图像或计算结果。一个资源可以表示多个条目。一组资源称为集合。资源也可以嵌套在其他资源之中。在某些情况下，资源是单例，没有父集合。
+
+集合的一个示例是 \texttt{items}，而 \texttt{123} 是该集合中某个资源的 ID：
+
+\begin{codebox}[text]
+https://localhost:8080/api/items/123
+\end{codebox}
+
+尽管 REST 架构风格没有对传输数据的格式施加严格限制，但在实践中已经出现了一些标准。REST API 可以使用多种格式，例如 XML、YAML，甚至纯文本。不过，由于 JSON 简单且语法易读、人和机器都能理解，它无疑是其中的佼佼者。
+
+与基于 XML 的 Web 服务一样，RESTful 服务也可以用既机器可读又人类可读的方式来描述。为此有几种相互竞争的标准，其中 OpenAPI 最为流行。（值得注意的是，OpenAPI 描述的是 HTTP API，而不仅仅是 REST。）
+
+目前，用 C++ 实现 HTTP API 的一些性能最强的 C++ 框架有 Lithium、Drogon、\texttt{ffead-cpp}、\texttt{userver} 和 Cutelyst（构建于 Qt 之上）。这些框架在 TechEmpower Web Framework Benchmarks 中表现优异。
+
+\label{idx:1630}
+通常，REST API 被用作数据库记录的代理。\textbf{CRUD}（\textbf{创建、读取、更新和删除}）操作经常映射到 REST 操作，但这两个概念并不完全相同。由于 REST 与 CRUD 相似，人们很容易将它们混淆，把二者混为一谈。REST 和 CRUD 可以协同工作，因为 CRUD 功能可以存在于 REST 架构之中。
+
+\myGraphic{0.826}{images/B18456_15_06.png}{图 15.6：CRUD 操作与 REST}
+
+\label{idx:1631}
+该图展示了在 API 层面上 CRUD 功能与 REST 端点之间的关系。而下面的实现提供了一个简单的 RESTful 控制器，它为 \texttt{items} 资源暴露了完整的 CRUD 操作集——创建、读取、更新和删除。
+
+读取操作（\texttt{GET}）要么返回集合中的所有记录，要么根据 ID 只返回一条：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+using namespace drogon;
+class ItemsController final : public HttpController<ItemsController> {
+public:
+  METHOD_LIST_BEGIN
+  //条目列表
+  ADD_METHOD_TO(ItemsController::getItems, "/api/items", Get);
+  //创建新条目
+  ADD_METHOD_TO(ItemsController::createItem, "/api/items", Post);
+  //查看条目
+  ADD_METHOD_TO(ItemsController::getItemById, "/api/items/{1}", Get);
+  //更新条目
+  ADD_METHOD_TO(ItemsController::updateItem, "/api/items/{1}", Put);
+  //删除条目
+  ADD_METHOD_TO(ItemsController::deleteItem, "/api/items/{1}", Delete);
+  METHOD_LIST_END
+\end{codebox}
+
+这个实现经过了简化。在实践中，REST API 通常会对请求的数据提供过滤、排序和分页。分页是指将大量数据拆分为更小、更易处理的块，以进行分页数据查询的过程。它通过防止单个页面被过多内容淹没并降低服务器负载，改善了可用性和性能。
+
+\label{idx:1632}
+\texttt{getItems} 方法通过应用作用域内的 \texttt{std::\allowbreak{}lock\_\allowbreak{}guard} 来锁定仓库，直到函数结束，因为数据可能被发往 Web 服务器的竞争请求修改。默认返回 HTTP 状态码 \texttt{200 (OK)}：
+
+\begin{codebox}[cpp]
+  void getItems(const HttpRequestPtr &,
+                std::function<void(const HttpResponsePtr &)> &&callback) {
+    Json::Value array(Json::arrayValue);
+    std::lock_guard lock(storage_mutex_);
+    for (const auto &[id, name] : items_) {
+      Json::Value item;
+      item["id"] = id;
+      item["name"] = name;
+      array.append(item);
+    }
+    auto resp = HttpResponse::newHttpJsonResponse(array);
+    callback(resp);
+  }
+\end{codebox}
+
+\texttt{create\allowbreak{}Item} 方法仅在创建条目并将其放入存储时锁定仓库。REST API 通常返回 HTTP 状态码 \texttt{201 (\allowbreak{}Created)\allowbreak{}}，以及所创建条目在集合中的绝对或相对位置：
+
+\begin{codebox}[cpp]
+  void createItem(const HttpRequestPtr &req,
+                  std::function<void(const HttpResponsePtr &)> &&callback) {
+    auto json = req->getJsonObject();
+    if (!json || !json->isMember("name")) {
+      auto resp = HttpResponse::newHttpResponse();
+      resp->setStatusCode(k400BadRequest);
+      resp->setBody("No name");
+      callback(resp);
+      return;
+    }
+    int id;
+    auto name = (*json)["name"].asString();
+    {
+      std::lock_guard lock(storage_mutex_);
+      items_.emplace(id = ++next_id_, name);
+    }
+    Json::Value result;
+    result["id"] = id;
+    result["name"] = name;
+    auto resp = HttpResponse::newHttpJsonResponse(result);
+    resp->setStatusCode(k201Created);
+    resp->addHeader("Location", "/api/items/" + std::to_string(id));
+    callback(resp);
+  }
+\end{codebox}
+
+\texttt{get\allowbreak{}Item\allowbreak{}By\allowbreak{}Id} 方法仅在存储中查找条目时锁定仓库：
+
+\begin{codebox}[cpp]
+  void getItemById(const HttpRequestPtr &,
+                   std::function<void(const HttpResponsePtr &)> &&callback,
+                   int id) {
+    auto item = [this, id]() -> std::optional<std::pair<int, std::string>> {
+      std::lock_guard lock(storage_mutex_);
+      if (const auto it = items_.find(id); it != items_.end()) {
+        return {{it->first, it->second}};
+      }
+      return std::nullopt;
+    }();
+    if (!item.has_value()) {
+      auto resp = HttpResponse::newHttpResponse();
+      resp->setStatusCode(k404NotFound);
+      callback(resp);
+      return;
+    }
+    Json::Value json;
+    json["id"] = item->first;
+    json["name"] = item->second;
+    auto resp = HttpResponse::newHttpJsonResponse(json);
+    callback(resp);
+  }
+\end{codebox}
+
+\label{idx:1633}
+\texttt{update\allowbreak{}Item} 方法仅在更新仓库中已有条目时锁定仓库：
+
+\begin{codebox}[cpp]
+  void updateItem(const HttpRequestPtr &req,
+                  std::function<void(const HttpResponsePtr &)> &&callback,
+                  int id) {
+    auto json = req->getJsonObject();
+    if (!json || !json->isMember("name")) {
+      auto resp = HttpResponse::newHttpResponse();
+      resp->setStatusCode(k400BadRequest);
+      resp->setBody("No name");
+      callback(resp);
+      return;
+    }
+    auto item = [this, id,
+                 json]() -> std::optional<std::pair<int, std::string>> {
+      std::lock_guard lock(storage_mutex_);
+      if (const auto it = items_.find(id); it != items_.end()) {
+        it->second = (*json)["name"].asString();
+        return {{it->first, it->second}};
+      }
+      return std::nullopt;
+    }();
+    if (!item.has_value()) {
+      auto resp = HttpResponse::newHttpResponse();
+      resp->setStatusCode(k404NotFound);
+      callback(resp);
+      return;
+    }
+    Json::Value result;
+    result["id"] = item->first;
+    result["name"] = item->second;
+    auto resp = HttpResponse::newHttpJsonResponse(result);
+    callback(resp);
+  }
+\end{codebox}
+
+\label{idx:1634}
+\texttt{delete\allowbreak{}Item} 方法仅在删除仓库中的条目时锁定仓库。该函数返回 HTTP 状态码 \texttt{204 (\allowbreak{}No Content)\allowbreak{}}，因为条目已不存在，没有内容可返回：
+
+\begin{codebox}[cpp]
+  void deleteItem(const HttpRequestPtr &,
+                  std::function<void(const HttpResponsePtr &)> &&callback,
+                  int id) {
+    auto item = [this, id]() -> std::optional<int> {
+      std::lock_guard lock(storage_mutex_);
+      if (const auto it = items_.find(id); it != items_.end()) {
+        items_.erase(it);
+        return {it->first};
+      }
+      return std::nullopt;
+    }();
+    auto resp = HttpResponse::newHttpResponse();
+    if (!item.has_value()) {
+      resp->setStatusCode(k404NotFound);
+      callback(resp);
+      return;
+    }
+    resp->setStatusCode(k204NoContent);
+    callback(resp);
+  }
+private:
+  std::unordered_map<int, std::string> items_;
+  int next_id_ = 0;
+  std::mutex storage_mutex_;
+};
+\end{codebox}
+
+\label{idx:1635}
+当然，REST API 也可以使用其他 HTTP 状态码来表示成功、请求重定向、客户端错误和服务器错误。
+
+\paragraph{HATEOAS}
+
+\label{idx:1636}
+尽管提供二进制接口（例如\emph{基于 gRPC} 的接口）能带来出色的性能，但在许多情况下，你仍然希望拥有 RESTful 接口的简洁性。如果你想要一个直观的基于 REST 的 API，HATEOAS 是一个值得实现的有用原则。
+
+打个比方，HATEOAS 可以这样描述：“Web 服务也是人，它们也想和真人一样，使用 HTTP/HTML 来跟随链接。”换言之，它就是一种面向 REST 客户端的超文本。理解 HATEOAS 的关键出奇地简单：收到的每一个响应都包含指向下一个请求的引用。
+
+\begin{myQuote}
+当我提到\emph{超文本}时，我指信息与控件的同步呈现，使得信息本身成为一种可供性，用户（或自动机）据此获得选项并选择操作。超媒体只是对文本含义的扩展，把时间锚点纳入到媒体流中；如今大多数研究者已经不再区分二者。
+
+——Roy Fielding，《REST APIs Must Be Hypertext-Driven》，2008
+
+\end{myQuote}
+
+就像你打开网页并根据所呈现的超媒体进行导航一样，你也可以用 HATEOAS 编写服务来实现同样的效果。这促进了服务器与客户端代码的解耦，使客户端能快速了解哪些请求是有效的，而二进制 API 往往做不到这一点。这种发现是动态的，并基于所提供的超媒体。
+
+如果 REST 客户端必须硬编码所有资源 URL，那么它就与你的服务实现紧密耦合。反之，如果服务器返回可用操作的 URL，客户端就是松散耦合的。在这种情况下，客户端不严格依赖 URI 结构，因为该结构是在响应中指定并从响应中使用的。
+
+\label{idx:1637}
+以典型的 RESTful 服务为例，执行一项操作时，你会得到包含对象状态等数据的 JSON。而在 HATEOAS 中，除此之外，你还会得到一组链接（URL），它们展示了你可以在该对象上执行的合法操作。这些链接（超媒体）就是应用的引擎。换言之，可用的操作由资源的状态来决定。虽然\emph{超媒体}这个词在此语境下可能听起来有些奇怪，但它基本上就是指链接到资源，包括文本、图像和视频。
+
+例如，假设有一个 REST 方法，允许我们使用 \texttt{PUT} 方法来添加条目。有了 HATEOAS，我们不仅可以返回所创建的对象，还可以添加一个指向所创建资源的返回参数。如果我们用 JSON 进行序列化，它可能如下所示：
+
+\begin{codebox}[json]
+{
+    "itemId": 8,
+    "name": "Sękacz",
+    "locationId": 5,
+    "links": [
+        {
+            "href": "item/8",
+            "rel": "items",
+            "type": "GET"
+        }
+    ]
+}
+\end{codebox}
+
+\label{idx:1638}
+在开发 RESTful 服务时，你必须规定如何返回与请求匹配的数据和链接。\textbf{超文本应用语言}（\textbf{HAL}）是一种在 JSON 或 XML 代码中定义超媒体链接的约定。
+
+目前还没有普遍接受的 HATEOAS 超媒体序列化方法。一方面，这使得无论服务器实现如何都更易于实现。另一方面，客户端需要知道如何解析响应，以找到相关的遍历数据。
+
+HATEOAS 的一个好处是，它使得在服务器端实施 API 变更时不必破坏客户端代码。当某个端点被重命名时，后续响应会引用新的端点，客户端因此能获知应将后续请求发往何处。
+
+同样的机制还可以提供分页等功能，或者让我们轻松发现某个对象可用的方法。回到之前的条目示例，下面是我们在发出 \texttt{GET} 请求后可能收到的响应：
+
+\begin{codebox}[json]
+{
+    "itemId": 8,
+    "name": "Sękacz",
+    "locationId": 5,
+    "stock": 8,
+    "links": [
+        {
+            "href": "item/8",
+            "rel": "items",
+            "type" : "GET"
+        },
+        {
+            "href": "item/8",
+            "rel": "items",
+            "type" : "POST"
+        },
+        {
+            "href": "item/8/increaseStock",
+            "rel": "increaseStock",
+            "type" : "POST"
+        },
+        {
+            "href": "item/8/decreaseStock",
+            "rel": "decreaseStock",
+            "type" : "POST"
+        }
+    ]
+}
+\end{codebox}
+
+这里，我们有两个链接，指向负责修改库存的两个方法。
+
+\label{idx:1639}
+如果库存不再可用，响应会相应变化（注意其中一个方法不再被通告）：
+
+\begin{codebox}[json]
+{
+    "itemId": 8,
+    "name": "Sękacz",
+    "locationId": 5,
+    "stock": 0,
+    "links": [
+        {
+            "href": "items/8",
+            "rel": "items",
+            "type" : "GET"
+        },
+        {
+            "href": "items/8",
+            "rel": "items",
+            "type" : "POST"
+        },
+        {
+            "href": "items/8/increaseStock",
+            "rel": "increaseStock",
+            "type" : "POST"
+        }
+    ]
+}
+\end{codebox}
+
+\label{idx:1640}
+如果可遍历的超媒体总是以相同的格式呈现，消费起来会容易得多。然而，这里表达方式的自由使得编写不了解服务器实现的客户端更加困难。即便如此，HATEOAS 仍然是 REST 应用架构的一项核心约束。
+
+\subsubsection{GraphQL}
+
+\label{idx:1641}
+\label{idx:1642}
+\label{idx:1643}
+名字中的 \textbf{QL} 代表 \textbf{Query Language}（查询语言）。在 GraphQL 中，客户端不再依赖服务器来序列化和呈现所需的数据，而是直接查询和操作数据，因为它允许客户端定义响应的结构。这解决了 REST 中典型的数据过取或欠取问题。
+
+除了这种职责的颠倒之外，GraphQL 还具备一些使数据处理更简便的机制：强类型、静态验证、内省和 schema 都是该规范的一部分。
+
+\emph{图 15.7} 展示了 GraphQL 与 REST 之间的区别：
+
+\myGraphic{0.920}{images/B18456_15_07.png}{图 15.7：GraphQL 与 REST}
+
+GraphQL 与 REST API 之间的主要区别在于：使用 GraphQL 时，即使数据位于不同的来源，客户端也可以通过一次请求获取全部数据；而使用 REST API 时，必须发出多个请求才能处理来自各响应的数据。GraphQL 使用单个 URL 端点，适合大型、复杂且相互关联的数据源。REST 使用多个端点来定义资源，非常适合资源定义明确的简单数据源。
+
+\label{idx:1644}
+GraphQL 最初是 2012 年前后作为 Facebook 的内部项目开发的。这影响了它的设计，因为 GraphQL 最适合图数据模型，而图数据模型与社交网络自身的结构相契合。用于管理图数据的查询语言（例如 \textbf{GQL}——\textbf{Graph Query Language}，即图查询语言）定义了如何检索以图建模的数据，界定了图\textbf{数据库管理系统}（\textbf{DBMS}）的数据操纵能力。GraphQL 可以通过一次网络请求返回如此复杂的数据图。
+
+\label{idx:1645}
+GraphQL 要求声明 schema，用其定义数据类型及数据类型之间的关系。由于所有 schema 都是强类型的，服务器因此可以验证客户端的请求。
+
+GraphQL 中的数据操作通过不同类型的请求来实现：
+
+\begin{itemize}
+\item \textbf{Query}：只读数据检索
+\item \textbf{Mutation}：创建和修改数据
+\label{idx:1646}
+\item \textbf{Subscriptions}：从服务器接收实时后端更新，这在在线交易所和在线游戏中很常见，最常通过 WebSocket（一种在客户端与服务器之间提供持久双向连接的网络协议）进行
+\end{itemize}
+
+\label{idx:1647}
+然而，REST API 仍然是\emph{中庸之道}：它比 SOAP 更简单、更灵活，而在 HTTP 使用和缓存方面又比 GraphQL 更标准化。
+
+GraphQL 也有自身的缺点：
+
+\begin{itemize}
+\label{idx:1648}
+\item \textbf{学习曲线陡峭}：开发者必须掌握 \textbf{Schema Definition Language}（\textbf{SDL}，schema 定义语言）、解析器（resolver）以及过度查询防护机制。
+\item \textbf{服务器负载增加}：复杂的嵌套查询可能需要对数据源进行多次往返。如果不限制请求的深度和复杂度，很容易使服务器过载。
+\label{idx:1649}
+\item \textbf{安全风险}：开发者必须实现对\textbf{分布式拒绝服务}（\textbf{DDoS}）的防护，以及字段级授权、身份验证和审计。GraphQL 默认不管理数据访问。所有访问检查都必须在解析器中实现，这使维护变得复杂，并增加了出错的风险。
+\item \textbf{解析器的可靠性}：某个解析器中出现错误或延迟，可能会影响请求中整条字段链。解析器是一种函数，负责为 schema 中的单个字段填充数据。
+\item \textbf{缓存的复杂性}：标准 HTTP 缓存效果较差，而自定义缓存又难以配置。要实现缓存，必须使用额外的方案：代理、自定义缓存键或客户端库。由于所有 GraphQL 查询都发送到同一个 HTTP 端点，因此无法像 REST 那样使用 URL 级别的缓存。
+\item \textbf{监控困难}：由于通过 POST/HTTP 实现，必须分析具体的请求才能搞清楚究竟是哪里无法正常工作。
+\item \textbf{版本管理复杂}：在 REST 中，只需添加一个新 URL，之后再停用旧的即可；而 GraphQL 围绕 schema 演进的理念构建，需要更周密的规划。
+\item \textbf{N+1 问题}：当检索关联数据需要发出大量额外的数据库查询（而非一两次）时，就会出现这个问题，这可能严重影响性能——例如，一个列表为其中的每个条目都额外请求关联资源。这样的应用在 localhost 上运行良好，但如果应用及其数据库部署在不同的服务器上，就会变成一场灾难，因为网络延迟永远不为零。在\emph{第 4 章}\emph{架构与系统设计模式}中，有一个关于警示故事的链接，标题为\emph{《毫秒级延迟如何拖垮数据库性能》}。
+\end{itemize}
+
+\label{idx:1650}
+许多语言都有可用的 GraphQL 实现，包括 C++。一个流行的 C++ schema 服务生成器是微软的 \texttt{cppgraphqlgen}。还有许多工具可在整个 GraphQL 工作流中辅助开发和调试。有趣的是，借助 Hasura 或 PostGraphile 这类产品，你可以用 GraphQL 直接查询数据库，它们会在 Postgres 数据库之上添加 GraphQL API。
+
+GraphQL 的 GUI 工具包括 GraphiQL、GraphQL Voyager、Apollo Studio、Insomnia、Altair 和 Postman。
+
+\label{idx:1651}
+下面来看一个最小的 GraphQL API 端到端示例。
+
+首先，我们来定义一个 schema。\texttt{schema.\allowbreak{}graphql} 是用 SDL 编写的 GraphQL schema。它通过指定可用的数据类型以及操作及其参数来定义 GraphQL API，其中包括一个 \texttt{Query} 类型，该类型带有 \texttt{name} 字段，其类型为非空 \texttt{String}（\texttt{String!}）：
+
+\begin{codebox}[text]
+schema {
+  query: Query
+}
+type Query {
+  name: String!
+}
+\end{codebox}
+
+接下来，\texttt{query.\allowbreak{}graphql} 定义了一个发送给 API 的请求，用 GraphQL 查询语言编写，其中 \texttt{query} 是操作类型（一次 GraphQL 查询），\texttt{GetName} 是操作的名称，\texttt{name} 是所请求的 \texttt{Query} 类型的字段：
+
+\begin{codebox}[text]
+query GetName {
+  name
+}
+\end{codebox}
+
+服务器和客户端基于 Drogon 框架和 \texttt{cppgraphqlgen}，并使用 \texttt{rapidjson} 库处理 JSON。\texttt{cppgraphqlgen} 库可以使用自定义的 JSON 库，但这需要按照其手册所述定义相应的类及其方法。
+
+\texttt{schemagen} 和 \texttt{clientgen} 这两个库工具可以基于前面介绍的 schema 和查询分别生成服务器端和客户端类型。\texttt{schemagen} 只需要 schema 定义，而 \texttt{clientgen} 还需要一个请求文档。
+
+服务器实现包含 \texttt{Graph\allowbreak{}QLController} 类，它是一个 HTTP 控制器，暴露出单个 GraphQL 端点。在 GraphQL 中，一切都通过单个入口点流转，在本例中就是 \texttt{/graphql} HTTP 端点，定义在 \texttt{Graph\allowbreak{}QLController.\allowbreak{}h} 中：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+class GraphQLController : public drogon::HttpController<GraphQLController> {
+public:
+  METHOD_LIST_BEGIN
+  ADD_METHOD_TO(GraphQLController::handleGraphQL, "/graphql", 
+                drogon::Post);
+  METHOD_LIST_END
+  void handleGraphQL(
+      const drogon::HttpRequestPtr &req,
+      std::function<void(const drogon::HttpResponsePtr &)> &&callback);
+};
+\end{codebox}
+
+\label{idx:1652}
+在这里，\texttt{Graph\allowbreak{}QLController} 在 \texttt{/graphql} 处注册了单个 \texttt{POST} 处理器。所有 GraphQL 请求都发送到这个端点，并由 \texttt{handle\allowbreak{}Graph\allowbreak{}QL} 处理。
+
+\label{idx:1653}
+\texttt{Graph\allowbreak{}QLController.\allowbreak{}cpp} 中的实现使用了 \texttt{cppgraphqlgen} 根据前面的 \texttt{schema.\allowbreak{}graphql} 和 \texttt{query.\allowbreak{}graphql} 文件所生成的类型，并提供了 \texttt{Query} 类型的一个简单服务器端实现：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+//生成的类型
+#include "QueryObject.h"
+#include "ServiceSchema.h"
+\end{codebox}
+
+\texttt{QueryImpl} 类是 \texttt{schema.\allowbreak{}graphql} 中所指定 \texttt{Query} 类型的服务器端实现。\texttt{getName} 方法为 schema 中定义的 \texttt{name} 字段提供值：
+
+\begin{codebox}[cpp]
+class QueryImpl {
+public:
+  static std::string getName() { return "Jack Mower, Tina and Umagon"; }
+};
+void GraphQLController::handleGraphQL(
+    const drogon::HttpRequestPtr &req,
+    std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
+  auto jsonBody = req->getJsonObject();
+  if (!jsonBody) {
+    auto resp =
+        drogon::HttpResponse::newHttpJsonResponse(Json::Value("Invalid JSON"));
+    resp->setStatusCode(drogon::k400BadRequest);
+    callback(resp);
+    return;
+  }
+\end{codebox}
+
+\label{idx:1654}
+GraphQL 查询的请求参数以 JSON 格式从请求中提取出来：
+
+\begin{codebox}[cpp]
+  std::string query = (*jsonBody)["query"].asString();
+  std::string operationName = jsonBody->get("operationName", "").asString();
+  auto queryImpl = std::make_shared<QueryImpl>();
+  graphql::greet::Operations operations(queryImpl);
+  auto ast = graphql::peg::parseString(query);
+  graphql::service::RequestResolveParams params{ast};
+  params.operationName = operationName;
+\end{codebox}
+
+\texttt{operations} 对象通过调用 \texttt{queryImpl} 类的 \texttt{getName} 函数来解析查询。它是所生成类的一个对象：
+
+\begin{codebox}[cpp]
+  auto result = operations.resolve(std::move(params)).get();
+\end{codebox}
+
+\label{idx:1655}
+之后，结果被转换为 JSON 格式并发送给客户端：
+
+\begin{codebox}[cpp]
+  std::string jsonString = graphql::response::toJSON(std::move(result));
+  Json::Value jsonResult;
+  Json::CharReaderBuilder builder;
+  std::istringstream iss(jsonString);
+  Json::String errs;
+  Json::parseFromStream(builder, iss, &jsonResult, &errs);
+  auto resp = drogon::HttpResponse::newHttpJsonResponse(jsonResult);
+  callback(resp);
+}
+\end{codebox}
+
+客户端的实现比服务器端简单得多。
+
+以下代码展示了客户端应用的主文件（\texttt{main.cpp}），它初始化 HTTP 客户端并发送一个 GraphQL 请求：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+//生成的类型
+#include "ServiceClient.h"
+int main() {
+  auto client = HttpClient::newHttpClient("http://localhost:8080");
+\end{codebox}
+
+\label{idx:1656}
+\label{idx:1657}
+该 JSON 查询包含 \texttt{query.\allowbreak{}graphql} 中指定的 \texttt{GetName} 操作。\texttt{Get\allowbreak{}Request\allowbreak{}Text} 和 \texttt{Get\allowbreak{}Operation\allowbreak{}Name} 函数是自动生成的：
+
+\begin{codebox}[text]
+  Json::Value requestBody;
+  requestBody["query"] = 
+      graphql::client::query::GetName::  GetRequestText();
+  requestBody["operationName"] =
+      graphql::client::query::GetName::GetOperationName();
+  auto req = HttpRequest::newHttpJsonRequest(requestBody);
+  req->setMethod(Post);
+  req->setPath("/graphql");
+  req->addHeader("Content-Type", "application/json");
+\end{codebox}
+
+客户端发送请求，并在回调中处理其响应：
+
+\begin{codebox}[text]
+  client->sendRequest(req, [](
+          ReqResult result, const HttpResponsePtr &resp
+  ) {
+    if (result == ReqResult::Ok && resp) {
+      auto jsonResponse = resp->getJsonObject();
+      graphql::response::Value gqlResponse(graphql::response::Type::Map);
+      auto data = (*jsonResponse)["data"];
+      auto parsedResponse = 
+      graphql::response::parseJSON(data.toStyledString());
+\end{codebox}
+
+\texttt{parse\allowbreak{}Response} 函数也是生成的。它把 JSON 响应转换为与 \texttt{query.\allowbreak{}graphql} 中定义字段相对应的强类型 C++ 对象：
+
+\begin{codebox}[cpp]
+      auto response = graphql::client::query::GetName:: parseResponse(
+          std::move(parsedResponse));
+\end{codebox}
+
+\texttt{name} 字段在 \texttt{query.\allowbreak{}graphql} 中指定，但其类型定义在 \texttt{schema.\allowbreak{}graphql} 中：
+
+\begin{codebox}[cpp]
+      std::cout << "Name: " << response.name << std::endl;
+    } else {
+      std::cerr << "Request failed" << std::endl;
+    }
+    app().quit();
+  });
+  app().run();
+  return 0;
+}
+\end{codebox}
+
+\label{idx:1658}
+\label{idx:1659}
+这个示例到此结束。客户端发送一个 GraphQL 请求，服务器使用自动生成的 GraphQL 类型解析它，然后将响应作为强类型 C++ 对象返回给客户端。
+
+\subsection{API 描述语言}
+
+\label{idx:1660}
+API 描述语言也称为 API 规范格式。它们提供了一种结构化且机器可读的方式来描述 API，并可作为团队之间的可执行契约。
+
+契约驱动开发使用 OpenAPI、AsyncAPI、gRPC proto 文件、GraphQL 和 WSDL 等 API 规范作为可执行契约。不深入细节地说，这种方法包括在开发前协商契约、促进并行开发，以及加快测试的速度并提高测试质量。
+
+\label{idx:1661}
+OpenAPI 和 AsyncAPI 遵循 API 优先（API-first）的设计，其原则是在设计 API 时先创建文档，然后再编写代码。在这种工作流中，OpenAPI 和 AsyncAPI 文档就是 API 契约。
+
+\label{idx:1662}
+一开始就创建 API 设计有若干好处。许多错误会在设计阶段就被发现。此外，文档能让人们理解如何使用你的 API。再者，API 客户端和服务器端的开发以及测试可以并行进行，从而加快开发速度。这需要一套经过深思熟虑的示例和清晰的 API 描述。API 规范简化了测试用例的创建，从而确保更高的整体软件质量。此外，API 测试也可以基于规范来创建。
+
+\begin{myNotic}{注意}
+
+OpenAPI 和 AsyncAPI 不仅对契约驱动开发有用，对契约测试也有用，契约测试在测试金字塔中位于单元测试和集成测试之间。
+\end{myNotic}
+
+\subsubsection{OpenAPI}
+
+\label{idx:1663}
+\label{idx:1664}
+OpenAPI 是由 OpenAPI Initiative 监管的一项规范，该组织隶属于 Linux 基金会。它过去被称为 Swagger 规范，因为曾是 Swagger 框架的一部分。
+
+\label{idx:1665}
+该规范与语言无关。它使用 JSON 或 YAML 输入来生成方法、参数和模型的文档。通过这种方式，OpenAPI 有助于使文档与源代码保持同步。与 OpenAPI 兼容的工具种类繁多，例如代码生成器、编辑器、用户界面和 mock 服务器。
+
+OpenAPI 生成器在生成服务器桩、API 客户端库（SDK 生成）和文档时遵循 OpenAPI 规范。它们支持多种编程语言，尤其是 C++、C\#、Go、Java、JavaScript、PHP、Python、Rust 和 Swift。一大优点是，诸如 Clion 和 Visual Studio 这类 IDE（通过插件）支持基于 OpenAPI 规范的代码生成。遗憾的是，C++ 的代码生成器有些过时，需要升级。
+
+\label{idx:1666}
+在线 OpenAPI 编辑器可在此处获取：\href{https://editor.swagger.io/}{https://editor.swagger.io/}。
+
+\label{idx:1667}
+\label{idx:1668}
+为了说明如何用 OpenAPI 定义 API，请看下面这份最小的 YAML 规范，它描述了一个用于简单回显式 HTTP 服务器的问候服务：
+
+\begin{codebox}[yaml]
+openapi: 3.0.4
+info:
+  title: Greet API
+  version: 2.0.0
+paths:
+  /customer/v1:
+    get:
+      operationId: greet
+      summary: Greet customers
+      parameters:
+        - name: name
+          in: query
+          description: Customer name
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  response:
+                    type: string
+                example:
+                  status: 200
+                  response: Hi, Scott
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: integer
+                  response:
+                    type: string
+                example:
+                  status: 400
+                  response: No name
+\end{codebox}
+
+\label{idx:1669}
+前两个字段（\texttt{openapi} 和 \texttt{info}）是描述该文档的元数据。\texttt{paths} 字段包含所有可能的路径，它们对应于 REST 接口的资源和 HTTP 方法。在前面的示例中，我们只记录了一个路径（\texttt{/\allowbreak{}customer/\allowbreak{}v1}）和一个方法（\texttt{GET}）。该方法接受 \texttt{name} 作为可选参数。我们提供了两种可能的响应码：\texttt{200 (OK)} 和 \texttt{400 (\allowbreak{}Bad Request)\allowbreak{}}。这两个响应都包含格式化为 JSON 文档的正文。与 \texttt{example} 键关联的值是响应的示例负载。
+
+\label{idx:1670}
+\label{idx:1671}
+Swagger UI 是一个 Web 应用，用于在交互式用户界面中可视化 OpenAPI 规范、向服务器发送请求并接收响应。这个 Web 应用可以作为服务器上的静态文件，或者通过全球性的 UNPKG 之类的\textbf{内容分发网络}（\textbf{CDN}）与 Web 服务集成，因为 Swagger UI 是一个 JavaScript 应用。
+
+\myGraphic{0.920}{images/B18456_15_08.png}{图 15.8：Swagger UI 界面概览}
+
+\begin{myTip}{提示}
+想查看这幅图像的高分辨率版本？请在下一代 Packt Reader 中打开本书，或在 PDF/ePub 版本中查看。
+
+\textbf{下一代 Packt Reader} 以及本书的一份\textbf{免费 PDF/ePub 版本}随购买赠送。扫描二维码，或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按名称查找本书。请仔细核对显示的版本，以确保你拿到的是正确的版本。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/01.png}\end{center}
+\end{myTip}
+
+\label{idx:1672}
+Postman 是测试 HTTP API 最流行的工具之一。该工具支持配置 HTTP 请求（\texttt{GET}、\texttt{POST}、\texttt{PUT}、\texttt{DELETE} 及其他方法），包括请求头和参数；管理身份验证与授权设置；定义变量和环境；添加 JavaScript 脚本；将 API 请求组织并分组到集合中；创建手动和自动化测试；以及生成文档。它还可通过 Postman API 扩展，并支持不同的 API（REST、SOAP、GraphQL）。
+
+Postman 借助 Newman 可以轻松集成到 CI/CD 中，Newman 是一个用于运行 Postman 测试的命令行集合运行器。
+
+\myGraphic{0.920}{images/B18456_15_09.png}{图 15.9：Postman 界面概览}
+
+Postman 支持 OpenAPI 规范。它还能解析规范中的示例响应，例如 \texttt{200 (OK)} 和 \texttt{400 (\allowbreak{}Bad Request)\allowbreak{}}。它也能生成代码，但不支持 C++。服务器代码只针对 Go、Node.js、Java 和 Python 生成，客户端库则针对 C\#、C、Go、Java、JavaScript、PHP、Python 和 Swift 等编程语言生成。
+
+\label{idx:1673}
+\label{idx:1674}
+Postman 的竞品包括 Bruno、Insomnia、Hoppscotch、RapidAPI、Scalar 和 Thunder Client，它们都支持 OpenAPI。HTTPie 是另一个竞品，但它不支持该规范。
+
+\subsubsection{AsyncAPI}
+
+\label{idx:1675}
+\label{idx:1676}
+AsyncAPI 最初是作为 OpenAPI 规范的一种改编而起步的，目标是实现与 OpenAPI 的最大兼容性，以便用户能够复用通用的组件定义。一般来说，同步 API 可以用 OpenAPI 标准来定义，异步 API 可以用 AsyncAPI 标准来定义，后者处理微服务架构、IoT 系统和实时应用中常见的异步消息模式。
+
+尽管与 OpenAPI 有这种关联，AsyncAPI 仍是一个与协议无关的规范，用于描述在多种协议上工作的消息驱动型 API，例如 AMQP、MQTT、WebSocket、Kafka、STOMP、HTTP 和 Mercure。
+
+该规范使各种服务与应用之间接口的描述标准化，简化了开发、集成和文档编写。AsyncAPI 是一项旨在改善 EDA（事件驱动架构）现状的倡议。其长期目标是让使用 EDA 像使用 HTTP API 一样简单，不论是在文档、代码生成还是其他方面。
+
+在线编辑器可在此处获取：\href{https://studio.asyncapi.com/}{https://studio.asyncapi.com/}。目前，AsyncAPI 生成器尚不能为 C++ 生成服务端和客户端桩。不过其优势在于，新的 Swagger 编辑器支持 AsyncAPI 规范，该编辑器位于：\href{https://editor-next.swagger.io/}{https://editor-next.swagger.io/}。请注意，这个 Web 编辑器生成的是规范的静态 HTML 版本，而非交互式文档，无法向规范中指定的服务器发送测试请求。默认情况下，编辑器使用运行它自身所在的服务器。
+
+前面的示例中的问候 API，如果用 AsyncAPI 在 \texttt{asyncapi.\allowbreak{}yaml} 中进行文档化，会是这样的：
+
+\begin{codebox}[yaml]
+asyncapi: 3.0.0
+info:
+  title: Greet API
+  version: 2.0.0
+  description: HTTP API to greet customers
+  contact:
+    name: API Support
+    url: 'https://www.example.com/support'
+    email: support@example.com
+  license:
+    name: MIT
+    url: 'https://mit-license.org/'
+  tags:
+    - name: greet-api
+defaultContentType: application/json
+\end{codebox}
+
+\texttt{info} 字段提供关键元数据，例如 API 名称、版本、描述、联系信息和许可证。
+
+\label{idx:1677}
+\label{idx:1678}
+\texttt{servers} 字段描述一组服务器，它们定义了应用可以连接的端点或消息代理：
+
+\begin{codebox}[yaml]
+servers:
+  development:
+    host: localhost:8080
+    protocol: http
+    protocolVersion: '1.1'
+    tags:
+      - name: 'env:dev'
+        description: Development environment
+      - name: 'kind:local'
+        description: This server is local
+      - name: 'visibility:private'
+        description: This resource is private
+\end{codebox}
+
+\texttt{channels} 字段定义应用进行通信的通道列表，其中通道指的是消息传输所经过的路径：
+
+\begin{codebox}[yaml]
+channels:
+  customerGreeting:
+    address: /customer/v1
+    messages:
+      greetRequest:
+        $ref: '#/components/messages/GreetRequest'
+      greetResponse:
+        $ref: '#/components/messages/GreetResponse'
+      greetError:
+        $ref: '#/components/messages/GreetError'
+    bindings:
+      http:
+        method: GET
+\end{codebox}
+
+\texttt{operations} 字段全面描述应用执行的所有操作。对于 HTTP，AsyncAPI 使用诸如 \texttt{send}（发送请求）和 \texttt{receive}（等待响应）这类操作来描述交互：
+
+\begin{codebox}[yaml]
+operations:
+  greet:
+    action: send
+    channel:
+      $ref: '#/channels/customerGreeting'
+    messages:
+      - $ref: '#/channels/customerGreeting/messages/greetRequest'
+    reply:
+      channel:
+        $ref: '#/channels/customerGreeting'
+      messages:
+        - $ref: '#/channels/customerGreeting/messages/greetResponse'
+        - $ref: '#/channels/customerGreeting/messages/greetError'
+\end{codebox}
+
+\label{idx:1679}
+\label{idx:1680}
+\texttt{components} 字段定义文档各个部分所引用的组件。这有助于提升规范的可读性，并便于复用公共组件：
+
+\begin{codebox}[yaml]
+components:
+  messages:
+    GreetRequest:
+      payload:
+        type: object
+        properties:
+          name:
+            type: string
+            description: Customer name
+    GreetResponse:
+      payload:
+        type: object
+        properties:
+          status:
+            type: integer
+          response:
+            type: string
+        example:
+          status: 200
+          response: Hi, Ramona
+      bindings:
+        http:
+          statusCode: 200
+    GreetError:
+      payload:
+        type: object
+        properties:
+          status:
+            type: integer
+          response:
+            type: string
+        example:
+          status: 400
+          response: No name
+      bindings:
+        http:
+          statusCode: 400
+\end{codebox}
+
+当然，这个规范描述的是一个非常简单的 HTTP 回显服务器。
+
+它也可以实现异步应答—响应模式，在这种模式中，客户端发送请求后并不等待立即响应，因为服务器会在后台处理请求并在稍后返回响应。
+
+\label{idx:1681}
+\label{idx:1682}
+接收延迟响应的一种方案是 HTTP 轮询。HTTP 轮询是一种客户端—服务器通信技术，客户端会反复向服务器请求更新。它可以实现为“短轮询”，即客户端以固定时间间隔发送请求，服务器立即以特定状态码或空响应作答；也可以实现为“长轮询”，即客户端发送请求后，服务器保持连接打开，直到有新数据可用为止。与传统方式不同——传统方式下客户端会被阻塞直到收到响应——这里客户端可以在服务器处理请求期间执行其他任务。
+
+\label{idx:1683}
+HTTP 轮询的替代方案有 \textbf{Server-Sent Events}（\textbf{SSE}）（一种单向通信，服务器通过持久的（keep-alive）HTTP 连接将实时更新推送给客户端）以及 WebSocket（通过单个 TCP 连接进行的持久、全双工通信，可实现实时的客户端—服务器交互）。
+
+\section{远程过程调用}
+
+尽管诸如 REST 这样的 Web API 便于调试且互操作性出色，但与数据转换和使用 HTTP 传输相关的开销很大。
+
+\label{idx:1684}
+对某些微服务而言，这种开销可能过大，这正是需要轻量级 RPC 的原因。
+
+本节我们将介绍基于 HTTP 的 RPC（gRPC）和非 HTTP 的 RPC（例如 Thrift）。
+
+\subsection{Apache Thrift}
+
+\label{idx:1685}
+\label{idx:1686}
+\label{idx:1687}
+Apache Thrift 最初由 Facebook 开发，是一种\textbf{接口定义语言}（\textbf{IDL}）和二进制通信协议。它作为一种 RPC 方法，用于创建以多种编程语言（尤其是 C++、C\#、Delphi、Go、Java、JavaScript、Python 和 Swift）构建的分布式、可扩展、高性能且容错的系统，以实现无缝的跨平台通信。因此，这个跨语言框架旨在简化用不同编程语言编写的系统之间的集成。
+
+它支持多种数据序列化格式，包括 JSON、紧凑格式和二进制格式，确保客户端与服务器之间高效的数据传输和双向通信。与 gRPC 相比，Thrift 支持更广泛的序列化格式和传输机制。例如，在使用 Kafka 时，可以利用 Apache Thrift 高效地序列化和反序列化发布的消息。在 Thrift IDL 中定义的数据结构可能很复杂，而根据编程语言的不同，Apache Thrift 提供多种传输方式：网络套接字和 Unix 域套接字、管道、文件以及内存。
+
+\label{idx:1688}
+Thrift 的应用领域包括分布式系统、微服务和面向消息的中间件。它也在 Zephyr RTOS 和 OpenEmbedded 等嵌入式 Linux 生态中得到支持——后者是一个开源构建框架和交叉编译环境，用于为嵌入式设备创建定制的 Linux 发行版。
+
+虽然近年来 Apache Thrift 的人气不及 gRPC，但这个框架仍拥有活跃的社区，并得到 Apache 基金会的长期支持。
+
+安装 Thrift C++ 库的说明在此处：\href{https://thrift.apache.org/lib/cpp.html}{https://thrift.apache.org/lib/cpp.html}。
+
+下面我们来看一个实际的实现。
+
+首先，我们在 \texttt{service.\allowbreak{}thrift} 中定义服务。\texttt{thrift} 命令会根据以 Thrift IDL 编写的规范生成服务端和客户端类：
+
+\begin{codebox}[text]
+namespace cpp Service
+service Service {
+  string sayHello(1: string name)
+}
+\end{codebox}
+
+下面是 \texttt{server.\allowbreak{}cpp} 中的服务端实现：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+//生成的类型
+#include "gen-cpp/Service.h"
+using namespace apache::thrift;
+using namespace apache::thrift::protocol;
+using namespace apache::thrift::transport;
+using namespace apache::thrift::server;
+using namespace Service;
+\end{codebox}
+
+\label{idx:1689}
+\texttt{Service\allowbreak{}Handler} 类实现了抽象类 \texttt{ServiceIf} 的 \texttt{sayHello} 纯虚函数：
+
+\begin{codebox}[cpp]
+class ServiceHandler final : public ServiceIf {
+public:
+  void sayHello(std::string &_return, const std::string &name) {
+    std::cout << name << std::endl;
+    _return = "Trust me " + name;
+  }
+};
+\end{codebox}
+
+在 IDL 规范中，\texttt{sayHello} 返回一个值，但在生成的类中，该值是通过 \texttt{\_return} 引用提供的。
+
+\label{idx:1690}
+一个继承自 \texttt{ServiceIf} 的 \texttt{Service\allowbreak{}Handler} 类对象被传递给生成的 \texttt{Service\allowbreak{}Processor} 类的构造函数，以设置服务器：
+
+\begin{codebox}[cpp]
+int main() {
+  std::shared_ptr<ServiceHandler> handler(new ServiceHandler());
+  std::shared_ptr<TProcessor> processor(new ServiceProcessor(handler));
+  std::shared_ptr<TServerTransport> serverTransport(
+      new TServerSocket(9090));
+  std::shared_ptr<TTransportFactory> transportFactory(
+      new TBufferedTransportFactory());
+  std::shared_ptr<TProtocolFactory> protocolFactory(
+      new TBinaryProtocolFactory());
+  TSimpleServer server(processor, serverTransport, transportFactory,
+                       protocolFactory);
+  server.serve();
+  return 0;
+}
+\end{codebox}
+
+这会设置并启动 Thrift 服务器，它在端口 \texttt{9090} 上监听传入的请求，并将其分派给 \texttt{Service\allowbreak{}Handler} 实现。
+
+\label{idx:1691}
+下面是 \texttt{client.\allowbreak{}cpp} 中的客户端实现：
+
+\begin{codebox}[cpp]
+//省略的代码
+...
+//生成的类型
+#include "gen-cpp/Service.h"
+using namespace apache::thrift;
+using namespace apache::thrift::protocol;
+using namespace apache::thrift::transport;
+using namespace Service;
+int main() {
+  std::shared_ptr<TTransport> socket(new TSocket("localhost", 9090));
+  std::shared_ptr<TTransport> transport(new TBufferedTransport(socket));
+  std::shared_ptr<TProtocol> protocol(new TBinaryProtocol(transport));
+\end{codebox}
+
+\texttt{Service\allowbreak{}Client} 类由 Thrift 编译器生成。在调用 \texttt{sayHello} 函数之前赋给 \texttt{return\_} 变量的任何值都不会传输到服务器，因为该变量仅用于存放 \texttt{return} 值：
+
+\begin{codebox}[cpp]
+  ServiceClient client(protocol);
+  try {
+    transport->open();
+    std::string return_;
+    client.sayHello(return_, "I'm an engineer");
+    transport->close();
+    std::cout << return_ << std::endl;
+  } catch (TException &ex) {
+    std::cerr << "Error: " << ex.what() << std::endl;
+  }
+  return 0;
+}
+\end{codebox}
+
+\label{idx:1692}
+示例到此结束：客户端向 Thrift 服务器发送请求，服务器使用 \texttt{Service\allowbreak{}Handler} 处理该请求，并将响应返回给客户端。
+
+\subsection{使用 RabbitMQ 的 RPC}
+
+\label{idx:1693}
+\label{idx:1694}
+RabbitMQ 使用请求—应答模式来实现 RPC，该模式允许客户端向服务器发送请求，也允许服务器对这些请求作出响应。RabbitMQ 中的每条消息都有 \texttt{correlation\_\allowbreak{}id} 属性，用于将 RPC 响应与请求关联起来。
+
+\myGraphic{0.920}{images/B18456_15_10.png}{图 15.10：RabbitMQ 中的请求—应答模式}
+
+首先，客户端将请求作为消息发送到服务器队列以执行远程过程，并使用 \texttt{correlation\_\allowbreak{}id} 属性在消息中指定唯一的请求标识符。然后，服务器处理该请求，并将响应消息发送到客户端队列，在 \texttt{correlation\_\allowbreak{}id} 属性中设置相同的标识符，但作为响应标识符。最后，当响应标识符与请求标识符匹配时，客户端便接收该响应。
+
+\subsection{gRPC}
+
+\label{idx:1695}
+\label{idx:1696}
+gRPC 是一个用于构建快速高效服务的现代框架。凭借其速度、易用性以及对多种语言（包括 C++、C\#、Dart、Go、Java、Python 和 Swift）的支持，它正迅速流行起来。该技术能够创建更快、更可靠、更具可扩展性的应用，因而对微服务架构以及能够处理大流量和实时流数据的分布式系统特别有吸引力。
+
+与 REST 不同，gRPC 最初是为开发运行在分布式数据中心里的高性能系统而设计的。由于 Protobuf 采用二进制序列化，gRPC 消息总是比等价的 JSON 消息更小，这使得 gRPC 更适合网络受限的环境。此外，由于支持 Unix 域套接字和命名管道等 IPC 传输方式，gRPC 也可用于同一台计算机上应用之间的通信。
+
+顾名思义，gRPC 是一个最初由 Google 开发的 RPC 系统。gRPC 使用 HTTP/2 作为传输协议，并使用 Protobuf 作为默认的 IDL，以实现多种编程语言之间的互操作性以及数据序列化。也可以使用 FlatBuffers 和 Bebop 等替代方案，但 Protobuf 是常见的选择。总之，它们都是二进制数据序列化格式。
+
+gRPC 既可同步使用，也可异步使用，并且既能创建简单服务，也能创建流式服务，后者对聊天、在线游戏和监控系统特别有用。
+
+\begin{myNotic}{注意}
+
+值得注意的是，REST、GraphQL 和 gRPC 并非互斥的技术，它们可以组合成混合 API，以发挥各自的长处。如何选择取决于项目对性能、平台支持、请求复杂度和应用架构特性的具体需求。REST 简单而通用，GraphQL 最适合复杂而精细的 API，而 gRPC 则是高负载分布式系统和微服务的理想选择。例如，gRPC-Gateway 可同时暴露 gRPC 和 RESTful API。它利用 Protobuf 服务定义生成一个反向代理，将 RESTful 调用转换为 gRPC+Protobuf 调用，并通过 HTTP/2 将这些调用发送到 gRPC 服务。
+\end{myNotic}
+
+\label{idx:1697}
+\label{idx:1698}
+\label{idx:1699}
+\label{idx:1700}
+\label{idx:1701}
+gRPC 在多种平台（如 Android 和 macOS）以及移动端（Android 和 iOS）上均受支持；对于浏览器，请使用 \textbf{gRPC-Web}。gRPC 得到 Android 和 iOS 支持，这意味着移动应用可以在内部使用 gRPC——你无须额外提供一个服务器来转换来自移动应用的流量。在网络领域，\textbf{gRPC Network Management Interface}（\textbf{gNMI}）、\textbf{gRPC Network Operations Interface}（\textbf{gNOI}）和 \textbf{Routing Information Base Interface}（\textbf{gRIBI}）定义了用于管理网络设备的服务。
+
+REST 与 gRPC-Web 的区别见\emph{图 15.11}：
+
+\myGraphic{0.667}{images/B18456_15_11.png}{图 15.11：REST 与 gRPC-Web 的对比}
+
+gRPC-Web 是一个 JavaScript 客户端库，它使 Web 应用能够直接与 gRPC 后端服务通信，而无须由 HTTP 服务器充当中间层。在 gRPC-Web 出现之前，需要专门用一个 REST API 服务器将 HTTP REST 命令转换为 ProtoBuf。
+
+\label{idx:1702}
+\label{idx:1703}
+API 会不断演进，因此所有 gRPC 实现都遵循语义化版本，其形式为 \emph{Major.Minor.Patch}，将不兼容的（主版本）变更、向后兼容的（次版本）更新和小型缺陷修复（补丁）区分开来。这使程序员能够了解发生了哪些变更，并组织软件发布。
+
+除项目本身之外，gRPC 还得到 Qt、\texttt{asio-grpc} 和 \texttt{userver} 等 C++ 库，以及 Postman、Bruno、Insomnia、Kreya 和 gRPC UI 等工具的支持。
+
+下面我们来看一个实用的 gRPC 示例：一个用 Protobuf 定义的简单问候服务，并用 C++ 以同步 gRPC 服务端和客户端实现。
+
+既然我们决定使用 Protobuf，那么 \texttt{Greeter} 服务定义在 \texttt{service.\allowbreak{}proto} 中可以写成这样：
+
+\begin{codebox}[text]
+syntax = "proto3";
+service Greeter {
+ rpc Greet(GreetRequest) returns (GreetResponse);
+}
+message GreetRequest {
+ string name = 1;
+}
+message GreetResponse {
+ string reply = 1;
+}
+\end{codebox}
+
+\label{idx:1704}
+使用 \texttt{protoc} 编译器，你可以根据该定义生成数据访问代码。在本例中，生成的产物包括 \texttt{Greeter::\allowbreak{}Service}、\texttt{Greet\allowbreak{}Request}、\texttt{Greet\allowbreak{}Response} 和 \texttt{Greeter::\allowbreak{}Stub} 类，以及 \texttt{Greeter::\allowbreak{}New\allowbreak{}Stub} 函数——它们都基于 \texttt{service.\allowbreak{}proto} 规范。
+
+接下来，假设我们想为 \texttt{Greeter} 提供一个同步服务器，可以按如下方式在 \texttt{async\_\allowbreak{}server.\allowbreak{}cpp} 中创建服务：
+
+\begin{codebox}[cpp]
+class GreeterImpl : public Greeter::Service {
+  Status Greet(ServerContext *context, const GreetRequest *request,
+               GreetResponse *reply) override {
+    auto name = request->name();
+    if (name.empty()) {
+      return Status(StatusCode::INVALID_ARGUMENT, "name is empty");
+    }
+    reply->set_reply("Get over here! " + name);
+    return Status::OK;
+  }
+};
+\end{codebox}
+
+然后，我们必须为该服务构建并运行服务器：
+
+\begin{codebox}[cpp]
+int main() {
+  std::string address("localhost:50000");
+  GreeterImpl service;
+  ServerBuilder builder;
+  builder.AddListeningPort(address, grpc::InsecureServerCredentials());
+  builder.RegisterService(&service);
+  auto server(builder.BuildAndStart());
+  server->Wait();
+}
+\end{codebox}
+
+\label{idx:1705}
+下面我们来看一个消费该服务的客户端。为此，我们在 \texttt{async\_\allowbreak{}client.\allowbreak{}cpp} 中编写如下代码：
+
+\begin{codebox}[cpp]
+#include <grpcpp/grpcpp.h>
+#include <string>
+#include "service.grpc.pb.h"
+using grpc::ClientContext;
+using grpc::Status;
+int main() {
+  std::string address("localhost:50000");
+  auto channel =
+      grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+  auto stub = Greeter::NewStub(channel);
+  GreetRequest request;
+  request.set_name("Neosapien");
+  GreetResponse reply;
+  ClientContext context;
+  Status status = stub->Greet(&context, request, &reply);
+  if (status.ok()) {
+    std::cout << reply.reply() << '\n';
+  } else {
+    std::cerr << "Error: " << status.error_code() << '\n';
+  }
+}
+\end{codebox}
+
+\label{idx:1706}
+\label{idx:1707}
+这是一个简单的同步示例。要使其异步工作，你需要添加 tags 和 \texttt{Completion\allowbreak{}Queue}，具体做法见 gRPC 网站（\href{https://grpc.io/docs/languages/cpp/async/}{https://grpc.io/docs/languages/cpp/async/}），或者使用 \texttt{asio-grpc} 库。
+
+\section{小结}
+
+在本章中，我们考察了微服务如何通信。我们首先介绍了 ISC，然后讲解了不同的交互风格，重点放在客户端—服务器交互上。接着，我们探讨了低开销消息系统（MQTT 和 ZeroMQ）和代理消息系统（Apache Kafka 和 RabbitMQ）。之后，我们了解了使用 Web 服务的不同方式：Web API 载荷格式（基于 XML 和基于 JSON）、Web API 设计方法（REST 和 GraphQL），以及用于调试和描述这些服务的工具（OpenAPI 和 AsyncAPI）。最后，我们讨论了基于 HTTP 和非 HTTP 的 RPC：Apache Thrift、gRPC 和 RabbitMQ。
+
+微服务与容器结合使用时尤其流行，而容器正是下一章的主题。
+
+\section{问题}
+
+\begin{enumerate}
+\item 不同类型的交互各自适用于什么范围？
+\item 消息队列有哪些用例？
+\item 选择 JSON 而非 XML 有哪些好处？
+\item REST 是如何建立在 Web 标准之上的？
+\item 为什么 REST 可能不是连接微服务的最佳选择？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Sigismondo Boschi 和 Gabriele Santomaggio，\emph{RabbitMQ Cookbook}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/rabbitmq-cookbook-9781849516518}{https://www.packtpub.com/en-us/product/rabbitmq-cookbook-9781849516518}
+\item Dilip Sundarraj，\emph{Kafka for Developers - Data Contracts Using Schema Registry: Build a Kafka Producer/Consumer Application that Uses AVRO Data Format and Confluent Schema Registry}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/kafka-for-developers-data-contracts-using-schema-registry-9781837633487}{https://www.packtpub.com/en-us/product/kafka-for-developers-data-contracts-using-schema-registry-9781837633487}
+\item Perry Lea，\emph{IoT and Edge Computing for Architects: Implementing Edge and IoT Systems from Sensors to Clouds with Communication Systems, Analytics, and Security}，第二版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/iot-and-edge-computing-for-architects-9781839218873}{https://www.packtpub.com/en-us/product/iot-and-edge-computing-for-architects-9781839218873}
+\item Dhairya Parikh\emph{, Raspberry Pi and MQTT Essentials: A Complete Guide to Helping You Build Innovative Full-Scale Prototype Projects Using Raspberry Pi and MQTT Protocol}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/raspberry-pi-and-mqtt-essentials-9781803238395}{https://www.packtpub.com/en-us/product/raspberry-pi-and-mqtt-essentials-9781803238395}
+\item Praveenkumar Bouna，\emph{The Ultimate Swagger Tools Course: Build OpenAPI with Ease: Be a Part of the Swagger Tutorial for Simplified API Design, Documentation, Development, and Testing}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/the-ultimate-swagger-tools-course-build-openapi-with-ease-9781803242743}{https://www.packtpub.com/en-us/product/the-ultimate-swagger-tools-course-build-openapi-with-ease-9781803242743} 和 \href{https://swagger.io/docs/,}{https://swagger.io/docs/,} \href{https://www.asyncapi.com/docs}{https://www.asyncapi.com/docs}
+\item Andrzej Jarzyna 和 Samir Amzani，\emph{RESTful API Design Patterns and Best Practices: Master REST API Design with Real-World Patterns, Lifecycle Management, and OpenAPI Practices}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/restful-api-design-patterns-and-best-practices-9781835885291}{https://www.packtpub.com/en-us/product/restful-api-design-patterns-and-best-practices-9781835885291}
+\item Dave Westerveld，\emph{API Testing and Development with Postman: API Creation, Testing, Debugging, and Management Made Easy}，第二版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/api-testing-and-development-with-postman-9781804616000}{https://www.packtpub.com/en-us/product/api-testing-and-development-with-postman-9781804616000}
+\item Artur Czemiel，\emph{GraphQL Best Practices: Gain Hands-On Experience with Schema Design, Security, and Error Handling}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/graphql-best-practices-9781835462522}{https://www.packtpub.com/en-us/product/graphql-best-practices-9781835462522}
+\item Joshua B. Humphries、David Konsumer、David Muto、Robert Ross 和 Carles Sistare：\emph{Practical gRPC: Build Highly-Connected Systems with a Framework That Can Run on Any Platform}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/practical-grpc-9781839212666}{https://www.packtpub.com/en-us/product/practical-grpc-9781839212666}
+\item Krzysztof Rakowski，\emph{Learning Apache Thrift: Make Applications Cross-Communicate Using Apache Thrift!}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/learning-apache-thrift-9781785888670}{https://www.packtpub.com/en-us/product/learning-apache-thrift-9781785888670}
+\item Confluent Developer，\emph{Getting Started with Apache Kafka and C/C++}：\href{https://developer.confluent.io/get-started/c/}{https://developer.confluent.io/get-started/c/}
+\item RabbitMQ，\emph{RabbitMQ Tutorials}：\href{https://www.rabbitmq.com/tutorials}{https://www.rabbitmq.com/tutorials}
+\item HiveMQ，\emph{MQTT Tutorial: An Easy Guide to Getting Started with MQTT }（博客）：\href{https://www.hivemq.com/blog/how-to-get-started-with-mqtt/}{https://www.hivemq.com/blog/how-to-get-started-with-mqtt/}
+\item \emph{ØMQ - The Guide}：\href{https://zguide.zeromq.org/}{https://zguide.zeromq.org/}
+\item HashiCorp，\emph{Packer Documentation}：\href{https://developer.hashicorp.com/packer/docs}{https://developer.hashicorp.com/packer/docs}
+\item Talking IoT，\emph{Understanding the IoT Protocol Stack}：\href{https://talkingiot.io/understanding-the-iot-protocol-stack/}{https://talkingiot.io/understanding-the-iot-protocol-stack/}
+\item NetRom Software，\emph{Alternatives to JSON: Modern Serialization Formats in the Big Data Era}：\href{https://www.netromsoftware.com/insights/alternatives-to-json/}{https://www.netromsoftware.com/insights/alternatives-to-json/}
+\item Lokesh Gupta，\emph{HATEOAS Driven REST APIs}，REST API Tutorial：\href{https://restfulapi.net/hateoas/}{https://restfulapi.net/hateoas/}
+\item Roy Fielding，\emph{REST APIs Must Be Hypertext-Driven}（博客），Untangled：\href{https://roy.gbiv.com/untangled/2008/rest-apis-must-be-hypertext-driven}{https://roy.gbiv.com/untangled/2008/rest-apis-must-be-hypertext-driven}
+\item Roy Fielding，\emph{ Architectural Styles and the Design of Network-based Software Architectures}：\href{https://roy.gbiv.com/pubs/dissertation/top.htm}{https://roy.gbiv.com/pubs/dissertation/top.htm}
+\item REST API Tutorial，\emph{REST API URI Naming Conventions and Best Practices}：\href{https://restfulapi.net/resource-naming/}{https://restfulapi.net/resource-naming/}
+\item REST API tutorial，\emph{REST API Response Pagination, Sorting and Filtering}：\href{https://restfulapi.net/api-pagination-sorting-filtering/}{https://restfulapi.net/api-pagination-sorting-filtering/}
+\item Zuplo，\emph{How to Choose the Right REST API Naming Conventions}：\href{https://zuplo.com/learning-center/how-to-choose-the-right-rest-api-naming-conventions}{https://zuplo.com/learning-center/how-to-choose-the-right-rest-api-naming-conventions}
+\item Hayk Simonyan，\emph{REST API Basics \& Best Practices Explained}：\href{https://hayksimonyan.substack.com/p/rest-api-basics-and-best-practices}{https://hayksimonyan.substack.com/p/rest-api-basics-and-best-practices}
+\item Specmatic，\emph{Contract Driven Development}：\href{https://docs.specmatic.io/contract_driven_development.html}{https://docs.specmatic.io/contract\_driven\_development.html}
+\item SBB，\emph{API Principles}，GitHub：\href{https://schweizerischebundesbahnen.github.io/api-principles/}{https://schweizerischebundesbahnen.github.io/api-principles/}
+\item gRPC Ecosystem，\emph{A Curated List of Useful Resources for gRPC}，GitHub：\href{https://github.com/grpc-ecosystem/awesome-grpc}{https://github.com/grpc-ecosystem/awesome-grpc}
+\item ECE 252: Systems Programming and Concurrency，\emph{Event-Driven I/O with libevent }（讲座幻灯片），GitHub：\href{https://github.com/smajidzahedi/ece252/blob/master/lectures/out/L28-slides.pdf}{https://github.com/smajidzahedi/ece252/blob/master/lectures/out/L28-slides.pdf}
+\item Confluent，\emph{Introduction to Apache Kafka}：\href{https://docs.confluent.io/kafka/introduction.html}{https://docs.confluent.io/kafka/introduction.html}
+\item Rabbit MQ，\emph{AMQP 0-9-1 Model Explained}：\href{https://www.rabbitmq.com/tutorials/amqp-concepts}{https://www.rabbitmq.com/tutorials/amqp-concepts}
+\item Rabbit MQ，\emph{Reliability Guide}：\href{https://www.rabbitmq.com/docs/reliability}{https://www.rabbitmq.com/docs/reliability}
+\item GraphQL，\emph{GraphQL Best Practices}：\href{https://graphql.org/learn/best-practices/}{https://graphql.org/learn/best-practices/}
+\item REST API tutorial，\emph{Caching REST API Response}：\href{https://restfulapi.net/caching/}{https://restfulapi.net/caching/}
+\item Paul Wilton，\emph{GraphQL and Graph Databases }（博客），DataGraphs：\href{https://datagraphs.com/blog/graphql-and-graph-databases}{https://datagraphs.com/blog/graphql-and-graph-databases}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描此二维码或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始前请准备好你的购书发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

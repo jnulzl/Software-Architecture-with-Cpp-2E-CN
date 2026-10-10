@@ -1,0 +1,713 @@
+在前几章中，我们探讨了微服务作为分布式系统关键架构风格之一，了解了这些服务之间如何通信，然后考察了容器作为打包和部署它们的高效方式。
+
+本章将讨论在分布式系统中使用多个容器和微服务时出现的另一个挑战：快速定位问题的根因。如果你曾经尝试调试和监控基于微服务的分布式系统，很可能遇到过这类事情变成真正难题的情况。可观测性有助于应对这一问题。
+
+可观测性衡量的是系统内部状态能在多大程度上由其外部输出推断出来，它通过实时指标、日志和追踪来保障韧性。这些信号有助于检测和分析性能瓶颈，跨多个微服务识别并调试问题，确保系统的可靠性和正常运行时间，并改善响应时间与用户体验。简而言之，可观测性对于设计有韧性的分布式系统至关重要；没有它，你就有可能失去调试应用的能力。
+
+本章重点探讨实现可观测性的关键方法。我们会介绍几种在设计系统时可能派上用场的开源方案。
+
+此外，我们经常会交替使用\emph{应用}、\emph{服务}和\emph{微服务}这几个术语。虽然一个应用可能是一个完整的系统，而微服务只是其中的一部分，但在我们的小规模示例中，单个服务实际上就代表了整个应用。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 日志记录
+\item 监控
+\item 追踪
+\end{itemize}
+
+\section{技术要求}
+
+本章的代码已放在 GitHub 上：\href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter17}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter17}。
+
+\section{日志记录}
+
+即使你从未设计过微服务，日志记录也应该是一个熟悉的话题。日志（或日志文件）存储系统中发生事件的信息。系统可能指你的应用、应用运行所在的操作系统，或你用于部署的云平台。这些组件中的每一个都可能提供日志。
+
+\label{idx:1842}
+日志以单独的文件形式存储，因为它们为所有发生的事件提供了永久记录。当系统变得无响应时，我们希望查询日志，找出导致故障的可能根因。
+
+\label{idx:1843}
+\label{idx:1844}
+这意味着日志还提供了\textbf{审计日志}（也称为\textbf{审计追踪}）。由于事件按时间顺序记录，我们能够通过检查记录的历史状态来理解系统的状态。
+
+为了便于调试，日志通常是人类可读的。二进制格式虽然也存在，但在使用文件存储日志时这类格式相当少见。
+
+\subsection{微服务中的日志记录}
+
+\label{idx:1845}
+\label{idx:1846}
+这种日志记录方式本身与传统方式差别不大。主要区别在于日志的去向以及它们如何被消费。微服务通常不把日志存到本地的文本文件中，而是将日志打印到 \texttt{stdout}，从而避免让日志留在正在运行的容器里。这样一来，应用就与日志代理和路由机制解耦，把这一职责交给容器编排器或执行环境。这使应用更简单、更可移植，因为它只需产生日志，而无需管理日志。随后使用一个统一的日志层来收集和处理日志。要实现这一点，你需要一个可以按需配置的日志库。
+
+\subsection{使用 spdlog 在 C++ 中进行日志记录}
+
+\label{idx:1847}
+\label{idx:1848}
+C++ 中最流行、最快的日志库之一是 \texttt{spdlog}，它支持多种平台：Linux、macOS、Windows、Solaris、AIX 和 Android。它是用 C++11 构建的，既可以作为仅头文件库使用，也可以作为静态库使用（后者可缩短编译时间）。
+
+\texttt{spdlog} 的一些有趣特性包括：
+
+\begin{itemize}
+\item 功能丰富的格式化
+\item 多个 sink：
+
+\begin{itemize}
+\item 轮转日志文件
+\item 按日生成的日志文件
+\item 彩色控制台日志
+\item syslog（系统日志）
+\item Windows 事件日志
+\item Windows 调试器（\texttt{Output\allowbreak{}Debug\allowbreak{}String(\allowbreak{}.\allowbreak{}.\allowbreak{})\allowbreak{}}）
+\item 记录到 Qt 部件
+\item 自定义 sink（以单个函数实现）
+\end{itemize}
+\item 单线程和多线程日志记录器
+\item 同步和异步日志记录
+\label{idx:1849}
+\item 在编译期和运行期按日志级别过滤
+\item 支持从命令行参数或环境变量加载日志级别
+\item 回溯（backtrace）支持——将调试消息存储在环形缓冲区中并按需显示
+\end{itemize}
+
+\label{idx:1850}
+在其特性中，日志轮转是一个自动化过程，它会按计划（例如每天或每周）或在日志文件超过特定大小时，对日志文件进行重命名、压缩和归档。syslog 是一种标准的网络协议和系统，用于收集、发送和存储类 Unix 系统的系统事件日志。
+
+关于同步和异步日志记录，该库的作者建议使用常规的同步日志记录机制，除非确实有异步日志记录的特殊需求。异步模式可以将应用与诸如磁盘 I/O 缓慢或网络延迟等因素引起的意外负载峰值隔离开来。
+
+\texttt{spdlog} 可能缺少的一个特性是对 Logstash 或 Fluentd 的直接支持。如果你想使用这些聚合器之一，仍然可以用文件 sink 输出来配置 \texttt{spdlog}，并使用 Filebeat 或 Fluent Bit 将文件内容转发到相应的聚合器。
+
+\texttt{spdlog} 的 sink 带有 \texttt{\_mt}（多线程）或 \texttt{\_st}（单线程）后缀，表示其线程安全性。虽然单线程 sink 不能同时从多个线程使用，但它们更快，因为不需要加 mutex 锁，而加锁会带来一些开销。
+
+下面的示例展示了使用 \texttt{spdlog::\allowbreak{}sinks::\allowbreak{}stdout\_\allowbreak{}sink\_\allowbreak{}st}（一个将日志消息同步发送到标准输出流（\texttt{stdout}）的单线程 sink）时日志记录的样子，代码位于 \texttt{responder.\allowbreak{}h} 中：
+
+\begin{codebox}[cpp]
+//实现部分省略
+...
+template <typename Responder> void handle_get(
+    const drogon::HttpRequestPtr &request, Responder &responder,
+    std::function<void(const drogon::HttpResponsePtr &)> &&callback) {
+  const auto sink = std::make_shared<spdlog::sinks::stdout_sink_st>();
+  const auto logger = std::make_shared<spdlog::logger>("responder", sink);
+\end{codebox}
+
+\texttt{SPDLOG\_\allowbreak{}LOGGER\_\allowbreak{}INFO} 和 \texttt{SPDLOG\_\allowbreak{}LOGGER\_\allowbreak{}ERROR} 宏分别对应 info 和 error 两个日志级别，它们包装了 \texttt{SPDLOG\_\allowbreak{}LOGGER\_\allowbreak{}CALL} 宏。而这个宏又包装了一个 \texttt{spdlog::\allowbreak{}source\_\allowbreak{}loc} 类的对象，该对象存储了宏所在位置的当前文件、行号和函数信息（C++20 为此引入了 \texttt{std::\allowbreak{}source\_\allowbreak{}location} 类）：
+
+\begin{codebox}[cpp]
+  SPDLOG_LOGGER_INFO(logger, "get optional parameter 'name'");
+  auto name = request->getOptionalParameter<std::string>("name");
+  if (!name) {
+    const auto err = "missing value for 'name'";
+    SPDLOG_LOGGER_ERROR(logger, err);
+    responder.respond(drogon::k400BadRequest, Json::Value(err),
+                      std::move(callback));
+    return;
+  }
+  SPDLOG_LOGGER_INFO(logger, "return response to '{0}'", name.value());
+  const auto [code, response] = responder.prepare_response(name.value());
+  responder.respond(code, response, std::move(callback));
+}
+\end{codebox}
+
+\label{idx:1851}
+\label{idx:1852}
+这会生成如下终端输出，其中的日志消息与应用中宏的放置位置相对应：
+
+\begin{codebox}[text]
+[2025-09-14 12:17:34.599] [main] [info] [main.cpp:22] handling HTTP request to /customer/v1
+[2025-09-14 12:17:34.599] [responder] [info] [responder.h:27] get optional parameter 'name'
+[2025-09-14 12:17:34.599] [responder] [error] [responder.h:33] missing value for 'name'
+[2025-09-14 12:18:02.067] [main] [info] [main.cpp:22] handling HTTP request to /customer/v1
+[2025-09-14 12:18:02.067] [responder] [info] [responder.h:27] get optional parameter 'name'
+[2025-09-14 12:18:02.068] [responder] [info] [responder.h:39] return response to 'Motoko'
+\end{codebox}
+
+其他流行的 C++ 日志库还有 log4cplus（C++23）、Plog、Quill、loguru、Abseil Logging 和 Boost.Log，不太流行的则有 g3log、Log4Qt、reckless、lwlog 和 Blackhole。
+
+我们刚刚了解了使用 \texttt{spdlog} 进行应用级日志记录，其中每个服务都编写自己的日志。在真实的分布式系统中，这些日志必须跨许多服务和主机进行收集、标准化和分析。这时以下三个层次就登场了：统一日志、日志聚合和日志可视化。
+
+\subsection{统一日志}
+
+\label{idx:1853}
+大多数时候，我们无法控制所使用的所有微服务。其中一些会使用一种日志库，另一些则会使用不同的日志库。除此之外，格式也完全不同，轮转策略同样如此。更糟的是，你常常需要将应用事件与操作系统事件关联起来。这时统一日志层就派上用场了。
+
+统一日志层的用途之一是从不同来源收集日志。统一日志层工具提供了许多集成，能够理解不同的日志格式与传输方式（如文件、HTTP 和 TCP）。
+
+该层还能够过滤日志。我们可能出于满足合规要求、匿名化客户个人信息或保护服务实现细节等目的而需要过滤。
+
+为了便于日后查询日志，该层还可以在格式之间进行转换。即使你使用的不同服务分别以 JSON、CSV 和 Apache 格式存储日志，统一日志层解决方案也能将它们全部转换为 JSON，使之具备结构。
+
+统一日志层的最后一项任务是将日志转发到下一个目的地。视系统的复杂程度而定，下一个目的地可能是存储设施，也可能是另一个过滤、转换或转发设施。
+
+下面是一些可用于构建统一日志层的流行组件。
+
+\subsubsection{Logstash}
+
+\label{idx:1854}
+\label{idx:1855}
+Logstash 是最流行的统一日志层解决方案之一。目前它归 Elastic 公司所有，也就是 Elasticsearch 背后的公司。如果你听说过 ELK 技术栈（现称为 Elastic Stack），Logstash 就是其缩写中的那个 \emph{L}。
+
+Logstash 最初用 Ruby 编写，之后被移植到 JRuby。遗憾的是，这意味着它相当耗费资源。因此，不建议在每台机器上运行 Logstash。相反，它主要用作日志转发器，并在每台机器上部署轻量级的 Filebeat 来处理日志收集。
+
+\myGraphic{0.722}{images/B18456_17_01.png}{图 17.1：Elastic 技术栈：Elasticsearch、Logstash 与 Kibana（ELK）}
+
+\label{idx:1856}
+\label{idx:1857}
+从图中可以看到，Logstash 从各种来源（包括 Beats——面向 Elasticsearch 的数据采集器）收集日志，并将日志转发到集中式日志平台。
+
+\subsubsection{Filebeat}
+
+\label{idx:1858}
+\label{idx:1859}
+Filebeat 是 Beats 平台的一部分，该平台是一系列轻量级数据采集器，负责从服务器及其他系统收集运营数据（如日志、指标和网络数据包）并发送到 Elasticsearch 或 Logstash 进行处理与可视化。与 Logstash 不同，这些数据采集器可以直接与应用一起使用。
+
+Elastic 提供了以下数据采集器：
+
+\begin{itemize}
+\label{idx:1860}
+\item \textbf{Auditbeat}：审计系统上用户与进程的活动
+\label{idx:1861}
+\item \textbf{Filebeat}：转发日志文件和 journal 以集中日志数据
+\label{idx:1862}
+\item \textbf{Heartbeat}：定期检查服务状态以确定其可用性
+\label{idx:1863}
+\item \textbf{Metricbeat}：定期从操作系统和服务器上运行的服务收集指标
+\label{idx:1864}
+\item \textbf{Packetbeat}：捕获应用服务器之间的网络流量，并实时分析网络数据包
+\label{idx:1865}
+\item \textbf{Winlogbeat}：传送 Windows 事件日志
+\end{itemize}
+
+在较简单的部署中，Filebeat 可以作为 Logstash 的轻量级替代方案。不过在通常的部署中，Filebeat 负责大规模的日志传送，而集中式的 Logstash 安装则承担所有繁重的工作，包括转换、过滤和转发。
+
+\subsubsection{Fluentd}
+
+\label{idx:1866}
+Fluentd 是 Logstash 的主要竞争对手，也是一些云服务提供商的首选工具。
+
+\label{idx:1867}
+得益于其模块化的插件式设计，你可以找到针对数据源（如 Ruby 应用、Docker 容器、SNMP 或 MQTT 协议）、数据输出（如 Elastic Stack、SQL Database、Sentry、Datadog 或 Slack）以及多种其他类型的过滤器与中间件的插件。
+
+\emph{图 17.2} 展示了如何将 Fluentd 用作 Docker 日志驱动：
+
+\myGraphic{0.920}{images/B18456_17_02.png}{图 17.2：以 Fluentd 作为日志驱动的 Docker}
+
+图中，Fluentd 日志驱动将容器日志发送到 Fluentd 收集器，后者再将其发送到集中式日志平台。
+
+\label{idx:1868}
+\label{idx:1869}
+总体而言，Fluentd 比 Logstash 更省资源，但它仍不是大规模运行的完美解决方案。为了实现轻量级日志转发，Fluentd 通常与 Fluent Bit 搭配使用，后者扮演的角色类似于 Logstash 生态中的 Filebeat。
+
+\subsubsection{Fluent Bit}
+
+\label{idx:1870}
+Fluent Bit 用 C 编写，提供了一个更快、更轻量的解决方案，可接入 Fluentd。作为日志处理器和转发器，它还内置了许多用于输入和输出的集成。
+
+\label{idx:1871}
+除了日志收集，Fluent Bit 还能在 Linux 和 Windows 系统上导出系统级指标，如 CPU、磁盘、网络和进程统计信息。它既可与 Fluentd 一起使用，也可以直接转发到 Elasticsearch 或 InfluxDB（一种时序数据库），如 \emph{图 17.3} 所示。
+
+\myGraphic{0.667}{images/B18456_17_03.png}{图 17.3：Fluent Bit 监控 Kubernetes、Linux 和 Windows 服务器}
+
+Fluent Bit 从多种环境（Kubernetes、Linux 和 Windows）收集日志，并将它们发送到集中式日志平台。
+
+\subsubsection{Vector}
+
+尽管 Logstash 和 Fluentd 是稳定、成熟且经过检验的解决方案，但统一日志层领域也出现了更新的替代品。
+
+\label{idx:1872}
+\label{idx:1873}
+\label{idx:1874}
+其中之一是由 Datadog 开发的 Vector，它旨在用单一工具处理所有可观测性数据。Vector 是一个高性能的可观测性数据管道，用于收集、转换和路由日志与指标。这一点也体现在技术选型上。Vector 的引擎使用 Rust，脚本使用 Lua，并通过 \textbf{VRL}（\textbf{Vector Remap Language}）这一强大的自定义脚本转换语言来处理可观测性数据（日志、指标、追踪）。
+
+\myGraphic{0.917}{images/B18456_17_04.png}{图 17.4：展示日志事件处理过程的 Vector 数据管道}
+
+Vector 接收原始日志，并将其标准化为统一的日志事件格式。当日志事件流经管道时，会经历各种转换。随后，日志被发送到多个目的地，以供后续存储和分析。
+
+\label{idx:1875}
+作为较新的工具，与 Fluentd 或 Logstash 等成熟替代品相比，Vector 的集成生态和社区支持仍在成长。为 Vector 编写自定义插件可能颇具挑战。尽管该工具处于积极维护中，但由于开发时间相对较短，仍可能存在一些缺陷和运维问题。
+
+\subsection{日志聚合}
+
+\label{idx:1876}
+\label{idx:1877}
+日志聚合解决了海量数据带来的另一个问题：如何存储和访问日志。统一日志层即便在机器故障时也能让日志可用，而日志聚合的任务则是帮助我们快速找到所需的信息。
+
+日志并不存储在本地，而是被聚合并转发到中心设施。这样一来，即使服务本身宕机，日志也依然可用。以集中方式存储日志还有助于关联来自不同微服务的数据。
+
+\label{idx:1878}
+此外，日志聚合系统通常还提供集中式 \textbf{异常跟踪}系统等功能，帮助管理微服务中的异常。
+
+能够存储、索引和查询海量数据的两款可选产品是 Elasticsearch 和 Loki。
+
+\subsubsection{Elasticsearch}
+
+\label{idx:1879}
+Elasticsearch 及其分支 OpenSearch 是自托管日志聚合的热门解决方案。它就是（昔日）ELK 技术栈中的那个 \emph{E}。它基于 Apache Lucene 提供了出色的搜索引擎，并针对大规模日志数据的存储、索引和查询进行了优化。
+
+\label{idx:1880}
+Elasticsearch 拥有大量集成，无论是社区支持还是商业服务支持都很出色。一些云服务提供商将 Elasticsearch 作为托管服务提供，这使得在应用中引入 Elasticsearch 更加容易。除此之外，Elasticsearch 的缔造者 Elastic 公司还提供了一种托管解决方案，它不绑定任何特定的云服务提供商。
+
+\subsubsection{Loki}
+
+\label{idx:1881}
+Loki 的关注重点是横向扩展性和高可用性。它从一开始就作为受 Prometheus 启发的云原生解决方案而构建，我们将在下一节介绍 Prometheus。
+
+\label{idx:1882}
+尽管 Loki 应当算是一个稳定的解决方案，但它不如 Elasticsearch 流行，这意味着某些集成可能缺失，文档和社区支持也无法与 Elasticsearch 相提并论。Fluentd 和 Vector 都有支持 Loki 进行日志聚合的插件。
+
+\subsection{日志可视化}
+
+\label{idx:1883}
+我们要考虑的日志技术栈的最后一部分是日志可视化。它帮助我们查询和分析日志。它以易于获取的方式呈现数据，从而让所有相关方——如运维人员、开发者、QA 或业务团队——都能对其进行检查。
+
+日志可视化工具让我们能够创建仪表盘，从而使我们更轻松地读取所关注的数据。借助它，我们可以通过简单的用户界面探索事件、查找关联并发现异常数据。
+
+有两款专门用于日志可视化的主要产品。
+
+\subsubsection{Kibana}
+
+\label{idx:1884}
+\label{idx:1885}
+Kibana 是 ELK 技术栈的最后一个组成部分。它在 Elasticsearch 之上提供了更简单的查询语言。尽管你可以用 Kibana 查询和可视化不同类型的数据，但它主要还是聚焦于日志。
+
+\subsubsection{Grafana}
+
+\label{idx:1886}
+\label{idx:1887}
+Grafana 是另一款数据可视化工具。它主要聚焦于时序数据，如性能指标。不过，随着 Loki 的引入，它也可以用于日志分析。
+
+它的优势之一是设计时就考虑了可插拔后端，因此很容易根据需要切换存储。
+
+\emph{图 17.5} 展示了 Grafana 技术栈的关键组件，以及它们如何协同工作来收集、存储和可视化可观测性数据：
+
+\myGraphic{0.920}{images/B18456_17_05.png}{图 17.5：Grafana 技术栈}
+
+\label{idx:1888}
+显然，一个微服务可以同时支持多种监控系统，但一般而言，限制所连接工具的数量是合理的。Grafana 建议从已弃用的 Promtail 和 Prometheus 迁移到 Alloy（一个 OpenTelemetry Collector），不过 Prometheus 依然流行且被广泛使用。请注意，我们在此重点演示 OpenTelemetry Collector 与 Prometheus 和 Loki 的集成，而非展示 OpenTelemetry 的全部能力。
+
+\label{idx:1889}
+Grafana 技术栈包含许多产品，尤其是以下这些：
+
+\begin{itemize}
+\item \textbf{Grafana}：可视化与仪表盘平台
+\label{idx:1890}
+\item \textbf{Loki}：可横向扩展、高可用、多租户的日志聚合系统
+\label{idx:1891}
+\label{idx:1892}
+\item \textbf{Mimir}：可横向扩展、高可用、多租户的 \textbf{时序数据库}（\textbf{TSDB}），用于 Prometheus 的长期存储
+\label{idx:1893}
+\item \textbf{Tempo}：大规模分布式追踪后端
+\label{idx:1894}
+\item \textbf{Promtail}：将本地日志内容传送到私有 Grafana Loki 实例或 Grafana Cloud 的代理
+\label{idx:1895}
+\item \textbf{Prometheus}：一种监控与告警系统，实时从应用和基础设施收集指标，并将其存储在时序数据库中以便分析和可视化
+\label{idx:1896}
+\item \textbf{Alloy}：一个内置 Prometheus 管道的 OpenTelemetry Collector，支持指标、日志、追踪和性能剖析（如 Go pprof 剖析或 eBPF 剖析）
+\end{itemize}
+
+\emph{图 17.6} 展示了由 Loki 收集的应用日志如何在 Grafana 中可视化：
+
+\myGraphic{0.920}{images/B18456_17_06.png}{图 17.6：Grafana Logs Drilldown 仪表盘上应用日志消息的概览}
+
+\begin{myTip}{提示}
+需要查看此图的高分辨率版本？请在下一代 Packt Reader 中打开本书，或在 PDF/ePub 副本中查看。
+
+\textbf{下一代 Packt Reader} 以及本书的 \textbf{免费 PDF/ePub 副本}均随购买附赠。扫描二维码，或访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后使用搜索栏按书名查找本书。请仔细核对显示的版本，以确保你获取的是正确的版本。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/01.png}\end{center}
+\end{myTip}
+
+该仪表盘充当日志分析工具，因为它允许对日志进行过滤和搜索。
+
+\label{idx:1897}
+虽然日志为我们提供了详细的事件级洞见，但要在规模化场景下做出明智决策，我们还需要对系统健康状况的总体了解。这正是监控发挥作用的地方。
+
+\section{监控}
+
+\label{idx:1898}
+要基于数据做出决策，你就需要可供依据的数据。监控是指系统地收集和分析数据（如应用性能指标）的过程，以了解、管理和改进系统的健康状况与行为。与告警相结合时，监控指标和健康检查能帮助我们了解系统何时按预期运行、何时发生故障。
+
+收集应用指标有助于了解应用在真实用户使用下的行为，而非在合成测试中的行为。指标是随时间上报的数值型测量结果，如 CPU/内存负载、每秒请求数或服务响应时间。它们以时序数据的形式存储，用于评估系统的有效性并生成告警。
+
+我们最关注的三类指标如下：
+
+\begin{itemize}
+\item \textbf{可用性}，让我们了解哪些资源正在运行，哪些已经崩溃或失去响应
+\item \textbf{资源利用率}，让我们洞悉工作负载如何适应系统
+\item \textbf{性能}，向我们展示在何处以及如何提升服务质量
+\end{itemize}
+
+\label{idx:1899}
+两种常见的监控模型是推（push）和拉（pull）。在前者中，每个被监控对象（一台机器、一个应用或一台网络设备）将数据推送到中心点。在后者中，这些对象在配置好的端点上提供数据，监控代理则定期抓取这些数据。Prometheus 同时使用这两种方式：对短生命周期的批处理任务采用推，对长生命周期的服务采用拉。
+
+拉模型更易于扩展。这样，多个对象不会阻塞监控代理的连接。相反，多个代理可以在就绪时随时收集数据，从而更好地利用可用资源。
+
+提供 C++ 客户端库的两种监控解决方案是 Prometheus 和 InfluxDB。默认情况下，InfluxDB 使用推模型。除了监控之外，它在物联网、传感器网络和智能家居等领域也很流行。Prometheus 则专注于收集和存储时序数据。
+
+Prometheus 和 InfluxDB 通常都与 Grafana 搭配使用，以可视化数据和管理仪表盘。两者都内置了告警功能，但它们也可以通过 Grafana 与外部告警系统集成。
+
+现在，让我们用 C++ 并结合 Prometheus 来实现应用指标。
+
+\subsection{实现应用指标}
+
+\label{idx:1900}
+Prometheus 的官方 C++ 客户端库 \texttt{prometheus-cpp} 提供了标准的指标类型。指标按照 OpenMetrics 规范暴露，该规范已成为标准接口。此外，Drogon 框架有自己的指标导出器，可实现无缝集成。
+
+在本节介绍的示例中，我们将深入探究 Drogon 宏和组件自动创建之外的内容，以便你更好地理解这个框架。
+
+Drogon 的中间件采用洋葱模型，其中的回调旨在进入内层（\texttt{nextCb}），再返回洋葱的外层（\texttt{mcb}）。
+
+下面的示例使用 Drogon 实现了一个 Prometheus 中间件 \texttt{PromStat}，它拦截 HTTP 请求并测量请求的数量和耗时：
+
+\begin{codebox}[cpp]
+//不会自动创建
+class PromStat final : public HttpMiddleware<PromStat, false> {
+ public:
+  void invoke(const HttpRequestPtr &req, MiddlewareNextCallback &&nextCb,
+              MiddlewareCallback &&mcb) override;
+};
+\end{codebox}
+
+该中间件提供两个指标：\texttt{http\_\allowbreak{}requests\_\allowbreak{}total} 和 \texttt{http\_\allowbreak{}request\_\allowbreak{}duration\_\allowbreak{}seconds}。\texttt{promstat.\allowbreak{}cpp} 中的以下实现展示了如何为每个 HTTP 请求记录这些指标：
+
+\begin{codebox}[cpp]
+void PromStat::invoke(const HttpRequestPtr &req,
+                      MiddlewareNextCallback &&nextCb,
+                      MiddlewareCallback &&mcb) {
+  std::string path{req->matchedPathPattern()};
+  auto method = req->methodString();
+  const auto promExporter = app().getPlugin<plugin::PromExporter>();
+\end{codebox}
+
+\label{idx:1901}
+在收集数据之前，有必要检查插件是否已正确配置。\texttt{ http\_\allowbreak{}requests\_\allowbreak{}total} 指标跟踪对由 \texttt{method} 和 \texttt{path} 参数指定的特定 HTTP 端点发起的调用次数：
+
+\begin{codebox}[text]
+  if (promExporter) {
+    const auto collector =
+        promExporter->getCollector<monitoring::Counter>("http_requests_total");
+    if (collector) {
+      collector->metric({method, path})->increment();
+    }
+  }
+\end{codebox}
+
+接下来，捕获初始时间戳，以测量请求的处理时长：
+
+\begin{codebox}[text]
+  const auto start = trantor::Date::date();
+\end{codebox}
+
+此后，调用中间件链中的下一个回调（\texttt{nextCb}），从而抵达端点处理器：
+
+\begin{codebox}[cpp]
+  nextCb([mcb = std::move(mcb), &promExporter, start, method,
+          path](const HttpResponsePtr &resp) {
+\end{codebox}
+
+然后，当控制权从被调用的函数返回时，更新 \texttt{http\_\allowbreak{}request\_\allowbreak{}duration\_\allowbreak{}seconds} 指标，以记录请求执行所花的时间：
+
+\begin{codebox}[cpp]
+    if (promExporter) {
+      const auto collector = promExporter->getCollector<monitoring::Histogram>(
+          "http_request_duration_seconds");
+      if (collector) {
+        static const std::vector<double> boundaries{0.0001, 0.001, 0.01, 0.1,
+                                                    0.5,    1,     2,    3};
+\end{codebox}
+
+请求执行的时长是此处的当前时间戳与初始时间戳之差：
+
+\begin{codebox}[text]
+        const auto end = trantor::Date::date();
+        const auto duration =
+            end.microSecondsSinceEpoch() - start.microSecondsSinceEpoch();
+\end{codebox}
+
+\label{idx:1902}
+这个差值被收集到 \texttt{http\_\allowbreak{}request\_\allowbreak{}duration\_\allowbreak{}seconds} 直方图指标中：
+
+\begin{codebox}[text]
+        // The parameters 1h and 6 specify the lifetime of the metric (1 hour) and the number of rotating time buckets
+        collector->metric({method, path}, boundaries, 1h, 6)
+            ->observe(static_cast<double>(duration) / 1000000);
+      }
+    }
+\end{codebox}
+
+最后，控制权连同响应一起返回到中间件的外层：
+
+\begin{codebox}[text]
+    mcb(resp);
+  });
+}
+\end{codebox}
+
+Drogon 框架将直方图指标划分为相等的时间区间，把数值放入各个桶中，并轮换这些桶，移除超过最大生存期的过期数值。
+
+相应的 Drogon 配置文件启用了 Prometheus 导出器及其 \texttt{/metrics} HTTP 端点。如你所见，该插件收集了中间件中实现的计数器（counter）和直方图（histogram）指标。Prometheus 还支持其他指标类型，如 gauge 和 summary。
+
+配置文件如下所示：
+
+\begin{codebox}[json]
+{
+  // the other application settings, including port listeners
+  ...
+  "plugins": [
+    {
+      "name": "drogon::plugin::PromExporter",
+      "config": {
+        "path": "/metrics",
+        "collectors":[
+          {
+            "name": "http_requests_total",
+            "help": "The total number of http requests",
+            "type": "counter",
+            "labels": ["method", "path"]
+          },
+          {
+            "name": "http_request_duration_seconds",
+            "help": "The processing time of http requests, in seconds",
+            "type": "histogram",
+            "labels": ["method", "path"]
+          }
+        ]
+      }
+    }
+  ]
+}
+\end{codebox}
+
+\label{idx:1903}
+在这个多阶段构建中，应用在一个临时容器中编译：
+
+\begin{codebox}[docker]
+FROM ubuntu:questing AS builder
+RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -y build-essential gcc cmake ninja-build python3-pip python3-venv
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip3 install conan==2.* && conan profile detect
+ADD . /root/src
+WORKDIR /root/src
+RUN mkdir -p build && cd build && \
+    conan install .. --build=missing -s:a build_type=Release -s:a compiler.cppstd=gnu20 -of . && \
+    cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build . && cmake --install .
+\end{codebox}
+
+然后，从构建器将可执行文件和配置文件复制到最终容器镜像中。配置文件是从构建容器中复制的，因为它已经与源代码一起存在于那里。Dockerfile 中的 \texttt{EXPOSE} 关键字是一种文档化手段，用以表明应用承诺监听指定的网络端口：
+
+\begin{codebox}[docker]
+FROM ubuntu:questing
+RUN apt update && apt install -y curl && apt clean
+COPY --from=builder /root/src/build/bin/customer /bin/customer
+COPY --from=builder /root/src/build/bin/config.json /bin/config.json
+EXPOSE 8080
+CMD ["/bin/customer"]
+WORKDIR /bin
+\end{codebox}
+
+\label{idx:1904}
+是时候将这些组件整合起来了。Drogon 宏通常会隐藏应用的 \texttt{register\allowbreak{}Handler} 方法，在此例中该方法会调用已注册的 \texttt{PromStat} 中间件的 \texttt{invoke()} 方法。作为装饰器（Decorator）设计模式的一种实现，中间件扩展了处理器的功能，并且既可以按名称附加，也可以按对象附加。\texttt{main.cpp} 中的以下代码演示了这一点，其中 \texttt{spdlog::\allowbreak{}sinks::\allowbreak{}stdout\_\allowbreak{}sink\_\allowbreak{}mt} 是一个多线程 sink：
+
+\begin{codebox}[cpp]
+//实现部分省略
+...
+const auto logger = spdlog::stdout_logger_mt("main");
+app()
+    .loadConfigFile("config.json")
+    //不会自动创建
+    .registerMiddleware(std::make_shared<PromStat>())
+    .registerHandler(
+        "/customer/v1",
+       
+[&logger, &get_responder](
+             const HttpRequestPtr &request,
+            std::function<void(const HttpResponsePtr &)> &&callback) {
+          SPDLOG_LOGGER_INFO(logger, "handling HTTP request to {}",
+                              request->path());
+          handle_get(request, get_responder, std::move(callback));
+        },
+        {Get, "PromStat"})
+\end{codebox}
+
+通过这个示例，你已经了解了如何在 Drogon 中实现应用指标并将其与 Prometheus 集成。
+
+\emph{图 17.7} 展示了由 Prometheus 收集的应用指标如何在 Grafana 中可视化：
+
+\myGraphic{0.920}{images/B18456_17_07.png}{图 17.7：Grafana Drilldown Metrics 仪表盘上应用指标可视化的概览}
+
+\label{idx:1905}
+该仪表盘充当指标分析工具，允许对指标进行过滤和搜索。
+
+Prometheus 监控系统的一个关键组成部分是 Alertmanager，它会基于指标阈值被突破的情况，向各种通知渠道（如电子邮件和 Slack）发送通知。Grafana 可以连接到该告警系统，以提供统一的监控体验。（除日志和指标外，Grafana 的可观测性平台还收集和分析剖析数据与追踪。）
+
+除了指标和告警之外，分布式系统监控的一个基本组成部分是检查服务健康状况，我们接下来将对此进行探讨。
+
+\subsection{监控健康检查}
+
+\label{idx:1906}
+由于微服务常常是自动化的目标，它们需要具备传达自身内部状态的能力。即便进程存在于系统中，也不意味着应用可以正常工作。打开的网络端口也是如此：应用可能正在监听，但尚不能响应。健康检查 API 为外部服务提供了一种判断应用是否已准备好处理工作负载的方式。自愈和自动扩缩容利用健康检查来判断何时需要干预。其基本前提是：当应用按预期运行时，给定端点（如 \texttt{/health}）返回 HTTP 状态码 \texttt{200}；如果发现任何问题，则返回其他状态码（或根本不返回）。
+
+Kubernetes 走得更远，将探针细分为三种主要类型：存活探针（liveness）用于判断何时重启容器，就绪探针（readiness）用于判断容器何时准备好接收流量，启动探针（startup）则用于验证容器内的应用是否已经启动。如果应用在一段超时时间内没有响应，Kubernetes 会假定应用已出故障，从而终止该容器并启动一个新容器。因此，健康检查必须响应得非常迅速；否则，Kubernetes 将陷入不断重启承载该应用的容器的无限循环。
+
+Kubernetes 探针使用多种协议来检查容器的健康状况：HTTP、HTTPS（HTTP 的安全加密版本）、TCP（快速检查应用是否在特定 TCP 端口上监听）、command（任意命令）以及 gRPC（一种用于服务间通信的高性能 RPC 框架）。
+
+以下代码在 \texttt{main.cpp} 中注册了 Web 应用的健康检查端点：
+
+\begin{codebox}[cpp]
+//实现部分省略
+...
+app()
+    ...
+    .registerHandler(
+        //出于简洁性，将存活与就绪健康检查合并
+        "/health",
+        [](const HttpRequestPtr &,
+            std::function<void(const HttpResponsePtr &)> &&callback) {
+          const auto resp =
+              HttpResponse::newHttpResponse(k200OK, CT_TEXT_PLAIN);
+          resp->setBody("OK");
+          callback(resp);
+        },
+        {Get})
+    run();
+\end{codebox}
+
+\label{idx:1907}
+接下来，我们探讨追踪，它不仅有助于排查性能问题，还能让我们更好地洞悉应用在真实流量下的行为。
+
+\section{追踪}
+
+\label{idx:1908}
+日志收集的是来自单一位置的零散信息，而追踪关注的则是单个事务的整个生命周期，从它由用户操作发起的那个时刻开始。分布式追踪将追踪的理念扩展到多个服务和机器之上。
+
+追踪所捕获的信息可能包括函数调用、其参数、大小和执行时间。每个追踪还拥有一个唯一的追踪标识符（trace ID），它被分配给各个请求，用于在请求穿越分布式系统中的各个服务时对其进行跟踪，从而提供对完整请求路径的可视性。
+
+每个追踪由多个 span 组成。追踪中的层级化 span 用于构建并可视化分布式系统中各服务之间的依赖关系图。这基于上下文传播（context propagation），即在分布式应用的不同服务、层或线程之间传递请求元数据，如 trace ID、span ID 和用户数据。
+
+\begin{myNotic}{注意}
+
+需要注意的是，虽然 trace ID 可以用作关联 ID，但两者并不等同。关联 ID 是一个唯一标识符，用于在特定请求于单个服务或系统内移动时跟踪其所有日志记录。
+\end{myNotic}
+
+\label{idx:1909}
+因此，在实现追踪时，有必要采用一种能与系统所有可能元素（前端应用、后端应用和数据库）集成的追踪解决方案。这样，请求就可以被端到端地跟踪，从而能够定位性能瓶颈、排查错误并理解服务之间的交互。
+
+下图是单个追踪的概览：
+
+\myGraphic{0.920}{images/B18456_17_08.png}{图 17.8：单个追踪}
+
+\begin{itemize}
+\item 图中，我们看到两个服务通过网络进行通信。在 \emph{服务 A} 中，有一个父 span，它包含一个子 span 和一条日志。子 span 通常对应更深层的函数调用。日志代表最小的一块信息。它们每一个都带有时间信息，并且可能包含附加信息。
+\item 对 \emph{Service B} 的网络调用会保留 span 上下文。尽管 \emph{Service B} 在另一台机器上的另一个进程中执行，但由于 trace ID 被保留，所有信息之后都能重新组装起来。
+\end{itemize}
+
+在接下来的几个小节中，我们将介绍为实现分布式追踪而开发的一些最著名的开源标准和工具。
+
+\subsection{Jaeger 与 OpenTracing}
+
+\label{idx:1910}
+\label{idx:1911}
+\label{idx:1912}
+\label{idx:1913}
+分布式追踪领域的早期标准之一是 OpenTracing，它由 Jaeger 的作者们提供支持。OpenTracing 项目于 2022 年为给 OpenTelemetry 让路而被归档。2023 年，Jaeger agent 被弃用，但 Jaeger 后端仍在维护。OpenTelemetry 可观测性框架支持 Jaeger 后端，是连接该后端所推荐的方案。
+
+\label{idx:1914}
+OpenTracing 和该 agent 在多个生产环境中仍在使用，因为迁移到其他软件需要时间，而且由于项目依赖和已经部署的基础设施，通常不会一蹴而就。因此，后面提供的信息大多仅供参考。
+
+\label{idx:1915}
+Jaeger 是一个为云原生应用构建的追踪器。它解决了监控分布式事务和传播追踪上下文的问题。它适用于以下用途：
+
+\begin{itemize}
+\item 性能或延迟优化
+\item 执行根因分析
+\item 分析服务间的依赖关系
+\end{itemize}
+
+OpenTracing 是一个开放标准，它提供的 API 与厂商无关。这意味着，当你的应用使用 OpenTracing 进行插桩时，就能避免被锁定在某个特定的厂商。如果将来某一刻你决定从 Jaeger 切换到 Zipkin、DataDog 或任何其他兼容的追踪器，无需修改整段插桩代码。
+
+有许多与 OpenTracing 兼容的客户端库。你还能找到很多资源，包括讲解如何实现该 API 的教程和文章。OpenTracing 官方支持以下语言：Go、JavaScript、Java、Python、Ruby、PHP、Objective-C、C++ 和 C\#。此外还有一些非官方库，而 NGINX 和 Envoy 之类的特定应用也能导出 OpenTracing 数据。
+
+Jaeger 也接受 Zipkin 格式的样本。这意味着，如果你（或你的任何依赖项）已经使用 Zipkin，就无需将插桩从一种格式改写成另一种格式。下一节我们将介绍 Zipkin。
+
+Jaeger 后端具有良好的扩展性。如果你想评估它，可以将其作为单个二进制文件或单个应用容器来运行。在生产环境中，你可以将 Jaeger 配置为使用它自带的后端，或使用受支持的外部后端，例如 Elasticsearch、Cassandra 或 Kafka。
+
+\label{idx:1916}
+Jaeger 是 \textbf{云原生计算基金会}（\textbf{CNCF}）的毕业项目。这意味着它的成熟度已经达到与 Kubernetes、Prometheus 和 Fluentd 相近的水平。
+
+\subsection{Zipkin}
+
+\label{idx:1917}
+Zipkin 是一个更早的项目，这也意味着它发展成熟且稳定。通常，资历更老的项目得到的支持也更好。尽管如此，这个系统的流行程度远不及 OpenTelemetry，后者被视为分布式追踪的现代标准。
+
+Zipkin 包含对（现已弃用的）OpenTracing API 的支持，但其成熟度和支持水平可能不及原生的 Jaeger 协议。正如前面提到的，也可以将 Jaeger 配置为以 Zipkin 格式收集追踪数据。这意味着两者至少在某种程度上是可以互换的。该项目由 Apache 软件基金会托管，但不被视为 CNCF 项目。一个缺点是 Zipkin 没有官方支持的 C++ 实现。虽说有一些非官方库，但它们似乎并未得到良好的支持。
+
+\subsection{OpenTelemetry}
+
+\label{idx:1918}
+OpenTelemetry 由 OpenTracing 和 OpenCensus 合并而成，是一个 CNCF 项目，也是收集和传输遥测数据的行业标准。这些遥测数据包括日志、指标和追踪，在该项目的术语中统称为信号（signal），它们能提供系统状态的全面视图。在实践中，追踪是最早被广泛采用的用例，这也是 OpenTelemetry 常常在追踪的语境下被讨论的原因。
+
+虽然 OpenTelemetry 收集的不只是追踪数据，但该框架可以通过在日志记录中存储当前的 trace ID 和 span ID，把追踪与日志关联起来。OpenTelemetry 还引入了一种称为 baggage 的特殊信号类型，用于在信号之间传递上下文信息。这个可观测性框架 100\% 免费且开源。
+
+\myGraphic{0.920}{images/B18456_17_09.png}{图 17.9：OpenTelemetry 架构}
+
+\label{idx:1919}
+OpenTelemetry 的一个关键组件是 OpenTelemetry Collector，它负责从各种数据源收集、处理遥测数据，并将其传输到监控和分析系统。接收器（receiver）负责收集遥测数据，处理器（processor）对数据进行过滤、转换和充实，导出器（exporter）则将处理后的数据发送到各种后端。流水线（pipeline）定义了数据在 Collector 中行进的路径，从接收、处理（或修改）一直到导出。通信使用 \textbf{OpenTelemetry Protocol}（\textbf{OTLP}），它支持两种传输方式：gRPC 和 HTTP，以及用于收集指标的拉取和推送两种模型。
+
+该框架为多种语言提供 SDK，包括 C++、C\#/.NET、Go、Java、JavaScript、PHP、Python 和 Swift，但自动插桩仅对 .NET、Go、Python、Java、JavaScript 和 PHP 可用。
+
+自动插桩是指使用库或 agent 自动收集并发送遥测数据，无需修改应用代码。手动插桩则是指在应用代码中添加特定的代码片段，以捕获并发送遥测数据。这样，你就能收集特定于自己应用的自定义指标。
+
+许多库和框架已经支持 OpenTelemetry，或通过 OpenTelemetry 插桩来获得支持——尤其是 Boost.Log、Log4cxx 和 \texttt{spdlog}。
+
+此外，OpenTelemetry 还能与 eBPF 集成。eBPF 是一种 Linux 内核技术，它让工程师能够通过沙箱和预编译，在不修改内核源代码、也不加载内核模块的情况下，把编程代码直接嵌入操作系统内核。这使得我们可以同时收集来自 Linux 内核的低层遥测数据，以及来自云和 Kubernetes 环境的高层遥测数据，从而深入了解应用行为。
+
+\label{idx:1920}
+通过绕过应用内部的插桩点，eBPF 能更完整地呈现系统运行状况，在 Kubernetes 这类复杂的分布式环境中尤其如此。例如，在 Kubernetes 中，eBPF 可用于监控 Pod 之间的网络流量、分析应用性能以及检测资源泄漏。
+
+\begin{myNotic}{注意}
+
+\textbf{集成式可观测性解决方案}
+
+\label{idx:1921}
+如果你不想自己构建可观测性层，可以考虑一些流行的商业解决方案。它们都采用软件即服务（SaaS）模式运营。这里我们不会做详细比较，因为在本书写作完成之后，它们提供的服务可能会发生巨大变化。这些服务如下：Uptrace、Datadog、New Relic、Dynatrace、Splunk、Grafana、Elastic、Lightstep、Honeycomb、Better Stack、Logz.io、Coralogix、Sumo Logic 和 SigNoz。
+\end{myNotic}
+
+\section{小结}
+
+在本章中，我们探讨了微服务中的可观测性，重点关注遥测的三大支柱——日志、追踪和指标。我们从日志入手，讨论了微服务背景下的日志记录。接下来，我们考察了监控，其中会持续收集指标和健康检查，以跟踪系统性能。当与告警机制结合时，这些手段能够自动检测异常和事件。我们还看了一个动手示例，使用 Drogon 框架在 C++ 中实现 Prometheus 应用指标，展示了这些概念在实践中如何融会贯通。最后，我们转向追踪，它提供了关于请求如何在微服务之间流动的更高层视图。日志聚合、分布式追踪、应用指标和健康检查 API 共同构成了现代云原生系统中的核心可观测性模式。
+
+下一章专门讨论云原生设计——这是一个非常有趣但也颇为复杂的话题，它把 SOA、CI/CD、微服务、容器和云服务串联在一起。事实证明，C++ 出色的性能正是某些云原生构建模块所欢迎的特性。
+
+\section{问题}
+
+\begin{enumerate}
+\item 可观测性、监控、日志记录和追踪之间有什么区别？
+\item 什么是统一日志层？
+\item 收集应用指标的拉取模型与推送模型之间有什么区别？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Rob Chapman 和 Peter Holmes，\emph{Observability with Grafana: Monitor, Control, and Visualize Your Kubernetes and Cloud Platforms Using the LGTM Stack}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/observability-with-grafana-9781803249643}{https://www.packtpub.com/en-us/product/observability-with-grafana-9781803249643}
+\item Malcolm Orr 和 Yang-Xin Cao，\emph{Mastering Elastic Kubernetes Service on AWS:} \emph{Deploy and Manage EKS Clusters to Support Cloud-Native Applications in AWS}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/mastering-elastic-kubernetes-service-on-aws-9781803234823}{https://www.packtpub.com/en-us/product/mastering-elastic-kubernetes-service-on-aws-9781803234823}
+\item Drogon Framework，\emph{Middleware and Filter}，GitHub Wiki：\href{https://github.com/drogonframework/drogon/wiki/ENG-05-Middleware-and-Filter}{https://github.com/drogonframework/drogon/wiki/ENG-05-Middleware-and-Filter}
+\item Drogon Framework，\emph{Controller Introduction}，GitHub Wiki：\href{https://github.com/drogonframework/drogon/wiki/ENG-04-0-Controller-Introduction}{https://github.com/drogonframework/drogon/wiki/ENG-04-0-Controller-Introduction}
+\item Drogon Framework，\emph{Configuration File}，GitHub Wiki：\href{https://github.com/drogonframework/drogon/wiki/ENG-11-Configuration-File}{https://github.com/drogonframework/drogon/wiki/ENG-11-Configuration-File}
+\item Prometheus，\emph{Metric Types}：\href{https://prometheus.io/docs/concepts/metric_types/}{https://prometheus.io/docs/concepts/metric\_types/}
+\item Gabi Melman，\emph{spdlog Wiki}，GitHub：\href{https://github.com/gabime/spdlog/wiki/}{https://github.com/gabime/spdlog/wiki/}
+\item Drogon Framework，\emph{Understanding Drogon’s Threading Model}，GitHub Wiki：\href{https://github.com/drogonframework/drogon/wiki/ENG-FAQ-1-Understanding-drogon-threading-model}{https://github.com/drogonframework/drogon/wiki/ENG-FAQ-1-Understanding-drogon-threading-model}
+\item Kubernetes，\emph{Configure Liveness, Readiness and Startup Probes}：\href{https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/}{https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/}
+\item Elastic，\emph{Beats}：\href{https://www.elastic.co/docs/reference/beats}{https://www.elastic.co/docs/reference/beats}
+\item LibHunt，\emph{Awesome C++}：\emph{A Curated List of Awesome C/C++ Frameworks, Libraries, Resources, and Shiny Things}：\href{https://cpp.libhunt.com/}{https://cpp.libhunt.com/}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属福利} 扫描此二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}

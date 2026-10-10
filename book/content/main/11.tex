@@ -1,0 +1,1075 @@
+在\emph{第 7 章}\emph{构建与打包}中，我们了解了应用可以使用的各种构建系统和打包系统，它们构成了自动化流水线的基础。本章我们将在此基础上引入 \textbf{持续集成}（\textbf{CI}）与 \textbf{持续部署}（\textbf{CD}）——这些实践能够提升我们所开发应用的服务质量和健壮性。虽然 CI/CD 常与 DevOps 工作流联系在一起，但它对 C++ 架构师和开发者同样重要，因为他们需要确保系统能够安全地演进、可预期地发布。
+
+CI 和 CD 都依赖于良好的测试覆盖率。CI 流水线主要使用单元测试和集成测试，而 CD 更依赖冒烟测试（一组最小化的测试通过，表明产品已准备好接受进一步测试，从而通过尽早发现关键错误来节省时间和资源）和端到端测试，以确保应用行为正确。在上一章中，你已经深入了解了测试的方方面面。有了这些知识，你就已经准备好构建一条 CI/CD 流水线了。
+
+本章将涵盖以下主题：
+
+\begin{itemize}
+\item 理解并实现 CI
+\item 探索门禁机制
+\item 评审代码变更
+\item 探索测试驱动的自动化
+\item 将部署作为代码来管理
+\item 构建部署代码
+\item 理解并实现 CD
+\item 使用不可变基础设施
+\end{itemize}
+
+在此过程中，你将动手实践 GitLab 和 GitHub 的 CI/CD 流水线——它们是 CI/CD 的基本构建模块，还会接触到 Ansible、Packer 和 Terraform 等辅助工具，从而为设计健壮的 CI/CD 工作流打下实践基础。
+
+\section{技术需求}
+
+本章的示例代码可以在 \href{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter11}{https://github.com/PacktPublishing/Software-Architecture-with-Cpp-2E/tree/main/Chapter11} 找到。
+
+要理解本章讲解的概念，你需要安装以下内容：
+
+\begin{itemize}
+\item 一个免费的 GitLab 账户
+\item 一个免费的 GitHub 账户
+\item Ansible 11.1 或更高版本
+\item Terraform 1.11 或更高版本
+\item Packer 1.12 或更高版本
+\end{itemize}
+
+\section{理解并实现 CI}
+
+\label{idx:895}
+\label{idx:896}
+CI 是一种通过频繁合并代码变更来缩短集成周期的做法。在传统软件开发中，许多不同的功能各自独立开发，直到发布前才集成；而在采用 CI 的项目中，集成一天可能发生多次。
+
+通常，开发者所做的每一项变更都会被测试，并同时集成到中央代码仓库中。由于每次变更都会触发测试，反馈回路要快得多——问题能被迅速发现和解决，而且常常是在开发者对这次变更还记忆犹新的时候。因此，与发布前才测试的传统做法相比，CI 既节省了大量工作，又提升了软件质量。
+
+本节中，我们将探讨催生 CI 的理念，以及 CI 给工作流带来的好处。最后，我们会进入实践环节，用 GitLab 构建一条 CI 流水线。
+
+\subsection{尽早发布，频繁发布}
+
+\label{idx:897}
+你听说过 \emph{“尽早发布，频繁发布”} 这句名言吗？这是一种软件开发理念，强调短发布周期的重要性。而短发布周期又能在规划、开发和验证之间形成短得多的反馈回路。一旦出了问题，就应尽早暴露，这样修复该问题的成本才会相对较小。
+
+这一理念由 Eric S. Raymond（又名 ESR）在其 1997 年那篇题为 \emph{The} \emph{Cathedral and the Bazaar} 的文章中推广开来。后来还出版了一本同名的书，收录了这篇文章以及作者的其他文章。考虑到 ESR 在开源运动中的活动，\emph{“尽早发布，频繁发布”} 这句信条几乎成了开源项目运作方式的代名词。
+
+\label{idx:898}
+若干年后，这一原则不再局限于开源项目。随着人们对 Scrum 等敏捷方法的兴趣日益增长，这句信条几乎成了以产品增量（product increment）收尾的开发迭代（sprint）的代名词。这个增量当然就是一次软件发布，但通常在一次迭代期间还会发生许多其他发布。
+
+那么，怎样才能实现如此短的发布周期呢？一个办法是尽可能依赖自动化。理想情况下，每一次向代码仓库的提交都应以一次发布告终。至于这次发布最终是否会面向客户，那是另一回事。重要的是，每一处代码变更都能产生一个可用的产品。
+
+当然，把每一次提交都构建并发布给公众，对任何开发者来说都是件繁琐的事。即便一切都已脚本化，这也会给日常工作平添不必要的开销。正因如此，你会希望搭建一套 CI 系统，为你和你的开发团队自动完成发布。
+
+\subsection{CI 的优点}
+
+\label{idx:899}
+CI 是一种把多位开发者的工作集成到共享代码仓库中的理念，至少每天集成一次。如前所述，有时它意味着一天集成多次。进入仓库的每一次提交都会被独立地集成和验证。构建系统会检查代码能否无错构建；打包系统可能会生成一个软件包，随时可以保存为制品（artifact），甚至在使用 CD 时于稍后部署；最后，自动化测试会检查与本次变更相关的已知回归是否出现。下面我们详细看看它的优点：
+
+\begin{itemize}
+\item CI 能让问题得到迅速解决。如果某位开发者在一行末尾漏写了分号，CI 系统上的编译器会立刻捕获这个错误，从而避免这段错误代码传到其他开发者那里、妨碍他们的工作。当然，开发者在提交代码前本应始终构建并测试变更，但一些小小的笔误仍可能在开发者本机上被忽略，最终还是进入了共享仓库。
+\item CI 能杜绝常见的“在我机器上好好的”这类借口。如果开发者忘记提交某个必需的文件，CI 系统就会构建失败，从而再次阻止这些变更继续扩散、给整个团队带来麻烦。某位开发者环境的特殊配置也不再是个问题。如果一次变更能在这两台机器上——开发者本人的电脑和 CI 系统——构建成功，我们就可以放心地认为，它在其他机器上应该也能构建成功。
+\end{itemize}
+
+\subsection{用 GitLab 实现流水线}
+
+\label{idx:900}
+在本章中，我们将使用流行的开源工具来构建一条完整的 CI/CD 流水线，其中融合了门禁机制、自动化部署和基础设施自动化等概念。
+
+第一个这样的工具是 GitLab。你可能听说过它是一个基于 Git 的托管方案，但实际上，它远不止于此。GitLab 有多种发行版本：
+
+\begin{itemize}
+\item 一种可以托管在你自己本地环境中的开源方案
+\item 自托管的付费版本，相比开源社区版提供更多功能
+\label{idx:901}
+\item 最后，还有一项 \textbf{软件即服务}（\textbf{SaaS}）托管方案，托管在 \href{https://about.gitlab.com/}{https://gitlab.com} 之下
+\end{itemize}
+
+就本书而言，每一种发行版都具备全部所需的功能。因此，我们将重点介绍 SaaS 版本，因为它所需的准备工作最少。
+
+尽管 \href{https://gitlab.com}{https://gitlab.com} 主要面向开源项目，但如果你不想把自己的成果分享给全世界，也可以创建私有项目和仓库。这样，我们就能在 GitLab 中新建一个私有项目，并填入我们在 \emph{第 7 章}\emph{构建与打包}中已经演示过的代码。
+
+\label{idx:902}
+\label{idx:903}
+\label{idx:904}
+\label{idx:905}
+\label{idx:906}
+\label{idx:907}
+\label{idx:908}
+虽然有许多现代 CI/CD 工具可以替代 GitLab CI/CD，例如 GitHub Actions、Travis CI、CircleCI、Jenkins、Jenkins X 和 Tekton，但我们选择了 GitLab，因为它既能以 SaaS 形式使用，也能本地部署，因此应当能满足许多不同的用例。
+
+\label{idx:909}
+下面我们使用之前的构建系统，在 GitLab 中创建一个简单的 CI 流水线。这些流水线在 YAML 文件中以一系列步骤和元数据来描述。一个构建全部所需依赖以及 \emph{第 7 章}\emph{构建与打包}中示例项目的流水线示例如下：
+
+\begin{codebox}[text]
+# The pipeline name is interpolated
+workflow:
+  name: 'Pipeline for branch: $CI_COMMIT_BRANCH'
+# The Docker executor runs jobs on this Docker image
+default:
+  image: ubuntu:25.04
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  CONAN_HOME: "$CI_PROJECT_DIR/.conan2"
+# For caching the Conan home folder, pip's wheel cache and CMake build directory
+cache:
+  key: build-cache
+  paths:
+    - .cache/pip
+    - .conan2
+    - build
+stages:
+  - build
+# This script is executed before each job
+before_script:
+  - apt update && DEBIAN_FRONTEND=noninteractive apt install -y cmake ninja-build rpm file
+# Configure Conan and build the project
+build:
+  stage: build
+  script:
+    - DEBIAN_FRONTEND=noninteractive apt install -y build-essential git python3-venv python3-pip
+    - python3 -m venv venv && source ./venv/bin/activate
+    - pip install conan
+    - conan profile detect -f
+    - mkdir -p build && cd build
+    - conan install ../Chapter10/customer --build=missing -s build_type=Release -s compiler=gcc -s compiler.cppstd=gnu20 -of .
+    - cmake -GNinja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release ../Chapter10/customer
+    - cmake --build .
+\end{codebox}
+
+\begin{myTip}{提示}
+
+在前面的 \texttt{default: image }设置中，我们在这里使用了非 LTS 基础镜像，以便在不让流水线复杂化的前提下确保与 GCC 14 和 Clang 20 兼容。在生产环境中，应优先使用 LTS 镜像，或预装了所需工具链的自定义 LTS 镜像。
+\end{myTip}
+
+\label{idx:910}
+Conan 是一个 Python 应用，因此流水线会缓存 \texttt{.\allowbreak{}cache/\allowbreak{}pip} 目录中的 Python 包。缓存目录的内容会在流水线中每个任务执行前恢复、执行后保存，并在多次流水线运行之间保留，从而缩短执行时间。那个 \texttt{cache.key} 值可以是计算得出的，也可以是静态的。
+
+\label{idx:911}
+把前面的文件保存为 Git 仓库根目录下的 \texttt{.\allowbreak{}gitlab-ci.\allowbreak{}yml}，就会自动在 GitLab 中启用 CI，并在之后每次提交时运行流水线。
+
+\label{idx:912}
+有了这条基础流水线之后，下一步就是让配置更易于维护。在 GitLab CI 中，\texttt{before\_\allowbreak{}script} 和 \texttt{after\_\allowbreak{}script} 命令并不是避免在多个任务间重复代码的唯一方式。你可以用 \texttt{extends }关键字、\texttt{!reference }标签，或者 YAML 特有的特性来优化重复的 YAML 片段，例如锚点（\texttt{\&}）、别名（\texttt{*}）和映射合并（\texttt{<<}）。
+
+\label{idx:913}
+例如，在我们的示例中，全局 \texttt{default} 段里的命令可以移到 \texttt{build} 任务中，只在该任务执行前运行。之所以可以这样做，是因为 \texttt{before\_\allowbreak{}script} 和 \texttt{after\_\allowbreak{}script} 关键字也可以定义在任务层级。下面的代码片段用 \texttt{<<: *job\_\allowbreak{}before\_\allowbreak{}script} 演示了这一做法：
+
+\begin{codebox}[text]
+.job_before_script: &job_before_script
+  before_script:
+    - apt update && DEBIAN_FRONTEND=noninteractive apt install -y cmake ninja-build rpm file
+build:
+  stage: build
+  <<: *job_before_script
+  script:
+      # contains the same commands as in the previous example
+    - cmake -GNinja -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release ../Chapter10/customer
+    - cmake --build .
+\end{codebox}
+
+\begin{myTip}{提示}
+借助 \textbf{AI Code Explainer} 和 \textbf{Quick Copy} 功能，提升你的编码体验。在下一代 Packt Reader 中打开本书。点击 \textbf{Copy} 按钮
+
+（\textbf{1}）快速把代码复制到你的编码环境中，或者点击 \textbf{Explain} 按钮
+
+（\textbf{2}）让 AI 助手为你讲解一段代码。
+
+\myGraphic{0.92}{images/image__2_.png}{}
+
+\textbf{下一代 Packt Reader }在购买本书时免费附赠。扫描二维码，或者访问 \href{https://packtpub.com/unlock}{https://packtpub.com/unlock}，然后用搜索栏按书名找到本书。请仔细核对显示的版本，确保你拿到的是正确的一版。
+
+\begin{center}\includegraphics[width=0.250\linewidth]{images/Latest_QR.png}\end{center}
+\end{myTip}
+
+利用 YAML 格式的特性，例如锚点（\texttt{\&}）和别名（\texttt{*}），可以去除重复步骤并复用它们，从而优化 GitLab CI/CD 配置文件。在示例中，\texttt{job\_\allowbreak{}before\_\allowbreak{}script} 引用的是在 \texttt{build} 阶段之前执行的 \texttt{before\_\allowbreak{}script} 关键字。
+
+\label{idx:914}
+如果我们希望 CI 的价值不止于单纯地编译代码，就需要一种门禁机制（gating mechanism），这正是接下来要介绍的内容。
+
+\section{探索门禁机制}
+
+\label{idx:915}
+门禁机制让我们能够借助自动化检查，把好的代码变更和坏的区分开来，从而保护应用不受那些会让它变得不可用的修改影响。要做到这一点，我们需要的例如是一套全面的测试。这样一套测试能让我们快速、自动地识别出某个变更何时出了问题。
+
+\label{idx:916}
+对于单个组件而言，单元测试扮演着门禁机制的角色。CI 系统可以丢弃任何未通过单元测试的变更，或者任何未达到某一代码覆盖率阈值的变更。在构建单个组件时，CI 系统还可以用集成测试来进一步确保变更的稳定性：不仅是它们各自稳定，彼此协作时也表现正常。
+
+\label{idx:917}
+单元测试和集成测试是最常见的自动化门禁。除此之外，CI 平台还可以集成自动化分析工具，充当额外的门禁。一些常见的工具有 Codacy、Checkmarx、Coverity Scan、Codecov、Code Intelligence、CAST Software、DeepSource、Kiuwan、SonarQube、Snyk 和 Veracode。例如，GitLab 和 GitHub 这两个 CI 平台支持集成 Codacy 或 SonarQube，它们支持 MISRA C++ 2023 指南和最新的 C++ 标准，强制执行 C++ 核心指南，并能检测来自 \textbf{OWASP} Top Ten（一份由 \textbf{开放全球应用安全项目（Open Worldwide Application Security Project）}发布的 Web 应用最关键安全风险清单）以及 \textbf{通用弱点枚举（Common Weakness Enumeration）}（\textbf{CWE}）Top 25（一份由 MITRE 发布的最危险软件弱点清单）的漏洞。
+
+除此之外，还有一些其他工具，例如 linter（分析源代码中的错误、漏洞和风格问题，以提升代码质量）、代码格式化器（按预定义的风格指南和约定自动格式化源代码）以及静态分析器（在不运行代码的情况下检查源代码，以检测错误、安全漏洞、代码坏味道以及偏离编码规范之处），它们可以帮助你在 CI/CD 流水线中让代码库达到期望的标准。
+
+\label{idx:918}
+虽然静态分析可以充当门禁机制，你也可以对进入中央仓库的每一次提交施加 lint 和格式化，使其与代码库的其余部分保持一致。理想情况下，lint/格式化检查只需检查代码是否已经格式化过，因为格式化的步骤应该由开发者在把代码推送到仓库之前完成。使用 Git 作为版本控制系统时，Git Hooks 机制可以阻止在未对代码运行必要工具的情况下提交代码。
+
+但自动化分析的能力是有限的。它能保证代码按设计正常工作，但能正确工作的代码和好代码之间仍有差别。正如你从本书到目前为止所了解到的，代码只有在满足若干个价值时才能算是好代码，而功能正确只是其中之一。CI 及其自动化检查无法取代人的判断。要确保代码变更不仅正确，而且设计良好、易于维护、与项目目标一致，就需要人工代码评审。下一节我们将探讨代码评审如何与 CI/CD 互补。
+
+\section{评审代码变更}
+
+\label{idx:919}
+人工代码评审的主要目的是对引入代码的每一项变更进行复核，确保它是正确的、符合应用架构的，并且遵循项目的指南和最佳实践。在实践中，评审有助于发现子系统层面和整体架构层面的问题。
+
+代码评审既可以配合 CI 系统使用，也可以在没有 CI 系统的情况下使用。在没有 CI 系统时，手动测试变更并验证其是否按预期工作，往往就成了评审者的任务。CI 通过自动化检查减轻了这一负担，使评审者可以把人工投入集中在更高层次的关注点上，例如代码的逻辑结构。
+
+自动化性能测试未必能发现某个函数潜在的问题。而人眼通常能看出次优的设计选择。无论是选错了数据结构，还是用了计算复杂度过高的算法，优秀的架构师都应该能够准确地指出问题所在。
+
+但执行代码评审并不只是架构师的职责。同行评审（peer review），也就是由作者的同事进行的代码评审，在开发过程中同样占有一席之地。这类评审很有价值，因为它们不仅能让同事在彼此的代码中发现 bug，还能让大家了解其他人在做什么。这样一来，当团队中有人缺席时（无论是由于长时间开会、休假还是岗位轮换），另一名团队成员就能顶替缺席者。即便他们不是该主题的专家，每一位成员至少知道相关的代码在哪里，也应该记得代码最近的改动——既包括改动发生的时间，也包括改动的范围和内容。
+
+\label{idx:920}
+当更多人都了解你的应用内部是什么样子时，他们就更有可能找出某个组件近期改动与新发现的 bug 之间的关联。尽管团队里的每个人大概都有不同的经验，但当大家都对代码相当熟悉时，就能把各自的资源汇集起来。
+
+因此，代码评审可以检查变更是否符合期望的架构，以及它的实现是否正确。我们把这样的代码评审称为架构评审，或专家评审。
+
+如有必要，在处理与外部服务集成的变更时，你还可以进行另一种专家评审——跨团队专家评审。
+
+由于每个接口都可能引发问题，靠近接口层面的变更应被视为格外危险。我们建议在常规同行评审之外，再请一位来自接口另一侧的专家参与。例如，如果你在编写生产者的代码，就请一位消费者来评审。这样就能确保你不会遗漏某个至关重要的用例——你可能觉得它极不可能出现，而接口另一侧却在不断使用它。
+
+\subsection{代码评审的不同方式}
+
+\label{idx:921}
+大多数情况下，你会以异步方式进行代码评审。这意味着正在评审的变更的作者与评审者之间的交流并非实时进行，而是各方随时发布自己的评论和建议。一旦不再有新的评论，作者就重新修改原始变更，并再次提交评审。这一过程可以反复进行任意多轮，直到大家一致认为不再需要进一步修改为止。
+
+当某个变更争议特别大、异步代码评审耗时过长时，同步进行代码评审会更有益。这意味着召开一次会议（面对面或远程），解决关于后续方向的各种对立观点。这种情况尤其会出现在变更因为实现过程中获得的新知识而与某项最初的决策相矛盾时。
+
+有一些专门用于代码评审的工具。但更常见的情况是，你会想使用仓库服务器内置的工具，例如 GitHub、Bitbucket、GitLab、Gerrit、Gitea、Forgejo、Gogs、Codeberg 和 Codegiant。
+
+上述这些工具都同时提供 Git 托管和代码评审。其中有些还更进一步，提供完整的 CI/CD 流水线、问题管理、文档 wiki 以及更多功能。
+
+\subsection{使用拉取请求（合并请求）进行代码评审}
+
+\label{idx:922}
+\label{idx:923}
+当你使用代码托管与代码评审的组合方案时，默认的工作流程是把变更作为一个独立分支推送出去，然后请求项目负责人合并这些变更，这一过程称为拉取请求（pull request，或合并请求）。尽管名字听起来花哨，但拉取请求或合并请求无非是在告知项目负责人：你有想要合并进主分支的代码。这意味着评审者应当评审你的变更，以确保一切妥当。
+
+在 GitLab 这类系统中创建拉取请求或合并请求非常容易。首先，当我们从命令行把一个新分支推送到中央仓库时，会看到如下消息：
+
+\begin{codebox}[text]
+remote:
+remote: To create a merge request for fix-ci-cd, visit:
+remote:   https://gitlab.com/hosacpp/continuous-integration/merge_requests/new?merge_request%5Bsource_branch%5D=fix-ci-cd
+remote:
+\end{codebox}
+
+如果你之前已经启用了 CI（通过添加 \texttt{.\allowbreak{}gitlab-ci.\allowbreak{}yml} 文件），你还会看到新推送的分支已经接受了 CI 流程的处理。这甚至发生在你打开合并请求之前，也就意味着你可以暂缓 @ 你的同事，等 CI 告知你所有自动化检查都通过之后再说。
+
+打开合并请求主要有两种方式：
+
+\begin{itemize}
+\item 点击推送消息中提到的链接
+\item 在 GitLab 界面中进入合并请求页面，然后选择 \textbf{Create merge request} 按钮或 \textbf{New merge request} 按钮
+\end{itemize}
+
+当你填完所有相关字段并提交合并请求后，你会看到 CI 流水线的状态也一并显示出来。如果流水线失败，就无法合并该变更。
+
+代码评审有助于发现结构性和逻辑性问题，但最好让它与可重复的自动化验证配合使用。下一节我们将探讨，测试驱动的自动化如何通过确保每一次变更都按预期表现，来增强 CI。
+
+\section{探索测试驱动的自动化}
+
+\label{idx:924}
+CI 主要关注集成这一部分，也就是构建各个子系统的代码并确保它们能正常工作。虽然严格来说实现这一目的并不需要测试，但在没有测试的情况下运行 CI 似乎是一种浪费。没有自动化测试的 CI 会让人更容易把隐蔽的 bug 引入代码，同时还给人一种虚假的安全感。
+
+这也是 CI 往往与持续测试（continuous testing）携手并进的原因之一，我们将在本节介绍持续测试。
+
+\label{idx:925}
+我们会从行为驱动开发（behavior-driven development）开始，这是一种基于需求来指导代码编写的协作式方法。接着，我们会学习如何编写能在 CI 中提供快速、可靠反馈的测试。最后，我们会展示如何把持续测试纳入你的流水线，让每一次提交都得到自动验证。
+
+\subsection{行为驱动开发}
+
+\label{idx:926}
+到目前为止，我们已经成功搭建了一条执行持续构建的流水线。我们对代码所做的每一次变更最终都会被编译，但不会再做进一步的测试。现在是时候引入持续测试的实践了。在低层级进行测试还能充当门禁机制，自动拒绝所有不满足需求的变更。
+
+\label{idx:927}
+如何检查某个变更是否满足需求？最好的办法就是根据这些需求来编写测试。做到这一点的方式之一是采用 \textbf{行为驱动开发}（\textbf{BDD}）。BDD 的理念是鼓励敏捷项目中不同参与者之间进行更深入的合作。
+
+传统做法是由开发者或 QA 团队编写测试，与之不同，在 BDD 中，测试由以下人员协作创建：
+
+\begin{itemize}
+\item 开发者
+\item QA 工程师
+\item 业务代表
+\end{itemize}
+
+为 BDD 指定测试最常见的方式是使用 Cucumber 框架，它用平实的英语短语来描述系统任意部分期望的行为。这些句子遵循特定的模式，随后可以被转换成可运行的代码，并与所选的测试框架集成。
+
+Cucumber 框架对 C++ 有官方支持，它基于 CMake、Boost、GTest 和 gMock。在用 Cucumber 格式（该格式使用一种名为 Gherkin 的领域特定语言）指定期望的行为之后，我们还需要提供所谓的步骤定义（step definition）。步骤定义是与 Cucumber 规范中所描述动作相对应的实际代码。例如，请看下面用 Gherkin 表达的行为：
+
+\begin{codebox}[text]
+# language: en
+Feature: Summing
+In order to see how much we earn,
+Sum must be able to add two numbers together
+Scenario: Regular numbers
+  Given I have entered 3 and 2 as parameters
+  When I add them
+  Then the result should be 5
+\end{codebox}
+
+因此，需求是一个简单的加法函数。我们可以把它保存为 \texttt{sum.\allowbreak{}feature} 文件。
+
+为了生成带有 GTest 检查的有效 C++ 代码，我们使用相应的 Cucumber 步骤定义：
+
+\begin{codebox}[cpp]
+#include <gtest/gtest.h>
+#include <cucumber-cpp/autodetect.hpp>
+#include "sum.h"
+using cucumber::ScenarioScope;
+struct SumCtx {
+  Sum sum;
+  int a;
+  int b;
+  int result;
+};
+GIVEN("^I have entered (\\d+) and (\\d+) as parameters$", (const int a, const int b)) {
+    ScenarioScope<SumCtx> context;
+    context->a = a;
+    context->b = b;
+}
+WHEN("^I add them") {
+    ScenarioScope<SumCtx> context;
+    context->result = context->sum.sum(context->a, context->b);
+}
+THEN("^the result should be (.*)$", (const int expected)) {
+    ScenarioScope<SumCtx> context;
+    EXPECT_EQ(expected, context->result);
+}
+\end{codebox}
+
+\label{idx:928}
+\label{idx:929}
+在这个示例中，代码展示了 Cucumber 测试步骤如何映射到 GTest 检查：
+
+\begin{itemize}
+\item \texttt{GIVEN} 步骤保存我们想相加的两个数字
+\item \texttt{WHEN} 步骤调用求和函数
+\item \texttt{THEN} 步骤使用 \texttt{EXPECT\_\allowbreak{}EQ} 检查结果是否与期望值一致
+\end{itemize}
+
+\texttt{Scenario\allowbreak{}Scope} 只是一种让相同测试数据在这三个步骤中都可用的方式。
+
+\label{idx:930}
+\label{idx:931}
+从零开始构建应用时，遵循 BDD 模式是个好主意。本书旨在展示你在这种全新（greenfield）项目中可以采用的最佳实践。但这并不意味着你不能在已有项目中尝试我们的示例。CI 和 CD 可以在项目生命周期的任何时候加入。既然尽可能频繁地运行测试总是个好主意，那么仅仅为了持续测试而使用 CI 系统，几乎也总是个好主意。
+
+如果你没有行为测试，也不必担心。你可以以后再添加，眼下只需专注于已有的测试。无论它们是单元测试还是端到端测试，任何有助于你评估应用状态的测试，都是门禁机制的好候选。
+
+\subsection{为 CI 编写测试}
+
+\label{idx:932}
+对于 CI 而言，最好把重点放在单元测试，有时再加上集成测试。它们在尽可能低的层级上工作，这意味着它们通常执行得快，且所需的条件最少。
+
+理想情况下，所有单元测试都应该是自包含的（不依赖正常工作数据库之类的外部依赖），并且能够并行运行。这样一来，当问题出现在单元测试能够捕捉到的层级时，有问题的代码会在几秒钟内被标记出来。
+
+有些人说，单元测试只在解释型语言或动态类型语言中才有意义——在这些语言里，一个简单的拼写错误就可能导致应用失败甚至崩溃，比如使用了不存在的函数、类方法或变量。他们的论点是，C++ 通过类型系统和编译器对错误代码的检查，已经内置了测试能力。诚然，类型检查能够捕捉到在动态类型语言中需要单独编写测试才能发现的某些 bug，但这不应被当作不写单元测试的借口。毕竟，单元测试的目的并不是验证代码能否毫无问题地执行。我们编写单元测试，是为了确保代码不仅能执行，还能满足我们所有的业务需求。
+
+举一个极端的例子，请看下面两个函数。它们在语法上都正确，也都使用了恰当的类型。然而，光看它们，你大概就能猜出哪个是正确的、哪个不是。单元测试有助于捕捉这类异常行为：
+
+\begin{codebox}[text]
+int sum(int a, int b) {
+ return a + b;
+}
+\end{codebox}
+
+前一个函数返回所提供两个参数之和。下面这个函数返回它们之差，这在语法上是正确的，但在逻辑上并不正确：
+
+\begin{codebox}[text]
+int sum(int a, int b) {
+  return a - b;
+}
+\end{codebox}
+
+尽管类型匹配，编译器也不会报错，但这段代码无法完成它的任务。为了区分有用的代码和有错误的代码，我们使用测试和断言。
+
+\subsection{持续测试}
+
+\label{idx:933}
+\label{idx:934}
+既然已经建立了一条简单的 CI 流水线，要把它扩展为带测试的就非常容易。由于我们已经在用 CMake 和 CTest 进行构建和测试，只需在流水线中再添加一个执行测试的步骤即可。因此，流水线中的测试阶段将如下所示。由于构建目录是从缓存中恢复的，测试会直接从该目录运行，而不必执行构建步骤：
+
+\begin{codebox}[text]
+# contains the same commands as in the previous example
+stages:
+  - build
+  - test # another stage that runs the tests
+# contains the same commands as in the previous example
+# run unit tests with ctest
+test:
+  stage: test
+  script:
+    - cd build
+    - ctest .
+\end{codebox}
+
+这样一来，每一次提交不仅要经历构建过程，还要经历测试。如果其中一个步骤失败，我们会收到通知，知道是哪一步导致了失败，并且能在仪表板中看到哪些步骤成功了。
+
+变更经过测试并获批之后，就该把它们部署到某个运行环境中了。
+
+\section{以代码方式管理部署}
+
+\label{idx:935}
+\label{idx:936}
+部署即代码（deployment as code）是指用受版本控制的代码来管理部署过程，而不是依赖手动步骤或临时拼凑的脚本。这使部署更加一致、可重复，也更容易自动化。
+
+\begin{myNotic}{注意}
+
+\label{idx:937}
+「即代码」（as-code）类系统是 DevOps 方法论的关键使能者：部署即代码、基础设施即代码、平台即代码、配置即代码（例如 \textbf{Jenkins Configuration as Code (JCasC)}），乃至万物皆代码，其中包括环境即代码、数据分析即代码、DevOps 流水线即代码和安全即代码。它们提供了用于预置和管理应用技术栈的声明式模型。这类系统一致、可扩展、可移植且可审计。
+\end{myNotic}
+
+\label{idx:938}
+在本节中，我们重点介绍 Ansible，一款支持部署即代码的配置管理工具。有助于部署的工具很多。我们决定用 Ansible 来提供示例，因为除了一个可用的 Python 环境（大多数 Unix 系统本来就已经具备）之外，它不需要在目标机器上做任何设置。它在配置管理领域非常流行，并且由一家值得信赖的开源公司（Red Hat）提供支持。
+
+Ansible 的替代品有 Puppet、Chef、Salt、Attune、Rudder、CFEngine、Terraform、OpenTofu、\textbf{Amazon Web Services}（\textbf{AWS}）CloudFormation、Codeship、Azure DevOps Server、Azure Automation 以及 Nix 包管理器。
+
+在接下来的几个小节中，我们会先把 Ansible 与传统的 shell 脚本做比较，展示它的声明式模型和幂等行为如何简化部署。然后，我们会看看 Ansible 如何与 CI/CD 流水线无缝集成。之后，我们会探讨组件在编写可复用、可测试的部署代码时的重要性。
+
+\subsection{使用 Ansible}
+
+\label{idx:939}
+为什么不直接用现成的东西，比如 Bourne shell 脚本或 PowerShell 呢？对于简单的部署，shell 脚本也许是更好的做法。但随着部署过程变得越发复杂，要用 shell 的条件语句处理所有可能的初始状态就困难得多。
+
+处理初始状态之间的差异正是 Ansible 特别擅长的领域。传统的 shell 脚本使用命令式（imperative）形式（移动这个文件、编辑那个文件、运行某条命令），与之不同，Ansible 剧本（playbook）使用的则是声明式（declarative）形式（确保文件存在于该路径、确保文件包含指定的行、确保程序正在运行、确保程序成功完成）。
+
+这种声明式方法还有助于实现幂等性。幂等性是函数的一种特性，指的是多次应用该函数所得的结果与只应用一次完全相同。如果 Ansible 剧本的首次运行对配置引入了一些更改，那么之后的每次执行都会检测到无需再做进一步更改。
+
+换句话说，当你调用 Ansible 时，它会首先评估所有你想配置的机器的当前状态：
+
+\begin{itemize}
+\item 如果其中任何一台机器需要更改，Ansible 只会运行达到期望状态所需的任务。
+\item 如果某样东西无需修改，Ansible 就不会去碰它。只有当期望状态与实际状态不一致时，你才会看到 Ansible 采取行动，把实际状态收敛到由剧本内容所描述的期望状态。
+\end{itemize}
+
+下面来看看 Ansible 如何集成到 CI/CD 流水线中。
+
+\subsection{Ansible 如何与 CI/CD 流水线配合}
+
+\label{idx:940}
+\label{idx:941}
+\label{idx:942}
+Ansible 的幂等性使其非常适合用在 CI/CD 流水线中。毕竟，多次运行同一个 Ansible 剧本并无风险，即使两次运行之间没有任何变化。如果你用 Ansible 编写部署代码，那么创建 CD 就只是准备合适的验收测试（如冒烟测试或端到端测试）而已。
+
+声明式方法可能需要你改变对部署的思考方式，但收益非常值得。除了运行剧本，你还可以用 Ansible 在远程机器上执行一次性命令，不过我们不会涉及这一用例，因为它对部署其实没什么帮助。
+
+凡是能用 shell 完成的事情，都能用 Ansible 的 \texttt{shell} 模块完成。这是因为在剧本中，你编写的任务会指明它们使用哪些模块以及各自的参数。\texttt{shell} 模块就是其中之一，它只是在远程机器的 shell 中执行所提供的参数。但真正让 Ansible 不仅便捷、而且跨平台（至少在不同 Unix 发行版之间）的，是它提供了各种模块来操作诸如用户管理、包管理等常见概念。
+
+\subsection{在 Ansible 中使用可复用组件（角色）与剧本}
+
+\label{idx:943}
+\label{idx:944}
+\label{idx:945}
+\label{idx:946}
+除了标准库提供的常规模块之外，Ansible 还支持第三方组件以实现代码复用。你可以单独测试这类组件，这也会让你的部署代码更加健壮。这类组件称为角色（role）。它们包含一组任务，使机器适合承担某个特定角色，比如充当 \texttt{webserver}、\texttt{db} 或 \texttt{docker}。有些角色让机器准备好提供特定服务，另一些角色则可能更为抽象，比如流行的 \texttt{ansible-hardening} 角色。它由 OpenStack 团队创建，能让使用该角色加固过的机器变得难以入侵。
+
+当你开始理解 Ansible 所使用的语言时，所有剧本就不再只是脚本。它们会随之成为部署过程的文档。你既可以原样运行 Ansible 来使用它们，也可以阅读其中描述的任务并在离线机器上手动执行所有操作。
+
+\label{idx:947}
+\label{idx:948}
+\label{idx:949}
+\label{idx:950}
+不过，在团队中使用 Ansible 进行部署存在一个风险。一旦你开始使用它，就必须确保团队中的每个人都能使用它并修改相关任务。DevOps 是全团队都必须遵循的实践，无法只实现一部分。当应用程序的代码发生较大变化、需要在部署侧做相应改动时，负责应用程序改动的人也应该一并提交部署代码的改动。当然，这一点可以由测试来验证，因此门禁机制可以拒绝不完整的更改。
+
+Ansible 有一个值得注意的特点：它既能以推送模型运行，也能以拉取模型运行：
+
+\begin{itemize}
+\item 推送模型是指你在自己的机器上或 CI 系统中运行 Ansible。随后 Ansible 会连接到目标机器（例如通过 SSH 连接），并在目标机器上执行必要的步骤。
+\item 在拉取模型中，整个过程由目标机器发起。Ansible 的组件 \texttt{ansible-pull} 直接在目标机器上运行，并检查代码仓库以确定特定分支是否有任何更新。在刷新本地剧本之后，Ansible 照常执行所有步骤。这一次，控制组件和实际执行都发生在同一台机器上。大多数情况下，你会希望定期运行 \texttt{ansible-pull}，例如在 cron 任务中运行。
+\end{itemize}
+
+在下一节中，我们将实际使用 Ansible 来编写部署逻辑。
+
+\section{编写部署代码}
+
+\label{idx:951}
+在最简单的形式下，用 Ansible 部署可能只是把单个二进制文件复制到目标机器，然后运行该二进制文件。我们可以用下面的 Ansible 代码做到这一点：
+
+\begin{codebox}[yaml]
+tasks:
+  # 每个 Ansible 任务都写成一个 YAML 对象
+  # 这里使用 copy 模块
+  - name: Copy the binaries to the target machine
+    copy:
+      src: our_application
+      dest: /opt/app/bin/our_application
+  # 该任务调用 shell 模块。`shell:` 键之后的文本
+  # 将在目标机器的 shell 中运行
+  - name: start our application in detached mode
+    shell: cd /opt/app/bin; nohup ./our_application </dev/null >/dev/null 2>&1 &
+\end{codebox}
+
+\label{idx:952}
+每个任务都以连字符开头。对于每个任务，你需要指定它所用的模块（如 \texttt{copy} 模块或 \texttt{shell} 模块）以及其参数（如有）。任务还可以有一个 \texttt{name} 参数，这样可以更方便地单独引用该任务。
+
+部署逻辑就绪之后，让我们迈出下一步，把它集成到 CD 流水线中。
+
+\section{理解并实现 CD}
+
+\label{idx:953}
+现在我们已经可以放心地用本章学到的工具来构建 CD 流水线了。我们已了解 CI 如何运作，以及它如何帮助拒绝不适合发布的更改。测试自动化那一节介绍了让拒绝过程更加健壮的多种方式。拥有冒烟测试或端到端测试（我们只是简要提及）使我们能够超越 CI，检查整个已部署的服务是否满足需求。借助部署代码，我们不仅能自动化部署过程，还能在发布失败、服务不可用时准备好回滚方案。完全自动化的部署可能危险而难以预测，因此需要强大的测试、监控和回滚能力。
+
+\label{idx:954}
+CD 是一个自动化过程：它始于某人把更改推送到中央仓库，终于该更改在所有测试通过的情况下成功部署到生产环境。因此我们可以说这是一个端到端的过程，因为开发者的工作一路直达客户而无需人工干预（当然，是在通过代码评审之后）。你可能听说过 GitOps 这个术语，它与这种做法相关。GitOps 采用基础设施即代码的方法来自动化 IT 基础设施。在 GitOps 的部署中，由于所有操作都已自动化，向 Git 的指定分支推送就会触发部署脚本。
+
+一个有趣的巧合是，缩写 CD 既可以表示\emph{持续交付}，也可以表示\emph{持续部署}。持续交付没有走得那么远。与持续部署一样，它也有一条能够发布最终产品并对其进行测试的流水线，但最终产品从不会自动交付给客户。它可以先交付给 QA，或交给业务方用于内部使用。理想情况下，所交付的制品一旦被内部客户接受，就可以随时部署到生产环境。
+
+\emph{图 11.1} 展示了持续集成、持续交付和持续部署的范围：
+
+\myGraphic{0.920}{images/B18456_11_1.png}{图 11.1：持续集成、持续交付与持续部署对比}
+
+\label{idx:955}
+在本章中，当我们提到 CD 时，指的是持续部署。
+
+接下来，我们将用 GitLab 和 GitHub 构建 CD 流水线。
+
+\subsection{用 GitLab 构建一个示例 CD 流水线}
+
+\label{idx:956}
+下面我们再次把所有技能整合起来，以 GitLab CI 为例构建我们的流水线。在测试步骤之后，我们将再添加两个步骤：一个是打包阶段，用于创建可分发的文件；另一个是部署阶段，使用 Ansible 将它们部署出去。
+
+打包阶段包含了制品的定义，以便从仪表盘下载它们。在部署阶段，会调用 Ansible。由于构建目录被缓存，构建制品会被保存并恢复，这让流水线后续阶段能够跳过一些步骤，从而缩短执行时间。流水线中的打包阶段和部署阶段大致如下：
+
+\begin{codebox}[text]
+# contains the same commands as in the previous example
+stages:
+  - build
+  - test
+  - package
+  - deploy
+# contains the same commands as in the previous example
+# package the application and publish the artifacts
+package:
+  stage: package
+  # use CPack for packaging
+  script:
+    - cd build
+    - cpack .
+  # save the DEB and RPM package artifacts
+  artifacts:
+    paths:
+      - build/Customer*.deb
+      - build/Customer*.rpm
+# deploy using Ansible
+deploy:
+  stage: deploy
+  script:
+    - cd build
+    - ansible-playbook -i localhost, ansible.yml
+\end{codebox}
+
+\label{idx:957}
+要查看完整示例，请前往\emph{技术需求}一节中提到的仓库获取原始源码。该仓库中的示例不包含部署阶段和 Ansible 脚本，因为部署配置较为复杂，故而从略。
+
+现在我们转向 GitHub。在 GitHub 上，我们使用两个工作流：一个是快速的 pre-commit 工作流，可提供快速反馈（1–2 分钟内）；另一个是较长的 CI/CD 工作流，覆盖完整流水线（10–20 分钟内）。
+
+\subsection{用 GitHub Actions 实现 pre-commit 工作流}
+
+\label{idx:958}
+在这里，我们将看看如何用 GitHub 的工具实现我们的 GitLab 流水线，不过我们先从更简单的配置开始。
+
+GitHub Actions 是一个持续集成与持续交付平台，用于自动化构建、测试和部署工作流。一个 GitHub 工作流会运行一个或多个作业。工作流定义在仓库的 \texttt{.\allowbreak{}github/\allowbreak{}workflows }目录中，一个仓库可以有多个工作流。
+
+\label{idx:959}
+\texttt{pre-commit} 是一个用于管理 Git 钩子的框架，Git 钩子是每当 Git 仓库中发生某些重要事件时就会自动执行的自定义脚本。
+
+下面的代码定义了 pre-commit 工作流。它保存在仓库中的 \texttt{.\allowbreak{}github/\allowbreak{}workflows/\allowbreak{}pre-commit.\allowbreak{}yml}。实际上，这个脚本会在 GitHub 服务器上校验已经提交的代码，如果代码符合某些预定义规则，就会向作者发送通知：
+
+\begin{codebox}[yaml]
+name: pre-commit
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit|${{ hashFiles('.pre-commit-config.yaml') }}
+    - run: pip install pre-commit
+    - run: SKIP=no-commit-to-branch pre-commit run --all-files
+\end{codebox}
+
+\label{idx:960}
+\texttt{on} 关键字触发一个 \texttt{pre-commit} 工作流，随后在 Docker 容器中执行一个 \texttt{pre-commit} 作业。该作业会检出我们的 Git 仓库、设置 Python 解释器、缓存 \texttt{\textasciitilde{}/\allowbreak{}.\allowbreak{}cache/\allowbreak{}pre-commit} 目录以改善工作流的执行时间\textbf{，}安装 \texttt{pre-commit } Python 模块，并运行此命令来检查一次 Git 提交。
+
+\texttt{hash\allowbreak{}Files(\allowbreak{}path)\allowbreak{}} 函数为这组文件计算哈希值。如果哈希与上一次运行的值匹配，就会恢复缓存的文件。
+
+仓库根目录下的 \texttt{.\allowbreak{}pre-commit-config.\allowbreak{}yaml} 文件定义了要运行的钩子：
+
+\begin{codebox}[yaml]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: fix-byte-order-marker
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-yaml
+        exclude: kubernetes
+      - id: end-of-file-fixer
+        exclude: \.svg$
+      - id: mixed-line-ending
+      # 阻止直接提交到以下分支
+      - id: no-commit-to-branch
+        args: [--branch, main]
+      - id: trailing-whitespace
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v20.1.6
+    hooks:
+      - id: clang-format
+        args: [--style=llvm, -i]
+  - repo: https://github.com/iconmaster5326/cmake-format-pre-commit-hook
+    rev: v0.6.13
+    hooks:
+      - id: cmake-format
+  - repo: https://github.com/hukkin/mdformat
+    rev: 0.7.22
+  hooks:
+    - id: mdformat
+      additional_dependencies:
+        - mdformat-gfm
+        - mdformat-black
+\end{codebox}
+
+\label{idx:961}
+这些钩子的名称都是有含义的。你可以在相应的 GitHub 仓库中阅读它们的说明。
+
+这个脚本会格式化 C++ 和 CMake 文件，如果格式化后的文件与某次 Git 提交中的文件不一致，就返回错误。在这种情况下，必须先格式化这些文件再提交。
+
+由于这个工作流只运行轻量级检查，因此只需几分钟就能提供反馈。
+
+\subsection{用 GitHub Actions 实现流水线}
+
+\label{idx:962}
+在这里，我们将比较如何用 GitHub 的工具实现我们的 GitLab 流水线。GitHub 和 GitLab 都是流行的平台，但实现方式差异很大。应用的流水线被拆分成若干片段，鉴于其复杂性，每个部分将分别讲解。
+
+以下是工作流定义的开头部分：
+
+\begin{codebox}[yaml]
+name: customer application
+run-name: pipeline for branch ${{ github.ref_name }}
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+env:
+  BUILD_TYPE: Release
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+      - run: pip install conan
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.conan2
+          key: ${{ runner.os }}-${{ hashFiles('./Chapter10/customer/conanfile.txt') }}
+      - name: create default profile
+        run: conan profile detect -f
+\end{codebox}
+
+\label{idx:963}
+当 main 分支被更改时，这条流水线会被执行。\texttt{run-name} 参数是字符串插值的一个例子。\texttt{env} 小节包含环境变量。Python 包会被缓存。缓存 Conan 依赖无疑能节省时间。\texttt{hashFiles}函数会为 \texttt{.\allowbreak{}/\allowbreak{}Chapter10/\allowbreak{}customer/\allowbreak{}conanfile.\allowbreak{}txt } 文件计算哈希。如果 \texttt{conanfile.\allowbreak{}txt} 文件和操作系统（\texttt{runner.os}）没有改变，就会从缓存中恢复之前编译过的项目依赖。最后一步创建默认的 Conan 配置文件。
+
+在这个片段中，会准备环境，Conan 安装项目依赖，CMake 配置项目并进行构建：
+
+\begin{codebox}[yaml]
+      - name: prepare environment
+        uses: ./.github/actions/prepare-environment
+      - name: install dependencies
+        working-directory: ${{github.workspace}}/build
+        run: "conan install ${{github.workspace}}/Chapter10/customer --build=missing -s:a build_type=${{env.BUILD_TYPE}}
+        -s:a compiler=gcc -s:a compiler.version=14 -s:a compiler.cppstd=gnu20 -of ."
+      - name: configure
+        run: "cmake -GNinja -B ${{github.workspace}}/build -DCMAKE_CXX_COMPILER=`which g++-14` -DBUILD_TESTING=ON
+        -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} ${{github.workspace}}/Chapter10/customer"
+      - name: build
+        run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+      - name: upload build directory
+        uses: ./.github/actions/upload-build-dir
+\end{codebox}
+
+\label{idx:964}
+最后，构建目录会作为制品上传，因为后续作业在执行其他步骤之前会下载这个制品。因此，制品可以在作业之间共享。\texttt{.\allowbreak{}/\allowbreak{}.\allowbreak{}github/\allowbreak{}actions/\allowbreak{}prepare-environment} 和 \texttt{.\allowbreak{}/\allowbreak{}.\allowbreak{}github/\allowbreak{}actions/\allowbreak{}upload-build-dir} 都是自定义操作。你可以使用 GitHub Marketplace 上免费和付费的操作，也可以发布自己的操作。
+
+构建完成之后，工作流进入测试环节。下一个片段会下载构建制品并使用 CTest 运行测试：
+
+\begin{codebox}[yaml]
+  test:
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: prepare environment
+        uses: ./.github/actions/prepare-environment
+      - name: download build directory
+        uses: ./.github/actions/download-build-dir
+      - name: test
+        working-directory: ${{github.workspace}}/build
+        run: ctest -C ${{env.BUILD_TYPE}}
+\end{codebox}
+
+在这里，\texttt{.\allowbreak{}/\allowbreak{}.\allowbreak{}github/\allowbreak{}actions/\allowbreak{}download-build-dir} 也是一个自定义操作。GitHub 支持工作流和作业的并发。因此，\texttt{test} 作业需要等待 \texttt{build} 作业成功完成之后，才能下载构建目录。
+
+最后，工作流会把构建产物打包成 DEB 和 RPM 文件，并将它们作为制品上传：
+
+\begin{codebox}[yaml]
+  pack:
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: prepare environment
+        uses: ./.github/actions/prepare-environment
+      - name: download build directory
+        uses: ./.github/actions/download-build-dir
+      - name: pack
+        working-directory: ${{github.workspace}}/build
+        run: cpack .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: customer packages
+          path: |
+            build/Customer*.deb
+            build/Customer*.rpm
+\end{codebox}
+
+\label{idx:965}
+\texttt{pack} 同样需要等待 \texttt{test} 作业成功完成之后才能下载构建目录，但该作业不需要测试文件。因此，这里复用了 \texttt{build} 作业的构建制品。事实上，\texttt{test} 和 \texttt{pack} 作业本可以并发运行，但这没有意义，因为发布有故障的程序毫无用处。制品可以被完全覆盖。因此，使用这条命令时要小心。最后，该作业会把打包好的 DEB 和 RPM 文件作为制品上传。
+
+我们的工作流引用了不同的自定义操作（\texttt{prepare-environment}、\texttt{upload-build-dir} 和 \texttt{download-build-dir}）。下面来看看这些操作是如何定义的。
+
+下面的代码展示了\texttt{prepare-environment}操作的定义，它位于 \texttt{.\allowbreak{}github/\allowbreak{}actions/\allowbreak{}prepare-environment/\allowbreak{}action.\allowbreak{}yml}\textbf{。}该操作会创建构建目录并安装 Ninja：
+
+\begin{codebox}[yaml]
+name: prepare environment
+description: prepares the environment
+runs:
+  using: "composite"
+  steps:
+    - name: prepare environment
+      run: |
+        mkdir -p ${{github.workspace}}/build
+        sudo apt-get install -y ninja-build
+      shell: bash
+\end{codebox}
+
+在我们的场景中，CMake 会生成 \texttt{build.\allowbreak{}ninja} 文件。元数据文件名必须是 \texttt{action.\allowbreak{}yml} 或 \texttt{action.\allowbreak{}yaml}。\texttt{shell} 参数是自定义操作所必需的。操作可以有输入和输出，但在我们的示例中并不需要。
+
+这是\texttt{upload-build-dir}操作的定义，它位于\texttt{.\allowbreak{}github/\allowbreak{}actions/\allowbreak{}upload-build-dir/\allowbreak{}action.\allowbreak{}yml}\textbf{。}它会把构建目录打包并作为制品上传。该目录用\texttt{tar}归档，以保留文件权限：
+
+\begin{codebox}[yaml]
+name: upload-build-dir
+description: packs build directory with the tar command to preserve file permissions and uploads the archive
+runs:
+  using: "composite"
+  steps:
+    - name: tar build directory
+      run: tar -C ${{github.workspace}}/build -cvf build-dir.tar .
+      shell: bash
+    - uses: actions/upload-artifact@v4
+      with:
+        name: build-dir
+        path: build-dir.tar
+        retention-days: 1
+\end{codebox}
+
+\label{idx:966}
+打包成 TAR 归档是一种官方的变通做法，用于防止权限丢失，因为 ZIP 文件不会保留文件权限，包括执行权限。在 GitHub 上，公共仓库的保留期限为 1 天到 90 天（约 3 个月），私有仓库为 1 天到 400 天（约 1 年）。默认值为 90 天。
+
+最后，这是\texttt{download-build-dir} 的定义，它位于\texttt{.\allowbreak{}github/\allowbreak{}actions/\allowbreak{}download-build-dir/\allowbreak{}action.\allowbreak{}yml}\textbf{：}
+
+\begin{codebox}[yaml]
+name: download-build-dir
+description: downloads the archive and unpacks build directory with the tar command to preserve file permissions
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: build-dir
+    - name: create build directory
+      run: mkdir -p ${{github.workspace}}/build
+      shell: bash
+    - name: unpack build directory
+      run: |
+        tar -xf build-dir.tar -C ${{github.workspace}}/build
+      shell: bash
+\end{codebox}
+
+这个自定义操作会下载构建制品并把它解包到构建目录。
+
+\label{idx:967}
+GitHub 提供代码扫描，用于发现安全漏洞和错误。你可以让作业在多种环境（Linux、macOS 和 Windows）中运行，既可运行在 AMD64 和 ARM64 处理器架构上，也可运行在自托管运行器上。
+
+要查看完整示例，请前往\emph{技术需求}一节中提到的仓库获取原始源码。
+
+到目前为止，我们关注的都是如何仅把应用部署到现有系统上。在下一节中，我们将更进一步，学习如何把整个系统作为一个整体来部署。
+
+\section{使用不可变基础设施}
+
+把应用部署到正在运行的系统上，与部署系统本身之间有什么区别？我们将在接下来的几节中了解这一点。
+
+\subsection{什么是不可变基础设施？}
+
+\label{idx:968}
+此前，我们关注的是如何让你的应用代码可在目标基础设施上部署。CI 系统创建软件包（如容器），随后由 CD 过程部署这些软件包。每次流水线运行时，基础设施保持不变，而变化的是软件。
+
+\label{idx:969}
+不过，如果你使用云计算，就可以像对待其他任何制品一样对待基础设施。你可以不部署容器，而是部署一整个\textbf{虚拟机}（\textbf{VM}），例如作为 AWS EC2 或 Google Compute Engine 实例。你可以提前构建这样的 VM 镜像，把它作为 CI 过程的又一个环节。这样一来，带版本的 VM 镜像以及部署它们所需的代码，就都成了你的制品。
+
+有两个工具（均由 HashiCorp 编写）正是用来应对这一场景的。Packer 有助于以可重复的方式创建 VM 镜像，它把所有指令都以代码形式存储，通常是一个 JSON 文件。Terraform 是一个基础设施即代码工具，也就是说，它用于预置所有必需的基础设施资源。我们会把 Packer 的输出作为 Terraform 的输入。这样，Terraform 将创建一个完整的系统，该系统由以下部分组成：
+
+\begin{itemize}
+\item 实例组
+\item 负载均衡器
+\item 虚拟私有云
+\item 在使用包含我们自己代码的 VM 的同时，还会用到其他云元素
+\end{itemize}
+
+这一节的标题可能会让你困惑。既然我们明明主张在每次提交之后都更改整个基础设施，为什么还叫它\textbf{不可变基础设施}？如果你学过函数式语言，对不可变性的概念可能会更清楚。
+
+\label{idx:970}
+可变对象是指我们可以改变其状态的对象。在基础设施中，这一点很容易理解：你可以登录到 VM，下载更新版本的代码。此时状态就不再是你介入之前的样子了。
+
+不可变对象是指我们无法改变其状态的对象。这意味着我们无法登录到机器去改动任何东西。一旦我们从一个镜像部署了 VM，它就会一直保持那样，直到我们销毁它。这听起来可能不够灵活，但实际上，它解决了软件维护中的若干问题。
+
+\subsection{不可变基础设施的优势与实践考量}
+
+\label{idx:971}
+首先，不可变基础设施让配置漂移的概念变得过时。既然没有配置管理，也就不可能发生漂移。
+
+\label{idx:972}
+升级也因此安全得多，因为我们不会陷入半成品状态——那种既不是上一个版本、也不是下一个版本，而是介于两者之间的状态。部署过程提供的是二值信息：要么机器被创建并且可用，要么不是。没有别的可能。
+
+不过，要让这种方法在不影响正常运行时间的情况下奏效，你还需要具备以下条件：
+
+\begin{itemize}
+\item 用负载均衡来分发流量
+\item 一定程度的冗余，以便在任何时刻都至少有一个实例可用
+\end{itemize}
+
+毕竟，升级过程包括关停整个实例。你不能依赖这台机器的地址，也不能依赖任何专属于那一台机器的东西。相反，你需要至少还有第二台机器，用它在你把另一台换成更新版本时承担工作负载。当一台机器升级完成后，你可以对另一台重复同样的过程。这样，你就在不中断服务的情况下得到了两个已升级的实例。这种策略称为滚动升级（rolling upgrade）。
+
+\label{idx:973}
+\label{idx:974}
+从这个过程可以看出，不可变基础设施在处理无状态服务时效果最好。当你的服务具有某种形式的持久化时，正确实现起来就会更棘手。在这种情况下，你通常必须把持久化层拆分成一个单独的对象，例如一个包含所有应用数据的 \textbf{NFS（Network File System，网络文件系统）}或 \textbf{SMB（Server Message Block，服务器消息块）}卷。这样的卷可以在实例组中的所有机器之间共享，每台新启动的机器都能访问此前运行的应用所留下的公共状态。
+
+\subsection{用 Packer 构建实例镜像}
+
+\label{idx:975}
+\label{idx:976}
+\label{idx:977}
+考虑到我们的示例应用已经无状态，我们可以在此基础上着手构建不可变基础设施。Packer 的输出是 VM 镜像，它要求我们决定想使用的格式和构建器（builder）。
+
+在这个例子中，我们专注于 AWS，同时请记住，类似的方法对其他受支持的提供商同样适用。一个简单的 Packer 模板可能如下所示：
+
+\begin{codebox}[json]
+{
+  "variables": {
+    "aws_access_key": "",
+    "aws_secret_key": ""
+  },
+  "builders": [{
+    "type": "amazon-ebs",
+    "access_key": "{{user `aws_access_key`}}",
+    "secret_key": "{{user `aws_secret_key`}}",
+    "region": "eu-central-1",
+    "source_ami": "ami-0265dc4673f9d6a35",
+    "instance_type": "t2.micro",
+    "ssh_username": "admin",
+    "ami_name": "Project's Base Image {{timestamp}}"
+  }],
+  "provisioners": [{
+    "type": "shell",
+    "inline": [
+      "sudo apt-get update",
+      "sudo apt-get install -y nginx"
+    ]
+  }]
+}
+\end{codebox}
+
+上面的代码会使用 \textbf{Elastic Block Store}（\textbf{EBS}）构建器为 AWS 构建一个镜像。该镜像将位于 \texttt{eu-central-1} 区域，并基于 \texttt{source\_\allowbreak{}ami} 中指定的 AMI，也就是一个 Ubuntu Noble Numbat 镜像。我们希望构建器使用 \texttt{t2.micro} 实例（这是 AWS 中的一种 VM 规格）。为了准备镜像，我们运行两条 \texttt{apt-get} 命令。
+
+我们也可以复用之前定义的 Ansible 代码，不用 Packer 来预置应用，而是用 Ansible 替代它作为预置器（provisioner）。我们的代码将如下所示：
+
+\begin{codebox}[json]
+{
+  "variables": {
+    "aws_access_key": "",
+    "aws_secret_key": ""
+  },
+  "builders": [{
+    "type": "amazon-ebs",
+    "access_key": "{{user `aws_access_key`}}",
+    "secret_key": "{{user `aws_secret_key`}}",
+    "region": "eu-central-1",
+    "source_ami": "ami-0f1026b68319bad6c",
+    "instance_type": "t2.micro",
+    "ssh_username": "admin",
+    "ami_name": "Project's Base Image {{timestamp}}"
+  }],
+  "provisioners": [{
+    "type": "ansible",
+    "playbook_file": "./provision.yml",
+    "user": "admin",
+    "host_alias": "baseimage"
+  }],
+  "post-processors": [{
+    "type": "manifest",
+    "output": "manifest.json",
+    "strip_path": true
+  }]
+}
+\end{codebox}
+
+\label{idx:978}
+\label{idx:979}
+这些改动位于 \texttt{provisioners} 块中——我们把 shell 命令替换成了 Ansible playbook——以及新增了一个块 \texttt{post-processors}。后处理器的作用是以机器可读的格式生成构建结果。一旦 Packer 完成对目标产物的构建，它就会返回其 ID，并将其保存到 \texttt{manifest.\allowbreak{}json} 中。对于 AWS，这意味着一个 AMI ID，我们随后可以把它提供给 Terraform。
+
+\subsection{用 Terraform 编排基础设施}
+
+\label{idx:980}
+\label{idx:981}
+用 Packer 创建镜像只是第一步。之后，我们希望部署该镜像以便使用它。我们可以用 Terraform 基于 Packer 模板中的镜像构建一个 AWS EC2 实例。
+
+terraform 配置块定义了 Terraform 自身在应用你的配置时的行为。在我们的场景中，该配置需要一个 AWS provider：
+
+\begin{codebox}[text]
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+\end{codebox}
+
+\label{idx:982}
+Terraform 支持输入变量、输出变量和局部变量。在我们的配置中，这一特性用于指定公钥 SSH 的路径以及其他部署设置：
+
+\begin{codebox}[text]
+# Input variable pointing to an SSH key we want to associate with the
+# newly created machine
+variable "public_key_path" {
+  description = <<DESCRIPTION
+Path to the SSH public key to be used for authentication.
+Ensure this keypair is added to your local SSH agent so provisioners can
+connect.
+Example: ~/.ssh/terraform.pub
+DESCRIPTION
+  default = "~/.ssh/id_rsa.pub"
+}
+# Input variable with a name to attach to the SSH key
+variable "aws_key_name" {
+  description = "Desired name of AWS key pair"
+  default = "terraformer"
+}
+# An ID from our previous Packer run that points to the custom base image
+variable "packer_ami" {
+}
+variable "env" {
+  default = "development"
+}
+variable "region" {
+}
+\end{codebox}
+
+\label{idx:983}
+利用这些输入变量，我们可以配置 provider 和基础设施对象：
+
+\begin{codebox}[text]
+# Configure the AWS provider
+provider "aws" {
+  region  = var.region
+}
+# Create a new AWS key pair containing the public key set as the input
+# variable
+resource "aws_key_pair" "deployer" {
+  key_name = var.aws_key_name
+  public_key = file(var.public_key_path)
+}
+# Create a VM instance from the custom base image that uses the previously created key
+# The VM size is t2.xlarge, it uses a persistent storage volume of 60GiB,
+# and is tagged for easier filtering
+resource "aws_instance" "project" {
+  ami = var.packer_ami
+  instance_type = "t2.xlarge"
+  key_name = aws_key_pair.deployer.key_name
+  root_block_device {
+    volume_type = "gp2"
+    volume_size = 60
+  }
+  tags = {
+    Provider = "terraform"
+    Env = var.env
+    Name = "main-instance"
+  }
+}
+\end{codebox}
+
+\label{idx:984}
+\label{idx:985}
+这会创建一对密钥，并使用该密钥对创建一个 EC2 实例。此 EC2 实例基于一个以变量形式提供的 AMI。调用 Terraform 时，我们会将该变量设置为指向 Packer 生成的镜像。
+
+\begin{myNotic}{注意}
+
+Vagrant 是 HashiCorp 的另一个工具，同样实现了基础设施即代码（infrastructure as code）的方法，但它主要专注于管理开发环境。
+
+\label{idx:986}
+\label{idx:987}
+特别值得一提的是 OpenTofu，它是 Terraform 的一个开源分支，是为了应对 HashiCorp 将许可证从 \textbf{Mozilla Public License}（\textbf{MPL}）更换为 \textbf{Business Source License}（\textbf{BSL}）而创建的。两者的代码库只会越发分化，OpenTofu 的文档提供了一份迁移指南。这与 Valkey 项目类似——后者是 Redis 7.2.4 的一个开源分支，也是在许可证变更之后创建的。
+\end{myNotic}
+
+\section{小结}
+
+在本章中，我们学习了在项目初期就实施 CI 如何在长期内帮你节省时间。它还能减少进行中的工作（work in progress），尤其是与 CD 配合使用时。我们介绍了一些有助于实施这两个流程的实用工具。
+
+我们展示了 GitLab CI 和 GitHub Actions 如何让我们在 YAML 文件中编写流水线。我们讨论了代码评审的重要性，并解释了各种代码评审形式之间的差异。我们介绍了 Ansible，它有助于配置管理和部署代码的创建。最后，我们尝试了 Packer 和 Terraform，把关注点从创建应用转向创建系统。
+
+这些知识并非 C++ 语言所独有。你可以在用任何语言、任何技术编写的项目中运用它们。有一点你应该牢记：所有应用都需要测试。仅凭编译器或静态分析器不足以验证你的软件。作为架构师，你不仅要考虑你的项目（应用本身），还要考虑产品（你的应用将要运行于其中的系统）。仅仅交付能正常工作的代码已经不够了。理解基础设施和部署过程至关重要，因为它们是现代系统的新基石。
+
+下一章将聚焦于软件的安全性。我们会涉及源代码本身、操作系统层面，以及与外部服务和最终用户之间可能的交互。
+
+\section{问题}
+
+\begin{enumerate}
+\item CI 在开发过程中以哪些方式节省时间？
+\item 实施 CI 和 CD 是否需要使用不同的工具？
+\item 什么时候在会议上进行代码评审才合理？
+\item 在 CI 过程中，你可以用哪些工具来评估代码质量？
+\item 谁参与制定 BDD 场景？
+\item 什么时候你会考虑使用不可变基础设施？什么时候你会排除这种方案？
+\item 你会如何描述 Ansible、Packer 和 Terraform 之间的差异？
+\end{enumerate}
+
+\section{延伸阅读}
+
+\begin{itemize}
+\item Rafal Leszko，\emph{Continuous Delivery with Docker and Jenkins: Create Secure Applications by Building Complete CI/CD Pipelines}，第三版，Packt Publishing：\href{https://www.packtpub.com/en-us/product/continuous-delivery-with-docker-and-jenkins-3rd-edition-9781803245300}{https://www.packtpub.com/en-us/product/continuous-delivery-with-docker-and-jenkins-3rd-edition-9781803245300}
+\item Christopher Cowell、Nicholas Lotz 和 Chris Timberlake，\emph{Automating DevOps with GitLab CI/CD Pipelines: Build Efficient CI/CD Pipelines to Verify, Secure, and Deploy Your Code Using Real-Life Examples}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/automating-devops-with-gitlab-cicd-pipelines-9781803242934}{https://www.packtpub.com/en-us/product/automating-devops-with-gitlab-cicd-pipelines-9781803242934}
+\item GitLab Docs，\emph{Use CI/CD to Build Your Application}：\href{https://docs.gitlab.com/ee/topics/build_your_application.html}{https://docs.gitlab.com/ee/topics/build\_your\_application.html}
+\item Eric Chapman，\emph{Mastering GitHub Actions: Advance Your Automation Skills with the Latest Techniques for Software Integration and Deployment}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/mastering-github-actions-9781805123309}{https://www.packtpub.com/en-us/product/mastering-github-actions-9781805123309}
+\item Michael Kaufmann，\emph{GitHub Actions Cookbook: A Practical Guide to Automating Repetitive Tasks and Streamlining Your Development Process}，Packt Publishing：\href{https://www.packtpub.com/en-us/product/github-actions-cookbook-9781835469149}{https://www.packtpub.com/en-us/product/github-actions-cookbook-9781835469149}
+\item GitHub Docs，\emph{How-tos for GitHub Actions}：\href{https://docs.github.com/en/actions/how-tos}{https://docs.github.com/en/actions/how-tos}
+\item pre-commit，\emph{Supported Hooks}：\href{https://pre-commit.com/hooks.html}{https://pre-commit.com/hooks.html}
+\item HashiCorp，\emph{Terraform Language Documentation}：\href{https://developer.hashicorp.com/terraform/language}{https://developer.hashicorp.com/terraform/language}
+\item HashiCorp，\emph{AWS Provider}：\href{https://registry.terraform.io/providers/hashicorp/aws/latest/docs}{https://registry.terraform.io/providers/hashicorp/aws/latest/docs}
+\end{itemize}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{XX}
+\toprule
+\textbf{立即解锁本书的专属权益} 扫描此二维码，或访问 \href{http://packtpub.com/unlock}{packtpub.com/unlock}，然后按书名搜索本书。 & \begin{center}\includegraphics[width=0.250\linewidth]{images/Unlock_Now.png}\end{center} \\
+\midrule
+\emph{注意：开始之前请准备好你的购买发票。} &  \\
+\bottomrule
+\end{tabularx}
+\end{center}
